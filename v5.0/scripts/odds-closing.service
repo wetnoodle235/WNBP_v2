@@ -1,0 +1,34 @@
+# ──────────────────────────────────────────────────────────
+# SportStock V5.0 — Closing Odds Collection (systemd service)
+#
+# Runs the collect_odds.sh wrapper in closing mode.
+# Triggered by odds-closing.timer which runs frequently
+# during game hours so it can catch the 5-min pre-game window.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/odds-closing.service ~/.config/systemd/user/
+#   cp scripts/odds-closing.timer   ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable odds-closing.timer
+#   systemctl --user start odds-closing.timer
+# ──────────────────────────────────────────────────────────
+
+[Unit]
+Description=SportStock V5.0 — Closing Odds Collection
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/derek/Documents/stock/v5.0
+ExecStart=/home/derek/Documents/stock/v5.0/scripts/collect_odds.sh closing
+Environment=PATH=/home/derek/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/derek
+EnvironmentFile=-/home/derek/Documents/stock/v5.0/.env
+StandardOutput=append:/home/derek/Documents/stock/v5.0/logs/odds_closing.log
+StandardError=append:/home/derek/Documents/stock/v5.0/logs/odds_closing.log
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

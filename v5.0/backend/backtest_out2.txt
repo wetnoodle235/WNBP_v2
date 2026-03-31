@@ -1,0 +1,80 @@
+2026-03-26 18:05:09  INFO      Loaded predictor for nba
+2026-03-26 18:05:11  INFO      Loaded predictor for nhl
+2026-03-26 18:05:12  INFO      Loaded predictor for mlb
+2026-03-26 18:05:14  INFO      Loaded predictor for nfl
+2026-03-26 18:05:14  INFO      Loaded predictor for epl
+2026-03-26 18:05:14  INFO      Loaded predictor for laliga
+2026-03-26 18:05:15  INFO      Loaded predictor for bundesliga
+2026-03-26 18:05:15  INFO      Loaded predictor for ligue1
+2026-03-26 18:05:15  INFO      Loaded predictor for seriea
+2026-03-26 18:05:15  INFO      Loaded predictor for ucl
+2026-03-26 18:05:15  INFO      Loaded predictor for mls
+2026-03-26 18:05:15  INFO      Loaded predictor for nwsl
+2026-03-26 18:05:16  INFO      Loaded predictor for ufc
+2026-03-26 18:05:16  INFO      Loaded predictor for atp
+2026-03-26 18:05:16  INFO      Loaded predictor for wta
+2026-03-26 18:05:17  INFO      Loaded predictor for ncaab
+2026-03-26 18:05:17  INFO      No trained models for wnba — skipping
+/home/derek/Documents/stock/v5.0/backend/../scripts/backtest.py:177: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  df = pd.concat(frames, ignore_index=True)
+2026-03-26 18:05:18  INFO      Backtesting nba: 640 games (2025-12-26 to 2026-03-25)
+2026-03-26 18:12:40  INFO        nba: 640 predictions evaluated
+/home/derek/Documents/stock/v5.0/backend/../scripts/backtest.py:177: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  df = pd.concat(frames, ignore_index=True)
+2026-03-26 18:12:40  INFO      Backtesting nhl: 1124 games (2025-12-27 to 2026-03-25)
+2026-03-26 18:22:44  INFO        nhl: 1124 predictions evaluated
+2026-03-26 18:22:44  INFO      mlb is out of season today — using 2025-10-31 as window end
+/home/derek/Documents/stock/v5.0/backend/../scripts/backtest.py:177: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  df = pd.concat(frames, ignore_index=True)
+2026-03-26 18:22:45  INFO      Backtesting mlb: 830 games (2025-08-02 to 2025-10-30)
+2026-03-26 18:30:12  INFO        mlb: 830 predictions evaluated
+2026-03-26 18:30:12  INFO      nfl is out of season today — using 2026-02-28 as window end
+/home/derek/Documents/stock/v5.0/backend/../scripts/backtest.py:177: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  df = pd.concat(frames, ignore_index=True)
+2026-03-26 18:30:12  INFO      Backtesting nfl: 104 games (2025-11-30 to 2026-02-08)
+2026-03-26 18:30:12  WARNING   Odds file not found for season 2025
+2026-03-26 18:31:13  INFO        nfl: 104 predictions evaluated
+2026-03-26 18:31:13  INFO      Backtesting epl: 140 games (2025-12-26 to 2026-03-22)
+2026-03-26 18:32:08  INFO        epl: 140 predictions evaluated
+2026-03-26 18:32:08  INFO      Backtesting laliga: 119 games (2026-01-02 to 2026-03-22)
+2026-03-26 18:32:08  WARNING   Odds file not found for season 2025
+2026-03-26 18:32:54  INFO        laliga: 119 predictions evaluated
+2026-03-26 18:32:54  INFO      Backtesting bundesliga: 108 games (2026-01-09 to 2026-03-22)
+2026-03-26 18:32:54  WARNING   Odds file not found for season 2025
+2026-03-26 18:33:36  INFO        bundesliga: 108 predictions evaluated
+2026-03-26 18:33:37  INFO      Backtesting ligue1: 98 games (2026-01-02 to 2026-03-22)
+2026-03-26 18:33:37  WARNING   Odds file not found for season 2025
+2026-03-26 18:34:15  INFO        ligue1: 98 predictions evaluated
+2026-03-26 18:34:15  INFO      Backtesting seriea: 144 games (2025-12-27 to 2026-03-22)
+2026-03-26 18:34:15  WARNING   Odds file not found for season 2025
+2026-03-26 18:35:12  INFO        seriea: 144 predictions evaluated
+2026-03-26 18:35:12  INFO      Backtesting ucl: 68 games (2026-01-20 to 2026-03-18)
+2026-03-26 18:35:12  WARNING   Odds file not found for season 2025
+2026-03-26 18:35:39  INFO        ucl: 68 predictions evaluated
+2026-03-26 18:35:39  INFO      Backtesting mls: 74 games (2026-02-21 to 2026-03-22)
+2026-03-26 18:35:39  WARNING   Odds file not found for season 2026
+2026-03-26 18:36:07  INFO        mls: 74 predictions evaluated
+2026-03-26 18:36:07  INFO      Backtesting nwsl: 21 games (2026-03-14 to 2026-03-26)
+2026-03-26 18:36:07  WARNING   Team stats file not found for season 2026
+2026-03-26 18:36:07  WARNING   Odds file not found for season 2026
+2026-03-26 18:36:13  INFO        nwsl: 21 predictions evaluated
+2026-03-26 18:36:13  INFO      Backtesting ufc: 103 games (2026-01-24 to 2026-03-21)
+2026-03-26 18:36:13  WARNING   Odds file not found for season 2026
+2026-03-26 18:36:31  INFO        ufc: 103 predictions evaluated
+2026-03-26 18:36:32  INFO      No recent completed games for atp
+2026-03-26 18:36:32  INFO      No recent completed games for wta
+/home/derek/Documents/stock/v5.0/backend/../scripts/backtest.py:177: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  df = pd.concat(frames, ignore_index=True)
+2026-03-26 18:36:32  INFO      Backtesting ncaab: 789 games (2025-12-27 to 2026-03-23)
+2026-03-26 18:36:32  WARNING   Odds file not found for season 2025
+2026-03-26 18:36:32  WARNING   Player stats file not found for season 2025
+2026-03-26 18:44:16  INFO        ncaab: 789 predictions evaluated
+2026-03-26 18:44:16  INFO      Report saved → /home/derek/Documents/stock/v5.0/data/reports/backtest_2026-03-26.json
+2026-03-26 18:44:16  INFO      ════════════════════════════════════════════════════════════
+2026-03-26 18:44:16  INFO        BACKTEST RESULTS  (90 days)
+2026-03-26 18:44:16  INFO      ════════════════════════════════════════════════════════════
+2026-03-26 18:44:16  INFO        Total predictions:  4171
+2026-03-26 18:44:16  INFO        Overall accuracy:   68.35%
+2026-03-26 18:44:16  INFO        Avg Brier score:    0.1906
+2026-03-26 18:44:16  INFO      ────────────────────────────────────────────────────────────
+2026-03-26 18:44:16  INFO        Sport         Total  Right     Acc%

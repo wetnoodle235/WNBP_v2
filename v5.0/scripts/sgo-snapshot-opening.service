@@ -1,0 +1,21 @@
+[Unit]
+Description=SportStock V5.0 — SGO Opening Odds Snapshot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=derek
+Group=derek
+WorkingDirectory=/home/derek/Documents/stock/v5.0
+
+EnvironmentFile=-/home/derek/Documents/stock/v5.0/.env
+
+ExecStart=/usr/bin/python3 scripts/odds_scheduler.py --provider odds --mode opening --once --normalize
+StandardOutput=append:/home/derek/Documents/stock/v5.0/logs/sgo_snapshot_opening.log
+StandardError=append:/home/derek/Documents/stock/v5.0/logs/sgo_snapshot_opening.log
+SyslogIdentifier=v5-sgo-snapshot-opening
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,25 @@
+[Unit]
+Description=SportStock V5.0 — SGO Odds Poller (continuous)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=derek
+Group=derek
+WorkingDirectory=/home/derek/Documents/stock/v5.0
+
+EnvironmentFile=-/home/derek/Documents/stock/v5.0/.env
+
+ExecStart=/usr/bin/python3 -u scripts/odds_scheduler.py --provider odds --mode all --interval 30
+Restart=on-failure
+RestartSec=60
+MemoryMax=256M
+CPUQuota=10%
+
+StandardOutput=append:/home/derek/Documents/stock/v5.0/logs/sgo_poller.log
+StandardError=append:/home/derek/Documents/stock/v5.0/logs/sgo_poller.log
+SyslogIdentifier=v5-sgo-poller
+
+[Install]
+WantedBy=default.target

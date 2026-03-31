@@ -1,0 +1,103 @@
+2026-03-26 13:49:37  INFO      Loaded predictor for nba
+2026-03-26 13:49:37  INFO      Loaded predictor for nhl
+2026-03-26 13:49:37  INFO      Loaded predictor for mlb
+2026-03-26 13:49:38  INFO      Loaded predictor for nfl
+2026-03-26 13:49:38  INFO      Loaded predictor for epl
+2026-03-26 13:49:38  INFO      Loaded predictor for laliga
+2026-03-26 13:49:38  INFO      Loaded predictor for bundesliga
+2026-03-26 13:49:38  INFO      Loaded predictor for ligue1
+2026-03-26 13:49:38  INFO      Loaded predictor for seriea
+2026-03-26 13:49:39  INFO      Loaded predictor for ucl
+2026-03-26 13:49:39  INFO      Loaded predictor for mls
+2026-03-26 13:49:39  INFO      Loaded predictor for nwsl
+2026-03-26 13:49:39  INFO      Loaded predictor for ufc
+2026-03-26 13:49:39  INFO      Loaded predictor for atp
+2026-03-26 13:49:40  INFO      Loaded predictor for wta
+2026-03-26 13:49:40  INFO      Loaded predictor for ncaab
+2026-03-26 13:49:40  INFO      No trained models for wnba — skipping
+/home/derek/Documents/stock/v5.0/backend/../scripts/backtest.py:177: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  df = pd.concat(frames, ignore_index=True)
+2026-03-26 13:49:40  INFO      Backtesting nba: 227 games (2026-02-24 to 2026-03-25)
+2026-03-26 13:51:23  INFO        nba: 227 predictions evaluated
+/home/derek/Documents/stock/v5.0/backend/../scripts/backtest.py:177: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  df = pd.concat(frames, ignore_index=True)
+2026-03-26 13:51:23  INFO      Backtesting nhl: 452 games (2026-02-26 to 2026-03-25)
+2026-03-26 13:54:20  INFO        nhl: 452 predictions evaluated
+2026-03-26 13:54:20  INFO      mlb is out of season today — using 2025-10-31 as window end
+2026-03-26 13:54:20  INFO      Backtesting mlb: 42 games (2025-10-01 to 2025-10-30)
+2026-03-26 13:54:36  INFO        mlb: 42 predictions evaluated
+2026-03-26 13:54:36  INFO      nfl is out of season today — using 2026-02-28 as window end
+2026-03-26 13:54:36  INFO      Backtesting nfl: 2 games (2026-02-04 to 2026-02-08)
+2026-03-26 13:54:36  WARNING   Odds file not found for season 2025
+2026-03-26 13:54:37  INFO        nfl: 2 predictions evaluated
+2026-03-26 13:54:37  INFO      Backtesting epl: 39 games (2026-02-27 to 2026-03-22)
+2026-03-26 13:54:56  INFO        epl: 39 predictions evaluated
+2026-03-26 13:54:56  INFO      Backtesting laliga: 41 games (2026-02-27 to 2026-03-22)
+2026-03-26 13:54:56  WARNING   Odds file not found for season 2025
+2026-03-26 13:55:15  INFO        laliga: 41 predictions evaluated
+2026-03-26 13:55:15  INFO      Backtesting bundesliga: 37 games (2026-02-27 to 2026-03-22)
+2026-03-26 13:55:16  WARNING   Odds file not found for season 2025
+2026-03-26 13:55:34  INFO        bundesliga: 37 predictions evaluated
+2026-03-26 13:55:34  INFO      Backtesting ligue1: 35 games (2026-02-27 to 2026-03-22)
+2026-03-26 13:55:34  WARNING   Odds file not found for season 2025
+2026-03-26 13:55:50  INFO        ligue1: 35 predictions evaluated
+2026-03-26 13:55:50  INFO      Backtesting seriea: 40 games (2026-02-27 to 2026-03-22)
+2026-03-26 13:55:50  WARNING   Odds file not found for season 2025
+2026-03-26 13:56:10  INFO        seriea: 40 predictions evaluated
+2026-03-26 13:56:10  INFO      Backtesting ucl: 24 games (2026-02-24 to 2026-03-18)
+2026-03-26 13:56:10  WARNING   Odds file not found for season 2025
+2026-03-26 13:56:21  INFO        ucl: 24 predictions evaluated
+2026-03-26 13:56:21  INFO      Backtesting mls: 59 games (2026-02-28 to 2026-03-22)
+2026-03-26 13:56:21  WARNING   Odds file not found for season 2026
+2026-03-26 13:56:47  INFO        mls: 59 predictions evaluated
+2026-03-26 13:56:48  INFO      Backtesting nwsl: 21 games (2026-03-14 to 2026-03-26)
+2026-03-26 13:56:48  WARNING   Team stats file not found for season 2026
+2026-03-26 13:56:48  WARNING   Odds file not found for season 2026
+2026-03-26 13:56:53  INFO        nwsl: 21 predictions evaluated
+2026-03-26 13:56:53  INFO      Backtesting ufc: 52 games (2026-02-28 to 2026-03-21)
+2026-03-26 13:56:53  WARNING   Odds file not found for season 2026
+2026-03-26 13:57:05  INFO        ufc: 52 predictions evaluated
+2026-03-26 13:57:05  INFO      No recent completed games for atp
+2026-03-26 13:57:06  INFO      No recent completed games for wta
+/home/derek/Documents/stock/v5.0/backend/../scripts/backtest.py:177: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  df = pd.concat(frames, ignore_index=True)
+2026-03-26 13:57:06  INFO      Backtesting ncaab: 174 games (2026-02-24 to 2026-03-23)
+2026-03-26 13:57:06  WARNING   Odds file not found for season 2025
+2026-03-26 13:57:06  WARNING   Player stats file not found for season 2025
+2026-03-26 13:58:29  INFO        ncaab: 174 predictions evaluated
+2026-03-26 13:58:29  INFO      Report saved → /home/derek/Documents/stock/v5.0/data/reports/backtest_2026-03-26.json
+2026-03-26 13:58:29  INFO      ════════════════════════════════════════════════════════════
+2026-03-26 13:58:29  INFO        BACKTEST RESULTS  (30 days)
+2026-03-26 13:58:29  INFO      ════════════════════════════════════════════════════════════
+2026-03-26 13:58:29  INFO        Total predictions:  1180
+2026-03-26 13:58:29  INFO        Overall accuracy:   57.80%
+2026-03-26 13:58:29  INFO        Avg Brier score:    0.2663
+2026-03-26 13:58:29  INFO      ────────────────────────────────────────────────────────────
+2026-03-26 13:58:29  INFO        Sport         Total  Right     Acc%
+2026-03-26 13:58:29  INFO        ──────────── ────── ────── ────────
+2026-03-26 13:58:29  INFO        BUNDESLIGA       28     25   89.29%
+2026-03-26 13:58:29  INFO        MLS              48     39   81.25%
+2026-03-26 13:58:29  INFO        UCL              20     16   80.00%
+2026-03-26 13:58:29  INFO        LALIGA           31     23   74.19%
+2026-03-26 13:58:29  INFO        LIGUE1           27     20   74.07%
+2026-03-26 13:58:29  INFO        SERIEA           33     23   69.70%
+2026-03-26 13:58:29  INFO        NCAAB           174    118   67.82%
+2026-03-26 13:58:29  INFO        EPL              27     16   59.26%
+2026-03-26 13:58:29  INFO        NBA             227    126   55.51%
+2026-03-26 13:58:29  INFO        UFC              52     28   53.85%
+2026-03-26 13:58:29  INFO        NWSL             17      9   52.94%
+2026-03-26 13:58:29  INFO        NHL             452    222   49.12%
+2026-03-26 13:58:29  INFO        MLB              42     17   40.48%
+2026-03-26 13:58:29  INFO        NFL               2      0    0.00%
+2026-03-26 13:58:29  INFO      ────────────────────────────────────────────────────────────
+2026-03-26 13:58:29  INFO        Confidence tiers:
+2026-03-26 13:58:29  INFO          High Above 70          559 games  62.97% accuracy
+2026-03-26 13:58:29  INFO          Medium 55 70           390 games  54.62% accuracy
+2026-03-26 13:58:29  INFO          Low Below 55           231 games  50.65% accuracy
+2026-03-26 13:58:29  INFO      ────────────────────────────────────────────────────────────
+2026-03-26 13:58:29  INFO        ROI ($100 flat):  $-17430.00 profit  (-14.77%)
+2026-03-26 13:58:29  INFO      ────────────────────────────────────────────────────────────
+2026-03-26 13:58:29  INFO        Best:  BUNDESLIGA (89.29%  n=28)
+2026-03-26 13:58:29  INFO        Worst: NFL (0.00%  n=2)
+2026-03-26 13:58:29  INFO      ════════════════════════════════════════════════════════════
+2026-03-26 13:58:29  INFO      Completed in 533.1s

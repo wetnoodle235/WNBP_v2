@@ -1,0 +1,75 @@
+/**
+ * app/components/SportSelectors/SportTabs.css — Sport tabs styling.
+ */
+
+.sport-tabs {
+  display: flex;
+  gap: 1rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sport-tabs.skeleton {
+  min-height: 2.5rem;
+  background: linear-gradient(90deg, var(--color-bg-2) 25%, var(--color-bg-3) 50%, var(--color-bg-2) 75%);
+  background-size: 200% 100%;
+  animation: pulse 2s infinite;
+}
+
+.sport-tabs.pills {
+  border-bottom: none;
+  gap: 0.5rem;
+}
+
+.sport-tab {
+  position: relative;
+  padding: 0.5rem 1rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--color-text-secondary);
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.sport-tabs.tabs .sport-tab {
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+
+.sport-tabs.tabs .sport-tab.active {
+  color: inherit;
+  border-bottom-color: currentColor;
+}
+
+.sport-tabs.pills .sport-tab {
+  border: 1px solid var(--color-border);
+  background: transparent;
+}
+
+.sport-tabs.pills .sport-tab.active {
+  border-color: currentColor;
+}
+
+.sport-tab:hover {
+  color: var(--color-text);
+}
+
+.sport-tab:active {
+  transform: scale(0.98);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    background-position: 200% 0;
+  }
+  50% {
+    background-position: -200% 0;
+  }
+}

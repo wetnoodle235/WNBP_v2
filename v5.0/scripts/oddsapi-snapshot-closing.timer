@@ -1,0 +1,12 @@
+[Unit]
+Description=SportStock V5.0 — OddsAPI Closing Snapshot Timer (23:05 UTC daily)
+Requires=oddsapi-snapshot-closing.service
+
+[Timer]
+# 23:05 UTC = 5 minutes after SGO closing snapshot
+OnCalendar=*-*-* 23:05:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,25 @@
+{
+  "name": "@stock/website",
+  "version": "5.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "rm -rf .next-dev && next dev --port 3000",
+    "dev:full": "bash ../scripts/start.sh",
+    "build": "next build",
+    "start": "NODE_OPTIONS=\"--max-old-space-size=4096\" next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^15.5.14",
+    "next-auth": "^4.24.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.6.0"
+  }
+}

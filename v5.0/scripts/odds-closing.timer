@@ -1,0 +1,32 @@
+# ──────────────────────────────────────────────────────────
+# SportStock V5.0 — Closing Odds Timer (dynamic)
+#
+# Runs every minute during peak game hours (noon-midnight EST,
+# 17:00-05:00 UTC) to catch closing odds 5 minutes before
+# each game starts.
+#
+# The collect_odds.sh wrapper checks today's schedule first,
+# and only invokes the scheduler if games are starting soon.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/odds-closing.service ~/.config/systemd/user/
+#   cp scripts/odds-closing.timer   ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable odds-closing.timer
+#   systemctl --user start odds-closing.timer
+# ──────────────────────────────────────────────────────────
+
+[Unit]
+Description=SportStock V5.0 — Closing Odds Timer (game hours)
+
+[Timer]
+# Every minute during peak game hours (UTC):
+#   17:00-23:59 UTC = 12:00-6:59 PM EST
+#   00:00-04:59 UTC =  7:00-11:59 PM EST
+OnCalendar=*-*-* 17..23:*:00
+OnCalendar=*-*-* 00..04:*:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

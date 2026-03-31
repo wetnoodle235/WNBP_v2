@@ -1,0 +1,98 @@
+# ──────────────────────────────────────────────────────────
+# V5.0 — Odds Collection Crontab
+# ──────────────────────────────────────────────────────────
+#
+# Install with:  crontab -e  (then paste relevant lines)
+#
+# All times are in the server's local timezone.
+# Adjust if server is not EST — the times below assume EST.
+#
+# Env vars required in cron:
+#   ODDSAPI_KEY=your_key_here
+#   SGO_API_KEY=your_key_here  (optional, future provider)
+# ──────────────────────────────────────────────────────────
+
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+PROJECT=/home/derek/Documents/stock/v5.0
+ODDSAPI_KEY=your_oddsapi_key_here
+# SGO_API_KEY=your_sgo_key_here
+
+# ── Opening Odds (12:05 AM EST daily) ───────────────────
+# Captures the day's opening lines as early as possible
+5 0 * * *  cd $PROJECT && python3 scripts/odds_scheduler.py --mode opening --once --normalize >> logs/cron_opening.log 2>&1
+
+# ── Current Odds Snapshots (every hour, 6 AM – 11 PM EST) ─
+# Hourly snapshots to track line movement throughout the day
+# Runs once per hour; increase frequency by adding more entries
+# or running in loop mode via systemd (see below)
+0 6-23 * * *  cd $PROJECT && python3 scripts/odds_scheduler.py --mode current --once >> logs/cron_current.log 2>&1
+
+# ── Closing Odds (every minute, peak game hours) ────────
+# Polls for games starting soon and grabs final lines
+# MLB/NBA/NHL typically 7-10 PM EST; NFL Sunday 1 PM & 4 PM
+# Run every minute during peak hours to catch 5-min pre-game window
+* 12-23 * * *  cd $PROJECT && python3 scripts/odds_scheduler.py --mode closing --once >> logs/cron_closing.log 2>&1
+
+# ── Full Daily Pipeline (6 AM EST) ──────────────────────
+# Main pipeline: import all data, normalize, train, predict
+0 6 * * *  cd $PROJECT && python3 scripts/daily_pipeline.py >> logs/cron_pipeline.log 2>&1
+
+# ── Season Simulator (Tuesday 8 AM EST) ─────────────────
+# Monte Carlo projections: championships, awards, brackets, draft lottery
+0 8 * * 2  cd $PROJECT && python3 scripts/season_simulator.py --sport all --simulations 10000 >> logs/cron_simulator.log 2>&1
+
+# ── Live Model (continuous during game hours) ────────────
+# Adjusts win probabilities during live games (polls every 60s)
+# Run during typical game hours: 12 PM - 1 AM EST
+0 12 * * *  cd $PROJECT && timeout 13h python3 scripts/live_model.py --daemon --interval 60 >> logs/cron_live.log 2>&1
+
+# ──────────────────────────────────────────────────────────
+# ALTERNATIVE: systemd service for continuous collection
+# ──────────────────────────────────────────────────────────
+#
+# Instead of cron, run odds_scheduler.py as a long-running service:
+#
+#   python3 scripts/odds_scheduler.py --mode all --interval 60
+#
+# This will:
+#   1. Collect opening odds immediately
+#   2. Collect closing odds for any imminent games
+#   3. Snapshot current odds every 60 minutes
+#   4. Loop continuously (current + closing)
+#
+# systemd unit file example (/etc/systemd/system/odds-collector.service):
+#
+#   [Unit]
+#   Description=V5.0 Odds Collector
+#   After=network.target
+#
+#   [Service]
+#   Type=simple
+#   User=derek
+#   WorkingDirectory=/home/derek/Documents/stock/v5.0
+#   Environment=ODDSAPI_KEY=your_key_here
+#   ExecStart=/usr/bin/python3 scripts/odds_scheduler.py --mode all --interval 60
+#   Restart=on-failure
+#   RestartSec=60
+#
+#   [Install]
+#   WantedBy=multi-user.target
+#
+# ──────────────────────────────────────────────────────────
+# INTERVAL TUNING (for credit limit increases)
+# ──────────────────────────────────────────────────────────
+#
+# Default: --interval 60 (1 hour between snapshots)
+#
+# If your OddsAPI credit limit increases, reduce the interval:
+#   --interval 30   → every 30 min (2x credits)
+#   --interval 15   → every 15 min (4x credits)
+#   --interval 5    → every 5 min  (12x credits, good for live tracking)
+#
+# Credit budget estimate (per sport, per day):
+#   60 min interval: ~18 requests/day   (6 AM – 11 PM)
+#   30 min interval: ~36 requests/day
+#   15 min interval: ~72 requests/day
+#    5 min interval: ~216 requests/day
+# ──────────────────────────────────────────────────────────

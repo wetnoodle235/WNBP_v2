@@ -1,0 +1,12 @@
+[Unit]
+Description=SportStock V5.0 — OddsAPI Opening Snapshot Timer (06:05 UTC daily)
+Requires=oddsapi-snapshot-opening.service
+
+[Timer]
+# 06:05 UTC = 5 minutes after SGO opening snapshot
+OnCalendar=*-*-* 06:05:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

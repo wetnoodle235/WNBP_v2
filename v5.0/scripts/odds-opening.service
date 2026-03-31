@@ -1,0 +1,33 @@
+# ──────────────────────────────────────────────────────────
+# SportStock V5.0 — Opening Odds Collection (systemd service)
+#
+# Runs the odds_scheduler in opening mode.
+# Triggered by odds-opening.timer at 05:05 UTC (12:05 AM EST).
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/odds-opening.service ~/.config/systemd/user/
+#   cp scripts/odds-opening.timer   ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable odds-opening.timer
+#   systemctl --user start odds-opening.timer
+# ──────────────────────────────────────────────────────────
+
+[Unit]
+Description=SportStock V5.0 — Opening Odds Collection
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/derek/Documents/stock/v5.0
+ExecStart=/usr/bin/python3 scripts/odds_scheduler.py --mode opening --once --normalize
+Environment=PATH=/home/derek/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/derek
+EnvironmentFile=-/home/derek/Documents/stock/v5.0/.env
+StandardOutput=append:/home/derek/Documents/stock/v5.0/logs/odds_opening.log
+StandardError=append:/home/derek/Documents/stock/v5.0/logs/odds_opening.log
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,48 @@
+# ──────────────────────────────────────────────────────────────────
+# SportStock V5.0 — systemd user service
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp sportstock.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable sportstock.service
+#   systemctl --user start sportstock.service
+#
+# Manage:
+#   systemctl --user status sportstock
+#   systemctl --user stop sportstock
+#   systemctl --user restart sportstock
+#   journalctl --user -u sportstock -f
+#
+# Auto-start on login (already handled by [Install] WantedBy):
+#   loginctl enable-linger $USER    # to start even without login
+# ──────────────────────────────────────────────────────────────────
+
+[Unit]
+Description=SportStock V5.0 (Backend + Tunnel + Website)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/derek/Documents/stock/v5.0
+ExecStart=/home/derek/Documents/stock/v5.0/scripts/startup.sh
+ExecStop=/home/derek/Documents/stock/v5.0/scripts/stop.sh
+Restart=on-failure
+RestartSec=10
+
+# Environment
+Environment=PATH=/home/derek/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/derek
+
+# Logging (systemd journal captures stdout/stderr)
+StandardOutput=journal
+StandardError=journal
+
+# Graceful shutdown: SIGTERM → 30s → SIGKILL
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

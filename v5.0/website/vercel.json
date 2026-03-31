@@ -1,0 +1,8 @@
+{
+  "buildCommand": "next build",
+  "installCommand": "npm install --include=optional",
+  "outputDirectory": ".next",
+  "env": {
+    "NODE_ENV": "production"
+  }
+}

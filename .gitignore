@@ -1,0 +1,47 @@
+# Large ML model files
+v4.0/results/*.pkl
+v4.0/results/**/*.pkl
+v4.0/data/balldontlie/
+v4.0/data/ml_v3_cache/
+v4.0/data/parquet/
+v4.0/data/historical-injuries/
+v4.0/data/odds/
+v4.0/data/weather/
+v4.0/data/espn/
+v4.0/data/nba/
+v4.0/data/mlb/
+
+# Runtime artifacts
+v4.0/logs/
+v4.0/cache/
+v4.0/catboost_info/
+v4.0/results/
+v4.0/**/__pycache__/
+v4.0/**/*.pyc
+v4.0/**/*.pyo
+v4.0/whop_app/node_modules/
+v4.0/whop_app/.next/
+v4.0/whop_app/.env.local
+
+# V5.0 artifacts
+v5.0/data/
+v5.0/ml/models/
+v5.0/backend/__pycache__/
+v5.0/backend/**/__pycache__/
+v5.0/backend/catboost_info/
+v5.0/importers/node_modules/
+v5.0/website/node_modules/
+v5.0/website/.next/
+v5.0/website/.next-dev/
+v5.0/website/.vercel/
+v5.0/website/tsconfig.tsbuildinfo
+v5.0/website/.env.production
+v5.0/website/.env.local
+v5.0/cloudflare-worker/node_modules/
+v5.0/logs/
+v5.0/**/*.pyc
+v5.0/cloudflare-api/node_modules
+v5.0/cloudflare-worker/node_modules
+.git-rewrite/
+.playwright-mcp/
+nohup.out
