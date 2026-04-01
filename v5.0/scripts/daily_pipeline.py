@@ -124,6 +124,7 @@ def _season_for_sport(sport: str, target: date) -> str:
     _START_YEAR_SPORTS = {
         "nfl", "ncaaf",
         "epl", "laliga", "bundesliga", "seriea", "ligue1", "ucl",
+        "ligamx", "europa",
         "wnba",  # WNBA starts May, labeled by start year
     }
     if sport_lower in _START_YEAR_SPORTS:
@@ -228,7 +229,8 @@ _ESPN_SPORTS = [
     "nba", "nhl", "mlb", "nfl",
     "ncaab", "ncaaf", "ncaaw",
     "epl", "laliga", "bundesliga", "seriea", "ligue1", "ucl",
-    "mls", "nwsl", "wnba", "golf", "f1", "atp", "wta",
+    "mls", "nwsl", "ligamx", "europa",
+    "wnba", "golf", "lpga", "f1", "nascar", "atp", "wta",
 ]
 
 # Providers known to be dead/unreachable — skip automatically
@@ -305,11 +307,12 @@ def _worker_extract_features(
         features_dir = Path(data_dir) / "features"
         features_dir.mkdir(parents=True, exist_ok=True)
         output_path = features_dir / f"{sport}_{s}.parquet"
-        proc = _run_subprocess(
-            [sys.executable, "-m", "ml.feature_extraction",
-             "--sport", sport, "--season", s, "--output", str(output_path)],
-            cwd=backend_dir, timeout=_FEATURE_EXTRACT_TIMEOUT,
-        )
+        cmd = [
+            sys.executable, "-m", "ml.feature_extraction",
+            "--sport", sport, "--season", s, "--output", str(output_path),
+            "--incremental",
+        ]
+        proc = _run_subprocess(cmd, cwd=backend_dir, timeout=_FEATURE_EXTRACT_TIMEOUT)
         return proc, round(time.monotonic() - t0, 2)
 
     try:
@@ -550,6 +553,7 @@ class Pipeline:
         smart_seasons: bool = True,
         recent_days: int = 3,
         train_max_age_hours: int = 24,
+        force_normalize: bool = False,
     ) -> None:
         self.target_date = target_date
         self.dry_run = dry_run
@@ -560,6 +564,7 @@ class Pipeline:
         self.smart_seasons = smart_seasons
         self.recent_days = recent_days
         self.train_max_age_hours = train_max_age_hours
+        self.force_normalize = force_normalize
         # Per-sport season is computed via _season_for_sport(); keep a
         # default for provider-level imports that span multiple sports.
         if sport_filter and sport_filter != "all":
@@ -741,24 +746,69 @@ class Pipeline:
 
         sports = self._sports_list(ALL_SPORTS)
         norm_args = []
+        skipped_fresh = []
         for sport in sports:
             raw_sport_dir = DATA_DIR / "raw" / "espn" / sport
             if not raw_sport_dir.exists():
                 logger.debug("  [normalize] Skipping %s — no raw data dir", sport)
                 continue
+            season = _season_for_sport(sport, self.target_date)
+            # Smart-skip: if normalized parquet exists and is newer than all
+            # raw data files for this season, skip re-normalizing
+            # (bypass with --force-normalize)
+            norm_games = DATA_DIR / "normalized" / sport / f"games_{season}.parquet"
+            if norm_games.exists() and not self.force_normalize:
+                norm_mtime = norm_games.stat().st_mtime
+                raw_season_dir = raw_sport_dir / str(season)
+                needs_update = False
+                if raw_season_dir.exists():
+                    # Check if any raw file is newer (sample up to 50 for speed)
+                    for i, fpath in enumerate(raw_season_dir.rglob("*.json")):
+                        if fpath.stat().st_mtime > norm_mtime:
+                            needs_update = True
+                            break
+                        if i >= 50:
+                            break
+                else:
+                    needs_update = True  # no raw dir → first normalization
+                if not needs_update:
+                    skipped_fresh.append(sport)
+                    continue
+
             norm_args.append(
-                (sport, _season_for_sport(sport, self.target_date), str(BACKEND_DIR), True)
+                (sport, season, str(BACKEND_DIR), True)
             )
 
+        if skipped_fresh:
+            logger.info("  [normalize] Fresh (no new raw data): %s", ", ".join(sorted(skipped_fresh)))
+
+        # Cap normalize concurrency at 6 — each worker spawns a subprocess, so
+        # running all 22+ sports simultaneously can cause OOM / C++ crashes.
+        saved_workers = self.max_workers
+        self.max_workers = min(self.max_workers, 6)
         worker_results = self._run_parallel("normalize", _worker_normalize_sport, norm_args)
+        self.max_workers = saved_workers
 
         errors = []
         succeeded = 0
+        failed_sports = {r.get("sport") for r in worker_results if r.get("status") != "ok"}
+        retry_args = [a for a in norm_args if a[0] in failed_sports]
+
         for r in worker_results:
             if r.get("status") == "ok":
                 succeeded += 1
-            else:
-                errors.append(r)
+
+        # Retry failed sports sequentially to avoid resource pressure
+        if retry_args:
+            logger.info("  [normalize] Retrying %d failed sport(s): %s",
+                        len(retry_args), ", ".join(a[0] for a in retry_args))
+            for args in retry_args:
+                r = _worker_normalize_sport(*args)
+                if r.get("status") == "ok":
+                    succeeded += 1
+                    logger.info("  [normalize] %s ✓ (retry)", args[0])
+                else:
+                    errors.append(r)
 
         return {
             "sports_processed": len(sports),
@@ -1595,11 +1645,12 @@ class Pipeline:
         models_root = PROJECT_ROOT / "ml" / "models"
 
         # Get the list of sports the simulator actually supports
+        # Must match season_simulator.py's VALID set exactly
+        # esports (csgo/dota2/lol/valorant), golf/lpga/indycar/ligamx/europa not supported
         _SIMULATABLE = {
             "nba", "nfl", "nhl", "mlb", "ncaab", "ncaaf", "wnba", "ncaaw",
             "epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls",
             "nwsl", "ufc", "atp", "wta", "f1",
-            "csgo", "dota2", "lol", "valorant",
         }
         sim_sports = [
             s for s in sports
@@ -1985,6 +2036,11 @@ Cron:
         help="Skip the data import step",
     )
     parser.add_argument(
+        "--force-normalize",
+        action="store_true",
+        help="Force re-normalization of all sports even if parquets are up to date",
+    )
+    parser.add_argument(
         "--skip-train",
         action="store_true",
         help="Skip the model training step",
@@ -2041,6 +2097,7 @@ def main(argv: list[str] | None = None) -> int:
         smart_seasons=not args.no_smart_seasons,
         recent_days=args.recent_days,
         train_max_age_hours=args.train_max_age,
+        force_normalize=args.force_normalize,
     )
     report = pipeline.run(
         skip_import=args.skip_import,

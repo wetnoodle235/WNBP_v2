@@ -9,11 +9,12 @@ export type Sport =
   | "mlb"
   | "nhl"
   | "epl" | "laliga" | "bundesliga" | "seriea" | "ligue1" | "mls" | "ucl" | "nwsl"
-  | "f1"
+  | "ligamx" | "europa"
+  | "f1" | "indycar"
   | "atp" | "wta"
   | "ufc"
   | "lol" | "csgo" | "dota2" | "valorant"
-  | "golf";
+  | "golf" | "lpga";
 
 export const ALL_SPORTS: readonly Sport[] = [
   "nba", "wnba", "ncaab", "ncaaw",
@@ -21,11 +22,12 @@ export const ALL_SPORTS: readonly Sport[] = [
   "mlb",
   "nhl",
   "epl", "laliga", "bundesliga", "seriea", "ligue1", "mls", "ucl", "nwsl",
-  "f1",
+  "ligamx", "europa",
+  "f1", "indycar",
   "atp", "wta",
   "ufc",
   "lol", "csgo", "dota2", "valorant",
-  "golf",
+  "golf", "lpga",
 ] as const;
 
 /** What the CLI / orchestrator passes to each provider */

@@ -37,8 +37,12 @@ const SPORT_SLUGS: Partial<Record<Sport, string>> = {
   mls:        "soccer/usa.1",
   ucl:        "soccer/uefa.champions",
   nwsl:       "soccer/usa.nwsl",
+  ligamx:     "soccer/mex.1",
+  europa:     "soccer/uefa.europa",
   golf:       "golf/pga",
+  lpga:       "golf/lpga",
   f1:         "racing/f1",
+  indycar:    "racing/irl",
   atp:        "tennis/atp",
   wta:        "tennis/wta",
 };
@@ -46,10 +50,10 @@ const SPORT_SLUGS: Partial<Record<Sport, string>> = {
 const SUPPORTED_SPORTS = Object.keys(SPORT_SLUGS) as Sport[];
 
 // Soccer leagues use cross-year seasons (e.g., EPL 2023 → 2023-24 season).
-const SOCCER_SPORTS = new Set<Sport>(["epl", "laliga", "bundesliga", "seriea", "ligue1", "ucl"]);
+const SOCCER_SPORTS = new Set<Sport>(["epl", "laliga", "bundesliga", "seriea", "ligue1", "ucl", "europa"]);
 
 // Sports where the /summary endpoint doesn't work — use scoreboard event data directly
-const SCOREBOARD_ONLY_SPORTS = new Set<Sport>(["golf", "f1", "atp", "wta"]);
+const SCOREBOARD_ONLY_SPORTS = new Set<Sport>(["golf", "lpga", "f1", "indycar", "atp", "wta"]);
 
 const ALL_ENDPOINTS = [
   "teams",

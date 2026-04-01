@@ -110,7 +110,6 @@ function normalizeBookmaker(value: string): string {
   return value
     .toLowerCase()
     .trim()
-    .replace(/\s*-\s*live\s*odds$/i, "")
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
 }
@@ -239,7 +238,7 @@ export class OddsScheduler {
 
     const url =
       `${ODDSAPI_BASE}/v4/sports/${sportKey}/odds` +
-      `?regions=us&markets=h2h,spreads,totals&oddsFormat=american` +
+      `?regions=us,eu&markets=h2h,h2h_lay,spreads,totals&oddsFormat=american` +
       `&apiKey=${ODDS_CONFIG.oddsapi_key}`;
 
     logger.info(`Fetching ${type} odds for ${sport} from OddsAPI`, NAME);

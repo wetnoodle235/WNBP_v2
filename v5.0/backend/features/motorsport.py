@@ -361,7 +361,9 @@ class MotorsportExtractor(BaseFeatureExtractor):
 
         return features
 
-    def extract_all(self, season: int) -> pd.DataFrame:
+    def extract_all(
+        self, season: int, *, existing_game_ids: set[str] | None = None,
+    ) -> pd.DataFrame:
         """Override: expand each race into per-driver rows using player_stats."""
         games = self.load_games(season)
         player_stats = self.load_player_stats(season)
@@ -371,8 +373,29 @@ class MotorsportExtractor(BaseFeatureExtractor):
             return pd.DataFrame()
 
         if player_stats.empty:
-            logger.warning("No F1 player_stats for season %d — cannot build per-driver rows", season)
-            return pd.DataFrame()
+            logger.warning("No player_stats for %s season %d — using race-level features only", self.sport, season)
+            # Fallback: extract race-level features without per-driver expansion
+            status_col = "status" if "status" in games.columns else None
+            if status_col:
+                games = games[games[status_col].str.lower().isin(
+                    {"final", "closed", "complete", "finished"}
+                )]
+            id_col = next((c for c in ("id", "game_id") if c in games.columns), None)
+            if id_col is None or games.empty:
+                return pd.DataFrame()
+            features: list[dict[str, Any]] = []
+            for _, race in games.iterrows():
+                race_dict = race.to_dict()
+                race_dict["season"] = season
+                race_id = str(race_dict.get(id_col, ""))
+                if existing_game_ids and race_id in existing_game_ids:
+                    continue
+                try:
+                    f = self.extract_game_features(race_dict)
+                    features.append(f)
+                except Exception as e:
+                    logger.debug("%s race %s: %s", self.sport, race_id, e)
+            return pd.DataFrame(features) if features else pd.DataFrame()
 
         # Only process completed races
         status_col = "status" if "status" in games.columns else None
@@ -417,6 +440,11 @@ class MotorsportExtractor(BaseFeatureExtractor):
             race_dict = race.to_dict()
             race_dict["season"] = season
             race_id = str(race_dict.get(id_col, ""))
+
+            # Incremental: skip already-extracted races
+            if existing_game_ids and race_id in existing_game_ids:
+                continue
+
             round_id = round_id_map.get(race_id, race_id)
 
             # Find all drivers in this race — try both raw id and round-based id

@@ -597,6 +597,48 @@ class Game(_Base):
     home_forecast: Optional[float] = None        # Pre-game win probability
     away_forecast: Optional[float] = None
 
+    # ── Universal derived / enrichment fields ──
+    # Computed at normalisation time from raw stats; available on all sports.
+    result: Optional[str] = None                 # "home_win" | "away_win" | "draw"
+    score_diff: Optional[int] = None             # home_score - away_score
+    total_score: Optional[int] = None            # home_score + away_score
+    overtime: bool = False                       # True if game went to OT / extra time
+    day_of_week: Optional[int] = None            # 0=Monday … 6=Sunday
+    is_weekend: Optional[bool] = None            # Saturday or Sunday
+    home_rest_days: Optional[int] = None         # Days since team's previous game
+    away_rest_days: Optional[int] = None
+
+    # Sport-specific advanced analytics (computed during normalisation)
+    # Basketball
+    home_pace: Optional[float] = None            # Possessions per 48 min (NBA) / 40 min (college)
+    away_pace: Optional[float] = None
+    home_offensive_rating: Optional[float] = None  # Points per 100 possessions
+    away_offensive_rating: Optional[float] = None
+    home_defensive_rating: Optional[float] = None  # Opp points per 100 possessions
+    away_defensive_rating: Optional[float] = None
+    home_net_rating: Optional[float] = None      # offensive_rating - defensive_rating
+    away_net_rating: Optional[float] = None
+
+    # Soccer / Hockey
+    home_xg: Optional[float] = None             # Expected goals (home)
+    away_xg: Optional[float] = None             # Expected goals (away)
+    xg_diff: Optional[float] = None             # home_xg - away_xg
+    xg_total: Optional[float] = None            # home_xg + away_xg
+    home_goals_per_shot: Optional[float] = None  # Shooting efficiency
+    away_goals_per_shot: Optional[float] = None
+
+    # NFL / NCAAF
+    home_yards_diff: Optional[int] = None        # home_total_yards - away_total_yards
+    away_yards_diff: Optional[int] = None
+    home_turnover_margin: Optional[int] = None   # turnovers forced - turnovers committed
+    away_turnover_margin: Optional[int] = None
+    home_scoring_efficiency: Optional[float] = None  # pts / total_plays
+    away_scoring_efficiency: Optional[float] = None
+
+    # Tennis
+    home_sets_won: Optional[int] = None
+    away_sets_won: Optional[int] = None
+
     _coerce_id = field_validator("id", "home_team_id", "away_team_id", mode="before")(_coerce_str)
 
 

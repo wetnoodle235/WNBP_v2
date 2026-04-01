@@ -1539,8 +1539,16 @@ class BaseFeatureExtractor(ABC):
 
     # ── Batch Extraction ──────────────────────────────────
 
-    def extract_all(self, season: int) -> pd.DataFrame:
+    def extract_all(
+        self, season: int, *, existing_game_ids: set[str] | None = None,
+    ) -> pd.DataFrame:
         """Extract features for every game in *season*.
+
+        Parameters
+        ----------
+        existing_game_ids : set[str] | None
+            If provided, skip games whose id is already in this set
+            (incremental extraction — only process NEW completed games).
 
         Returns a DataFrame where each row is a feature vector
         and columns match ``get_feature_names()`` (plus metadata
@@ -1564,6 +1572,23 @@ class BaseFeatureExtractor(ABC):
         if games.empty:
             logger.warning("No completed games for %s season %s", self.sport, season)
             return pd.DataFrame()
+
+        # Incremental: skip already-extracted games
+        if existing_game_ids:
+            id_col = "id" if "id" in games.columns else "game_id"
+            before = len(games)
+            games = games[~games[id_col].astype(str).isin(existing_game_ids)].reset_index(drop=True)
+            skipped = before - len(games)
+            if games.empty:
+                logger.info(
+                    "%s season %s: all %d games already extracted — skipping",
+                    self.sport, season, skipped,
+                )
+                return pd.DataFrame()
+            logger.info(
+                "%s season %s: %d new games to extract (%d cached)",
+                self.sport, season, len(games), skipped,
+            )
 
         features: list[dict[str, Any]] = []
         success, failed = 0, 0

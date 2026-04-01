@@ -30,14 +30,16 @@ class TennisExtractor(BaseFeatureExtractor):
         super().__init__(data_dir)
         self.sport = sport
 
-    def extract_all(self, season: int) -> pd.DataFrame:
+    def extract_all(
+        self, season: int, *, existing_game_ids: set[str] | None = None,
+    ) -> pd.DataFrame:
         """Override extract_all to pre-load games/odds once and reuse across all games.
         
         This prevents 9,605× redundant file loads that were causing hangs.
         """
         games = self.load_games(season)
         odds = self.load_odds(season)
-        
+        standings = self.load_standings(season)
         if games.empty:
             logger.warning("No games found for %s season %s", self.sport, season)
             return pd.DataFrame()
@@ -55,12 +57,29 @@ class TennisExtractor(BaseFeatureExtractor):
             logger.warning("No completed games for %s season %s", self.sport, season)
             return pd.DataFrame()
 
+        # Incremental: skip already-extracted games
+        if existing_game_ids:
+            id_col = "id" if "id" in games.columns else "game_id"
+            before = len(games)
+            games = games[~games[id_col].astype(str).isin(existing_game_ids)].reset_index(drop=True)
+            skipped = before - len(games)
+            if games.empty:
+                logger.info(
+                    "%s season %s: all %d games already extracted — skipping",
+                    self.sport, season, skipped,
+                )
+                return pd.DataFrame()
+            logger.info(
+                "%s season %s: %d new games to extract (%d cached)",
+                self.sport, season, len(games), skipped,
+            )
+
         features: list[dict[str, Any]] = []
         success, failed = 0, 0
 
         for _, game in games.iterrows():
             try:
-                f = self.extract_game_features_cached(game.to_dict(), games, odds)
+                f = self.extract_game_features_cached(game.to_dict(), games, odds, standings)
                 features.append(f)
                 success += 1
             except Exception as e:
@@ -86,6 +105,7 @@ class TennisExtractor(BaseFeatureExtractor):
         game: dict[str, Any],
         games_df: pd.DataFrame,
         odds_df: pd.DataFrame,
+        standings_df: pd.DataFrame | None = None,
     ) -> dict[str, Any]:
         """Extract features using pre-loaded games and odds DataFrames.
         
@@ -149,9 +169,9 @@ class TennisExtractor(BaseFeatureExtractor):
         features.update({f"away_{k}": v for k, v in a_ret.items()})
 
         # Ranking
-        h_rank = self._ranking_features(game, "home_")
+        h_rank = self._ranking_features(game, "home_", standings_df=standings_df)
         features.update({f"home_{k}": v for k, v in h_rank.items()})
-        a_rank = self._ranking_features(game, "away_")
+        a_rank = self._ranking_features(game, "away_", standings_df=standings_df)
         features.update({f"away_{k}": v for k, v in a_rank.items()})
         features["ranking_diff"] = features["home_ranking"] - features["away_ranking"]
 
@@ -386,10 +406,27 @@ class TennisExtractor(BaseFeatureExtractor):
         self,
         game: dict[str, Any],
         prefix: str,
+        standings_df: pd.DataFrame | None = None,
     ) -> dict[str, float]:
-        """Current ranking and ranking points."""
+        """Current ranking and ranking points.
+
+        Falls back to the standings parquet if the game row itself lacks
+        ranking information (which is common for historical data sources
+        that store rankings separately).
+        """
         ranking = pd.to_numeric(game.get(f"{prefix}ranking", 0), errors="coerce") or 0.0
         points = pd.to_numeric(game.get(f"{prefix}ranking_points", 0), errors="coerce") or 0.0
+
+        # If game row has no ranking, look it up in the standings table
+        if ranking == 0.0 and standings_df is not None and not standings_df.empty:
+            player_id = str(game.get(f"{prefix}team_id", ""))
+            if player_id and "team_id" in standings_df.columns:
+                row = standings_df[standings_df["team_id"] == player_id]
+                if not row.empty:
+                    r = row.iloc[0]
+                    ranking = float(pd.to_numeric(r.get("rank", 0), errors="coerce") or 0.0)
+                    points = float(pd.to_numeric(r.get("points", 0), errors="coerce") or 0.0)
+
         return {"ranking": ranking, "ranking_points": points}
 
     def _fatigue_features(
@@ -452,6 +489,7 @@ class TennisExtractor(BaseFeatureExtractor):
         season = game.get("season", 0)
         games_df = self.load_games(season)
         odds_df = self.load_odds(season)
+        standings_df = self.load_standings(season)
 
         h_id = str(game.get("home_team_id", game.get("player_a_id", "")))
         a_id = str(game.get("away_team_id", game.get("player_b_id", "")))
@@ -511,9 +549,9 @@ class TennisExtractor(BaseFeatureExtractor):
         features.update({f"away_{k}": v for k, v in a_ret.items()})
 
         # Ranking
-        h_rank = self._ranking_features(game, "home_")
+        h_rank = self._ranking_features(game, "home_", standings_df=standings_df)
         features.update({f"home_{k}": v for k, v in h_rank.items()})
-        a_rank = self._ranking_features(game, "away_")
+        a_rank = self._ranking_features(game, "away_", standings_df=standings_df)
         features.update({f"away_{k}": v for k, v in a_rank.items()})
         features["ranking_diff"] = features["home_ranking"] - features["away_ranking"]
 
@@ -547,7 +585,8 @@ class TennisExtractor(BaseFeatureExtractor):
         season = game.get("season", 0)
         games_df = self.load_games(season)
         odds_df = self.load_odds(season)
-        return self.extract_game_features_cached(game, games_df, odds_df)
+        standings_df = self.load_standings(season)
+        return self.extract_game_features_cached(game, games_df, odds_df, standings_df)
 
     def get_feature_names(self) -> list[str]:
         return [

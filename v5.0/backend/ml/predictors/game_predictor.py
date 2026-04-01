@@ -26,6 +26,25 @@ from ml.models.ensemble import EnsembleVoter
 
 logger = logging.getLogger(__name__)
 
+def _add_delta_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute home-minus-away delta features (mirrors train.py logic).
+
+    Called at inference time so the model receives the same delta columns
+    it was trained on.  Already-present delta columns are not recomputed.
+    """
+    home_cols = {c[5:]: c for c in df.columns if c.startswith("home_")}
+    away_cols = {c[5:]: c for c in df.columns if c.startswith("away_")}
+    shared = set(home_cols) & set(away_cols)
+    deltas: dict[str, Any] = {}
+    for key in sorted(shared):
+        delta_name = f"delta_{key}"
+        if delta_name not in df.columns:
+            deltas[delta_name] = df[home_cols[key]].values - df[away_cols[key]].values
+    if deltas:
+        df = pd.concat([df, pd.DataFrame(deltas, index=df.index)], axis=1)
+    return df
+
+
 # Metadata columns that must not be fed to the model
 _META_COLS = {
     "game_id",
@@ -117,6 +136,7 @@ class GamePredictor:
 
         row = {k: v for k, v in features.items() if k not in _META_COLS}
         df = pd.DataFrame([row]).fillna(0)
+        df = _add_delta_features(df)  # compute delta_* columns before alignment
 
         # Align columns to training feature names
         if self._bundle and "feature_names" in self._bundle:
@@ -132,6 +152,7 @@ class GamePredictor:
         """Build feature DataFrame from pre-computed row (bypasses live extraction)."""
         row = {k: v for k, v in feature_row.items() if k not in _META_COLS}
         df = pd.DataFrame([row]).fillna(0)
+        df = _add_delta_features(df)  # compute delta_* columns before alignment
         if self._bundle and "feature_names" in self._bundle:
             expected = self._bundle["feature_names"]
             for col in expected:
@@ -191,6 +212,7 @@ class GamePredictor:
         rows = precomp_df.loc[matched_gids]
         feat_cols = [c for c in rows.columns if c not in meta_skip]
         X_all = rows[feat_cols].fillna(0)
+        X_all = _add_delta_features(X_all)  # compute delta_* before alignment
 
         # Align to expected feature names
         if expected:
@@ -236,6 +258,7 @@ class GamePredictor:
 
             # Build aligned extra feature matrix once
             X_extra = rows[feat_cols].fillna(0)
+            X_extra = _add_delta_features(X_extra)  # ensure delta cols are present
             for col in extra_feature_names:
                 if col not in X_extra.columns:
                     X_extra[col] = 0.0

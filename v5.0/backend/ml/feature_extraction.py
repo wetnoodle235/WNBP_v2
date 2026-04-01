@@ -141,6 +141,8 @@ def extract(
     data_dir: Path,
     seasons: list[int] | None = None,
     verbose: bool = False,
+    incremental: bool = False,
+    output_path: Path | None = None,
 ) -> pd.DataFrame:
     """Run full feature extraction for a sport.
 
@@ -154,6 +156,11 @@ def extract(
         Seasons to extract. If None, auto-discovers all available.
     verbose : bool
         If True, print detailed feature diagnostics.
+    incremental : bool
+        If True and *output_path* exists, only extract NEW games not already
+        in the output file.  Existing rows are preserved and merged.
+    output_path : Path | None
+        Path to existing features parquet (for incremental mode).
 
     Returns
     -------
@@ -164,6 +171,23 @@ def extract(
         if not seasons:
             logger.error("No game data found for sport %r", sport)
             return pd.DataFrame()
+
+    # Incremental: load existing features to find already-extracted game_ids
+    existing_df: pd.DataFrame | None = None
+    existing_game_ids: set[str] | None = None
+    if incremental and output_path and output_path.exists():
+        try:
+            existing_df = pd.read_parquet(output_path)
+            if "game_id" in existing_df.columns:
+                existing_game_ids = set(existing_df["game_id"].astype(str))
+                logger.info(
+                    "Incremental mode: %d existing features for %s",
+                    len(existing_game_ids), sport,
+                )
+        except Exception as exc:
+            logger.warning("Could not load existing features for incremental: %s", exc)
+            existing_df = None
+            existing_game_ids = None
 
     # Data inventory
     inventory = _data_inventory(data_dir, sport)
@@ -184,7 +208,7 @@ def extract(
         start = time.time()
         logger.info("Extracting features for %s season %d …", sport, season)
         try:
-            df = extractor.extract_all(season)
+            df = extractor.extract_all(season, existing_game_ids=existing_game_ids)
             if df is not None and len(df) > 0:
                 df["season"] = season
                 frames.append(df)
@@ -200,11 +224,23 @@ def extract(
         except Exception:
             logger.error("  → error extracting season %d", season, exc_info=True)
 
-    if not frames:
+    # Merge new features with existing (incremental)
+    if existing_df is not None and not existing_df.empty:
+        if frames:
+            new_df = pd.concat(frames, ignore_index=True)
+            logger.info("Incremental: %d new rows + %d existing = merging", len(new_df), len(existing_df))
+            full = pd.concat([existing_df, new_df], ignore_index=True)
+            # Deduplicate by game_id (keep last = new extraction)
+            if "game_id" in full.columns:
+                full = full.drop_duplicates(subset=["game_id"], keep="last").reset_index(drop=True)
+        else:
+            logger.info("Incremental: no new games — returning cached features")
+            return existing_df
+    elif not frames:
         logger.error("No feature data extracted for %s", sport)
         return pd.DataFrame()
-
-    full = pd.concat(frames, ignore_index=True)
+    else:
+        full = pd.concat(frames, ignore_index=True)
 
     # Ensure all feature columns are numeric
     feature_cols = [c for c in full.columns if c not in _META_COLS and c != "season"]
@@ -322,6 +358,11 @@ def main() -> None:
         help="Print feature importance rankings and diagnostics.",
     )
     parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Only extract NEW games not in existing output file (fast daily mode).",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -355,12 +396,15 @@ def main() -> None:
             sys.exit(1)
 
     # Extract
+    out_path = Path(args.output) if args.output else None
     try:
         df = extract(
             sport=args.sport.lower(),
             data_dir=data_dir,
             seasons=seasons,
             verbose=args.verbose,
+            incremental=args.incremental,
+            output_path=out_path,
         )
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)

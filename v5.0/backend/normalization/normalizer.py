@@ -67,12 +67,16 @@ SPORT_PROVIDER_DIR: dict[str, dict[str, str]] = {
     "mls":        {"espn": "mls",        "statsbomb": "mls",       "odds": "mls",  "oddsapi": "mls",  "footballdata": "mls",  "apisports": "mls",  "fivethirtyeight": "mls"},
     "ucl":        {"espn": "ucl",        "statsbomb": "ucl",       "odds": "ucl",  "oddsapi": "ucl",  "footballdata": "ucl",  "apisports": "ucl",  "fivethirtyeight": "ucl"},
     "nwsl":       {"espn": "nwsl",       "statsbomb": "nwsl"},
+    "ligamx":     {"espn": "ligamx"},
+    "europa":     {"espn": "europa"},
     "f1":         {"ergast": "f1",       "openf1": "f1",      "espn": "f1"},
+    "indycar":    {"espn": "indycar"},
     "atp":        {"tennisabstract": "atp",  "espn": "atp",           "odds": "atp"},
     "wta":        {"tennisabstract": "wta",  "espn": "wta"},
     "ufc":        {"ufcstats": "ufc",                               "odds": "ufc"},
     "dota2":      {"opendota": "dota2", "pandascore": "dota2"},
     "golf":       {"espn": "golf"},
+    "lpga":       {"espn": "lpga"},
     "lol":        {"pandascore": "lol"},
     "csgo":       {"pandascore": "csgo"},
     "valorant":   {"pandascore": "valorant"},
@@ -620,12 +624,46 @@ def _validate_batch(
 
 
 def _write_parquet(rows: list[dict[str, Any]], dest: Path) -> int:
-    """Write *rows* to a Parquet file at *dest*.  Returns row count."""
+    """Write *rows* to a Parquet file at *dest*.  Returns row count.
+
+    Enhancements vs original:
+    - Drops columns that are entirely null (no information value, saves RAM on load)
+    - Uses zstd compression (better ratio than snappy, similar speed)
+    - Downcasts float64 → float32 and large int64 → int32 to halve numeric memory
+    """
     if not rows:
         return 0
     dest.parent.mkdir(parents=True, exist_ok=True)
     table = pa.Table.from_pylist(rows)
-    pq.write_table(table, dest, compression="snappy")
+
+    # --- Drop all-null columns ---
+    # A column where every value is null wastes schema space and loads as 0 values
+    # in pandas. For sports parquets this removes ~400 sport-irrelevant columns.
+    non_null_cols = [
+        name for name in table.schema.names
+        if table.column(name).null_count < len(table)
+    ]
+    if len(non_null_cols) < len(table.schema.names):
+        table = table.select(non_null_cols)
+
+    # --- Optimise numeric dtypes ---
+    # float64 → float32: halves memory for all stat columns (adequate precision)
+    # int64  → int32:    adequate for scores, attendance, etc.
+    new_fields = []
+    new_columns = []
+    for i, field in enumerate(table.schema):
+        col = table.column(i)
+        if pa.types.is_float64(field.type):
+            col = col.cast(pa.float32())
+            field = field.with_type(pa.float32())
+        elif pa.types.is_int64(field.type):
+            col = col.cast(pa.int32())
+            field = field.with_type(pa.int32())
+        new_fields.append(field)
+        new_columns.append(col)
+    table = pa.table(new_columns, schema=pa.schema(new_fields))
+
+    pq.write_table(table, dest, compression="zstd", compression_level=9)
     logger.info("Wrote %d rows → %s", len(rows), dest)
     return len(rows)
 
@@ -1696,6 +1734,129 @@ def _compute_derived_stats(rec: dict[str, Any], sport: str = "") -> None:
             opp_to = rec.get(f"{opp}_turnovers") or 0
             if own_to > 0 or opp_to > 0:
                 rec[f"{prefix}_turnover_margin"] = opp_to - own_to
+
+        # Football: total yards advantage
+        if _football and rec.get(f"{prefix}_yards_diff") is None:
+            opp = "away" if prefix == "home" else "home"
+            own_y = rec.get(f"{prefix}_total_yards")
+            opp_y = rec.get(f"{opp}_total_yards")
+            if own_y is not None and opp_y is not None:
+                rec[f"{prefix}_yards_diff"] = int(own_y - opp_y)
+
+        # Football: scoring efficiency = score / total_plays
+        if _football and rec.get(f"{prefix}_scoring_efficiency") is None:
+            score = rec.get(f"{prefix}_score")
+            plays = rec.get(f"{prefix}_total_plays")
+            if score is not None and plays is not None and plays > 0:
+                rec[f"{prefix}_scoring_efficiency"] = round(score / plays, 3)
+
+        # Basketball: pace = possessions × (game_minutes / minutes_played)
+        # Possessions per 48 min (NBA) or 40 min (NCAAB/WNBA/NCAAW)
+        if _basketball and rec.get(f"{prefix}_pace") is None:
+            poss = rec.get(f"{prefix}_possessions")
+            if poss is not None:
+                game_min = 40 if sport in ("ncaab", "ncaaw") else 48
+                rec[f"{prefix}_pace"] = round(poss * game_min / 20, 1)
+
+        # Basketball: offensive_rating = points / possessions * 100
+        if _basketball and rec.get(f"{prefix}_offensive_rating") is None:
+            pts = rec.get(f"{prefix}_score")
+            poss = rec.get(f"{prefix}_possessions")
+            if pts is not None and poss is not None and poss > 0:
+                rec[f"{prefix}_offensive_rating"] = round(pts / poss * 100, 1)
+
+        # Basketball: defensive_rating = opp points / opp possessions * 100
+        if _basketball and rec.get(f"{prefix}_defensive_rating") is None:
+            opp = "away" if prefix == "home" else "home"
+            opp_pts = rec.get(f"{opp}_score")
+            opp_poss = rec.get(f"{opp}_possessions")
+            if opp_pts is not None and opp_poss is not None and opp_poss > 0:
+                rec[f"{prefix}_defensive_rating"] = round(opp_pts / opp_poss * 100, 1)
+
+        # Basketball: net_rating = off_rating - def_rating
+        if _basketball and rec.get(f"{prefix}_net_rating") is None:
+            off_r = rec.get(f"{prefix}_offensive_rating")
+            def_r = rec.get(f"{prefix}_defensive_rating")
+            if off_r is not None and def_r is not None:
+                rec[f"{prefix}_net_rating"] = round(off_r - def_r, 1)
+
+        # Hockey: goals_per_shot = score / shots_on_goal
+        if _hockey and rec.get(f"{prefix}_goals_per_shot") is None:
+            goals = rec.get(f"{prefix}_score")
+            sog = rec.get(f"{prefix}_shots_on_goal")
+            if goals is not None and sog is not None and sog > 0:
+                rec[f"{prefix}_goals_per_shot"] = round(goals / sog, 3)
+
+        # Soccer: goals_per_shot = score / total_shots
+        if _soccer and rec.get(f"{prefix}_goals_per_shot") is None:
+            goals = rec.get(f"{prefix}_score")
+            shots = rec.get(f"{prefix}_total_shots") or rec.get(f"{prefix}_shots")
+            if goals is not None and shots is not None and shots > 0:
+                rec[f"{prefix}_goals_per_shot"] = round(goals / shots, 3)
+
+        # Tennis: sets_won derived from home_score / away_score where score = sets
+        if _tennis:
+            # home_score / away_score in tennis parquets represent sets won
+            if rec.get("home_sets_won") is None and rec.get("home_score") is not None:
+                rec["home_sets_won"] = int(rec["home_score"])
+            if rec.get("away_sets_won") is None and rec.get("away_score") is not None:
+                rec["away_sets_won"] = int(rec["away_score"])
+
+    # ── Universal post-loop derived stats (cross-team) ──
+    hs = rec.get("home_score")
+    as_ = rec.get("away_score")
+
+    # result, score_diff, total_score
+    if hs is not None and as_ is not None:
+        if rec.get("result") is None:
+            if hs > as_:
+                rec["result"] = "home_win"
+            elif as_ > hs:
+                rec["result"] = "away_win"
+            else:
+                rec["result"] = "draw"
+        if rec.get("score_diff") is None:
+            rec["score_diff"] = int(hs - as_)
+        if rec.get("total_score") is None:
+            rec["total_score"] = int(hs + as_)
+
+    # overtime flag
+    if rec.get("overtime") is False or rec.get("overtime") is None:
+        sport_key = rec.get("sport", "")
+        has_ot = (rec.get("home_ot") or 0) > 0 or (rec.get("away_ot") or 0) > 0
+        # Hockey/basketball OT also visible via period count
+        has_ot_nhl = sport_key in ("nhl",) and rec.get("home_p3") is not None and (
+            # if periods beyond 3 have scores, it went to OT
+            any(rec.get(f"home_p{p}") is not None for p in [4, 5])
+        )
+        rec["overtime"] = bool(has_ot or has_ot_nhl)
+
+    # day_of_week and is_weekend from date field
+    if rec.get("day_of_week") is None:
+        raw_date = rec.get("date")
+        if raw_date is not None:
+            try:
+                import datetime as _dt
+                if isinstance(raw_date, str):
+                    d = _dt.date.fromisoformat(raw_date[:10])
+                elif hasattr(raw_date, "timetuple"):
+                    d = raw_date if isinstance(raw_date, _dt.date) else raw_date.date()
+                else:
+                    d = None
+                if d is not None:
+                    rec["day_of_week"] = d.weekday()   # 0=Mon, 6=Sun
+                    rec["is_weekend"] = d.weekday() >= 5
+            except (ValueError, AttributeError):
+                pass
+
+    # Soccer: xg_diff and xg_total
+    hxg = rec.get("home_xg")
+    axg = rec.get("away_xg")
+    if hxg is not None and axg is not None:
+        if rec.get("xg_diff") is None:
+            rec["xg_diff"] = round(hxg - axg, 2)
+        if rec.get("xg_total") is None:
+            rec["xg_total"] = round(hxg + axg, 2)
 
 
 

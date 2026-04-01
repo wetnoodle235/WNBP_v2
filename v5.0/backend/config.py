@@ -90,7 +90,10 @@ SPORT_DEFINITIONS: dict[str, dict] = {
     "mls":        {"label": "MLS",        "category": "soccer",     "country": "US"},
     "ucl":        {"label": "UCL",        "category": "soccer",     "country": "EU"},
     "nwsl":       {"label": "NWSL",       "category": "soccer",     "country": "US"},
+    "ligamx":     {"label": "Liga MX",    "category": "soccer",     "country": "MX"},
+    "europa":     {"label": "Europa League", "category": "soccer",  "country": "EU"},
     "f1":         {"label": "F1",         "category": "motorsport", "country": "INT"},
+    "indycar":    {"label": "IndyCar",    "category": "motorsport", "country": "US"},
     "atp":        {"label": "ATP",        "category": "tennis",     "country": "INT"},
     "wta":        {"label": "WTA",        "category": "tennis",     "country": "INT"},
     "ufc":        {"label": "UFC",        "category": "mma",        "country": "US"},
@@ -99,6 +102,7 @@ SPORT_DEFINITIONS: dict[str, dict] = {
     "dota2":      {"label": "Dota 2",     "category": "esports",    "country": "INT"},
     "valorant":   {"label": "Valorant",   "category": "esports",    "country": "INT"},
     "golf":       {"label": "PGA",        "category": "golf",       "country": "US"},
+    "lpga":       {"label": "LPGA",       "category": "golf",       "country": "US"},
 }
 
 ALL_SPORTS = [s for s, d in SPORT_DEFINITIONS.items() if not d.get("disabled")]
@@ -118,13 +122,14 @@ SPORT_SEASON_START = {
     # Fall-start football: "2024" season = Sep 2024 - Feb 2025
     "nfl": 9, "ncaaf": 8,
     # Year-round: season = calendar year
-    "ufc": 1, "atp": 1, "wta": 1, "f1": 3,
+    "ufc": 1, "atp": 1, "wta": 1, "f1": 3, "indycar": 3,
     # Esports: year-round, season = calendar year
     "dota2": 1, "lol": 1, "csgo": 1, "valorant": 1,
     # Other
-    "golf": 1,
+    "golf": 1, "lpga": 1,
     # European football: Aug-May
     "epl": 8, "laliga": 8, "bundesliga": 8, "seriea": 8, "ligue1": 8, "ucl": 9,
+    "ligamx": 7, "europa": 9,
 }
 
 
@@ -251,11 +256,12 @@ SPORT_SEASON_END = {
     # Football: cross-year
     "nfl": 2, "ncaaf": 1,
     # Year-round / calendar-year
-    "ufc": 12, "atp": 11, "wta": 11, "f1": 12,
+    "ufc": 12, "atp": 11, "wta": 11, "f1": 12, "indycar": 10,
     "dota2": 12, "lol": 12, "csgo": 12, "valorant": 12,
-    "golf": 12,
+    "golf": 12, "lpga": 12,
     # European football: cross-year (Aug → May/Jun)
     "epl": 5, "laliga": 5, "bundesliga": 5, "seriea": 5, "ligue1": 5, "ucl": 6,
+    "ligamx": 6, "europa": 5,
 }
 
 

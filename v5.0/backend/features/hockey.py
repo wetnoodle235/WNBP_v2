@@ -399,6 +399,88 @@ class HockeyExtractor(BaseFeatureExtractor):
 
     # ── NHL-specific Standings ────────────────────────────
 
+    def _skater_features(
+        self,
+        team_id: str,
+        date: str,
+        season: int,
+        window: int = 10,
+    ) -> dict[str, float]:
+        """Star skater stats: top-player points, plus/minus, high-danger scoring."""
+        ps = self.load_player_stats(season)
+        defaults = {
+            "avg_plus_minus": 0.0,
+            "top_scorer_pts_pg": 0.0,
+            "team_pts_pg": 0.0,
+            "team_shots_pg": 0.0,
+        }
+        if ps.empty or "team_id" not in ps.columns:
+            return defaults
+
+        abr_map = self._build_ps_abr_to_id(season)
+
+        # Build skater cache
+        cache_key = f"_sk_cache_{season}"
+        if not hasattr(self, cache_key):
+            raw_ids = ps["team_id"].astype(str)
+            mapped = raw_ids.map(lambda t: abr_map.get(t, abr_map.get(self._ABR_NORM.get(t, t), t)))
+            sk_cache = {
+                "team_ids": mapped.values,
+                "dates_ns": pd.to_datetime(ps["date"], errors="coerce").values.astype("int64"),
+                "plus_minus": pd.to_numeric(ps.get("plus_minus", 0), errors="coerce").fillna(0).values,
+                "goals": pd.to_numeric(ps.get("goals", 0), errors="coerce").fillna(0).values,
+                "assists": pd.to_numeric(ps.get("assists", 0), errors="coerce").fillna(0).values,
+                "shots": pd.to_numeric(ps.get("shots", 0), errors="coerce").fillna(0).values,
+                "player_ids": ps.get("player_id", pd.Series(dtype=str)).astype(str).values,
+                "is_skater": (ps["saves"].isna() | (ps["saves"] == 0)).values if "saves" in ps.columns else np.ones(len(ps), dtype=bool),
+            }
+            setattr(self, cache_key, sk_cache)
+        sc = getattr(self, cache_key)
+
+        game_date_ns = pd.Timestamp(date).value if date else 0
+        if game_date_ns == 0:
+            return defaults
+
+        mask = (sc["team_ids"] == str(team_id)) & sc["is_skater"] & (sc["dates_ns"] < game_date_ns)
+        if not mask.any():
+            return defaults
+
+        indices = np.where(mask)[0]
+        # Sort by date desc, take window
+        sorted_idx = indices[np.argsort(sc["dates_ns"][indices])[::-1]][:window * 20]  # more rows for player grouping
+
+        pm = sc["plus_minus"][sorted_idx]
+        goals = sc["goals"][sorted_idx]
+        assists = sc["assists"][sorted_idx]
+        shots = sc["shots"][sorted_idx]
+        pids = sc["player_ids"][sorted_idx]
+
+        n_games = min(window, len(np.unique(sc["dates_ns"][sorted_idx])))
+        if n_games == 0:
+            return defaults
+
+        avg_pm = float(pm.mean()) if len(pm) > 0 else 0.0
+        pts = goals + assists
+        total_pts = float(pts.sum())
+        total_shots = float(shots.sum())
+
+        # Top scorer contribution
+        if len(pids) > 0:
+            unique_pids = np.unique(pids)
+            top_pts = max(
+                float(pts[pids == pid].sum())
+                for pid in unique_pids
+            ) if len(unique_pids) > 0 else 0.0
+        else:
+            top_pts = 0.0
+
+        return {
+            "avg_plus_minus": avg_pm,
+            "top_scorer_pts_pg": top_pts / n_games,
+            "team_pts_pg": total_pts / n_games,
+            "team_shots_pg": total_shots / n_games,
+        }
+
     def _nhl_standings_features(self, team_id: str, season: int) -> dict[str, float]:
         """Parse NHL standings: uses points, wins/losses/otl, W-L-OTL last-ten."""
         defaults = {
@@ -558,6 +640,12 @@ class HockeyExtractor(BaseFeatureExtractor):
         a_pg = self._player_goalie_features(a_id, date, season)
         features.update({f"away_{k}": v for k, v in a_pg.items()})
 
+        # Skater star-player and plus/minus features
+        h_sk = self._skater_features(h_id, date, season)
+        features.update({f"home_{k}": v for k, v in h_sk.items()})
+        a_sk = self._skater_features(a_id, date, season)
+        features.update({f"away_{k}": v for k, v in a_sk.items()})
+
         # ELO ratings
         h_elo = self.elo_features(h_id, a_id, date, games_df)
         features.update({f"home_{k}": v for k, v in h_elo.items()})
@@ -635,6 +723,9 @@ class HockeyExtractor(BaseFeatureExtractor):
             # Player goalie stats
             "home_ps_sv_pct", "home_ps_gaa",
             "away_ps_sv_pct", "away_ps_gaa",
+            # Skater star-player features
+            "home_avg_plus_minus", "home_top_scorer_pts_pg", "home_team_pts_pg", "home_team_shots_pg",
+            "away_avg_plus_minus", "away_top_scorer_pts_pg", "away_team_pts_pg", "away_team_shots_pg",
             # ELO ratings
             "home_elo", "home_elo_diff", "home_elo_expected_win",
             "away_elo", "away_elo_diff", "away_elo_expected_win",

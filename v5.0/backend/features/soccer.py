@@ -161,14 +161,22 @@ class SoccerExtractor(BaseFeatureExtractor):
         games: pd.DataFrame,
         window: int = 5,
     ) -> dict[str, float]:
-        """Goals for/against last `window` games, plus draw rate."""
+        """Goals for/against last `window` games, plus draw rate and half-specific patterns."""
         recent = self._team_games_before(games, team_id, date, limit=window)
         if recent.empty:
-            return {"gf_l5": 0.0, "ga_l5": 0.0, "draw_rate_l5": 0.0}
+            return {
+                "gf_l5": 0.0, "ga_l5": 0.0, "draw_rate_l5": 0.0,
+                "scored_both_halves_rate": 0.0, "conceded_both_halves_rate": 0.0,
+                "first_half_goals_pg": 0.0, "second_half_goals_pg": 0.0,
+            }
 
         is_home = recent["home_team_id"] == team_id
         records = recent.to_dict("records")
         gf, ga, draws = 0.0, 0.0, 0
+        both_halves_scored = 0
+        both_halves_conceded = 0
+        h1_goals = 0.0
+        h2_goals = 0.0
         for row, h in zip(records, is_home):
             p = "home_" if h else "away_"
             op = "away_" if h else "home_"
@@ -178,11 +186,37 @@ class SoccerExtractor(BaseFeatureExtractor):
             ga += gc
             if gs == gc:
                 draws += 1
+            # Half-specific goals
+            h1 = pd.to_numeric(row.get(f"{p}h1_score"), errors="coerce")
+            h2_val = pd.to_numeric(row.get(f"{p}h2_score"), errors="coerce")
+            if h1 is not None and not (isinstance(h1, float) and np.isnan(h1)):
+                h1_goals += float(h1)
+                if h1 > 0:
+                    both_halves_scored += 0  # Only count if both halves > 0
+            if h2_val is not None and not (isinstance(h2_val, float) and np.isnan(h2_val)):
+                h2_goals += float(h2_val)
+            # Scored in both halves
+            if (h1 is not None and not (isinstance(h1, float) and np.isnan(h1)) and
+                    h2_val is not None and not (isinstance(h2_val, float) and np.isnan(h2_val)) and
+                    h1 > 0 and h2_val > 0):
+                both_halves_scored += 1
+            # Conceded in both halves
+            op_h1 = pd.to_numeric(row.get(f"{op}h1_score"), errors="coerce")
+            op_h2 = pd.to_numeric(row.get(f"{op}h2_score"), errors="coerce")
+            if (op_h1 is not None and not (isinstance(op_h1, float) and np.isnan(op_h1)) and
+                    op_h2 is not None and not (isinstance(op_h2, float) and np.isnan(op_h2)) and
+                    op_h1 > 0 and op_h2 > 0):
+                both_halves_conceded += 1
+
         n = len(recent)
         return {
             "gf_l5": float(gf / n),
             "ga_l5": float(ga / n),
             "draw_rate_l5": float(draws / n),
+            "scored_both_halves_rate": float(both_halves_scored / n),
+            "conceded_both_halves_rate": float(both_halves_conceded / n),
+            "first_half_goals_pg": float(h1_goals / n),
+            "second_half_goals_pg": float(h2_goals / n),
         }
 
     def _set_piece_features(
@@ -556,6 +590,8 @@ class SoccerExtractor(BaseFeatureExtractor):
         a_sw = self._short_window_goals(a_id, date, games_df)
         features.update({f"away_{k}": v for k, v in a_sw.items()})
         features["draw_rate_diff"] = h_sw["draw_rate_l5"] - a_sw["draw_rate_l5"]
+        features["first_half_goal_advantage"] = h_sw["first_half_goals_pg"] - a_sw["first_half_goals_pg"]
+        features["both_halves_scored_diff"] = h_sw["scored_both_halves_rate"] - a_sw["scored_both_halves_rate"]
 
         # Player discipline & attacking depth (from player_stats)
         h_disc = self._player_discipline_features(h_id, date, season, games=games_df)

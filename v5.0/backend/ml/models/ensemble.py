@@ -102,19 +102,20 @@ class EnsembleVoter:
 
     BASE_CLASSIFIERS: list[tuple[str, Any]] = [
         ("logistic", LogisticRegression(max_iter=2000, C=0.5, solver="lbfgs")),
-        ("random_forest", RandomForestClassifier(n_estimators=150, max_depth=8, n_jobs=8, random_state=42)),
+        ("random_forest", RandomForestClassifier(n_estimators=150, max_depth=7, min_samples_leaf=3, n_jobs=8, random_state=42)),
         (
             "gradient_boosting",
             GradientBoostingClassifier(
-                n_estimators=150, max_depth=4, learning_rate=0.05, random_state=42
+                n_estimators=200, max_depth=4, learning_rate=0.05,
+                subsample=0.8, min_samples_leaf=5, random_state=42
             ),
         ),
-        ("svc", SVC(probability=True, C=2.0, random_state=42)),
-        ("knn", KNeighborsClassifier(n_neighbors=5, weights="distance")),
-        ("extra_trees", ExtraTreesClassifier(n_estimators=150, max_depth=8, n_jobs=8, random_state=42)),
+        ("svc", SVC(probability=True, C=1.0, random_state=42)),
+        ("knn", KNeighborsClassifier(n_neighbors=7, weights="distance")),
+        ("extra_trees", ExtraTreesClassifier(n_estimators=150, max_depth=7, min_samples_leaf=3, n_jobs=8, random_state=42)),
         (
             "adaboost",
-            AdaBoostClassifier(n_estimators=100, learning_rate=0.8, random_state=42),
+            AdaBoostClassifier(n_estimators=100, learning_rate=0.5, random_state=42),
         ),
         ("naive_bayes", GaussianNB()),
         (
@@ -129,22 +130,23 @@ class EnsembleVoter:
     # ── Regressor definitions ────────────────────────────
 
     BASE_REGRESSORS: list[tuple[str, Any]] = [
-        ("ridge", Ridge(alpha=1.0)),
+        ("ridge", Ridge(alpha=2.0)),
         ("lasso", Lasso(alpha=0.1, max_iter=5000)),
         ("elastic_net", ElasticNet(alpha=0.1, l1_ratio=0.5, max_iter=5000)),
-        ("random_forest", RandomForestRegressor(n_estimators=150, max_depth=8, n_jobs=8, random_state=42)),
+        ("random_forest", RandomForestRegressor(n_estimators=150, max_depth=7, min_samples_leaf=3, n_jobs=8, random_state=42)),
         (
             "gradient_boosting",
             GradientBoostingRegressor(
-                n_estimators=150, max_depth=4, learning_rate=0.05, random_state=42
+                n_estimators=200, max_depth=4, learning_rate=0.05,
+                subsample=0.8, min_samples_leaf=5, random_state=42
             ),
         ),
-        ("svr", SVR(C=2.0)),
-        ("knn", KNeighborsRegressor(n_neighbors=5, weights="distance")),
-        ("extra_trees", ExtraTreesRegressor(n_estimators=150, max_depth=8, n_jobs=8, random_state=42)),
+        ("svr", SVR(C=1.0)),
+        ("knn", KNeighborsRegressor(n_neighbors=7, weights="distance")),
+        ("extra_trees", ExtraTreesRegressor(n_estimators=150, max_depth=7, min_samples_leaf=3, n_jobs=8, random_state=42)),
         (
             "adaboost",
-            AdaBoostRegressor(n_estimators=100, learning_rate=0.8, random_state=42),
+            AdaBoostRegressor(n_estimators=100, learning_rate=0.5, random_state=42),
         ),
     ]
 
@@ -176,11 +178,16 @@ class EnsembleVoter:
                 (
                     "xgboost",
                     XGBClassifier(
-                        n_estimators=200,
-                        max_depth=6,
+                        n_estimators=300,
+                        max_depth=5,
                         learning_rate=0.05,
                         use_label_encoder=False,
                         eval_metric="logloss",
+                        reg_alpha=0.1,
+                        reg_lambda=1.0,
+                        subsample=0.8,
+                        colsample_bytree=0.8,
+                        min_child_weight=3,
                         random_state=42,
                         verbosity=0,
                         n_jobs=8,
@@ -191,9 +198,14 @@ class EnsembleVoter:
                 (
                     "xgboost",
                     XGBRegressor(
-                        n_estimators=200,
-                        max_depth=6,
+                        n_estimators=300,
+                        max_depth=5,
                         learning_rate=0.05,
+                        reg_alpha=0.1,
+                        reg_lambda=1.0,
+                        subsample=0.8,
+                        colsample_bytree=0.8,
+                        min_child_weight=3,
                         random_state=42,
                         verbosity=0,
                         n_jobs=8,
@@ -207,9 +219,15 @@ class EnsembleVoter:
                 (
                     "lightgbm",
                     LGBMClassifier(
-                        n_estimators=200,
-                        max_depth=6,
+                        n_estimators=300,
+                        max_depth=5,
                         learning_rate=0.05,
+                        num_leaves=31,
+                        min_child_samples=10,
+                        reg_alpha=0.1,
+                        reg_lambda=1.0,
+                        subsample=0.8,
+                        colsample_bytree=0.8,
                         random_state=42,
                         verbose=-1,
                         n_jobs=8,
@@ -220,9 +238,15 @@ class EnsembleVoter:
                 (
                     "lightgbm",
                     LGBMRegressor(
-                        n_estimators=200,
-                        max_depth=6,
+                        n_estimators=300,
+                        max_depth=5,
                         learning_rate=0.05,
+                        num_leaves=31,
+                        min_child_samples=10,
+                        reg_alpha=0.1,
+                        reg_lambda=1.0,
+                        subsample=0.8,
+                        colsample_bytree=0.8,
                         random_state=42,
                         verbose=-1,
                         n_jobs=8,
@@ -236,11 +260,17 @@ class EnsembleVoter:
                 (
                     "catboost",
                     CatBoostClassifier(
-                        iterations=200,
-                        depth=6,
+                        iterations=300,
+                        depth=5,
                         learning_rate=0.05,
+                        l2_leaf_reg=5.0,
+                        min_data_in_leaf=5,
+                        subsample=0.8,
+                        colsample_bylevel=0.8,
                         random_seed=42,
                         verbose=0,
+                        od_type="Iter",
+                        od_wait=30,
                     ),
                 )
             )
@@ -248,11 +278,17 @@ class EnsembleVoter:
                 (
                     "catboost",
                     CatBoostRegressor(
-                        iterations=200,
-                        depth=6,
+                        iterations=300,
+                        depth=5,
                         learning_rate=0.05,
+                        l2_leaf_reg=5.0,
+                        min_data_in_leaf=5,
+                        subsample=0.8,
+                        colsample_bylevel=0.8,
                         random_seed=42,
                         verbose=0,
+                        od_type="Iter",
+                        od_wait=30,
                     ),
                 )
             )
@@ -334,7 +370,10 @@ class EnsembleVoter:
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    model.fit(X_tr, y_tr)
+                    if name == "catboost":
+                        model.fit(X_tr, y_tr, eval_set=(X_v, y_v), verbose=False)
+                    else:
+                        model.fit(X_tr, y_tr)
 
                 probs = self._safe_predict_proba(model, X_v)
                 if probs is None:
@@ -442,7 +481,10 @@ class EnsembleVoter:
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    model.fit(X_tr, y_tr)
+                    if name == "catboost":
+                        model.fit(X_tr, y_tr, eval_set=(X_v, y_v), verbose=False)
+                    else:
+                        model.fit(X_tr, y_tr)
 
                 preds = self._safe_predict(model, X_v)
                 if preds is None:

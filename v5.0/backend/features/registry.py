@@ -52,6 +52,8 @@ EXTRACTORS: dict[str, type[BaseFeatureExtractor]] = {
     "mls": SoccerExtractor,
     "ucl": SoccerExtractor,
     "nwsl": SoccerExtractor,
+    "ligamx": SoccerExtractor,
+    "europa": SoccerExtractor,
     # Combat
     "ufc": CombatExtractor,
     # Tennis
@@ -59,8 +61,10 @@ EXTRACTORS: dict[str, type[BaseFeatureExtractor]] = {
     "wta": TennisExtractor,
     # Motorsport
     "f1": MotorsportExtractor,
+    "indycar": MotorsportExtractor,
     # Golf
     "golf": GolfExtractor,
+    "lpga": GolfExtractor,
     # Esports
     "lol": EsportsExtractor,
     "csgo": EsportsExtractor,

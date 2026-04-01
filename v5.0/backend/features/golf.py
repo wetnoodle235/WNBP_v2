@@ -116,7 +116,9 @@ class GolfExtractor(BaseFeatureExtractor):
 
     # ── extract_all override ──────────────────────────────
 
-    def extract_all(self, season: int) -> pd.DataFrame:
+    def extract_all(
+        self, season: int, *, existing_game_ids: set[str] | None = None,
+    ) -> pd.DataFrame:
         """Expand each tournament into per-player rows using player_stats."""
         games = self.load_games(season)
         if games.empty:
@@ -135,8 +137,38 @@ class GolfExtractor(BaseFeatureExtractor):
 
         stats = pd.concat(all_stats, ignore_index=True) if all_stats else pd.DataFrame()
         if stats.empty:
-            logger.warning("No player_stats for %s — skipping features", self.sport)
-            return pd.DataFrame()
+            logger.warning("No player_stats for %s — using tournament-level features only", self.sport)
+            status_col = "status" if "status" in games.columns else None
+            if status_col:
+                games = games[games[status_col].str.lower().isin(
+                    {"final", "closed", "complete", "finished"}
+                )]
+            id_col = next((c for c in ("id", "game_id") if c in games.columns), None)
+            if id_col is None or games.empty:
+                return pd.DataFrame()
+            features: list[dict[str, Any]] = []
+            date_col = next((c for c in ("date", "start_date") if c in games.columns), None)
+            sorted_games = games.sort_values(date_col) if date_col else games
+            for idx, (_, game) in enumerate(sorted_games.iterrows()):
+                gd = game.to_dict()
+                gid = str(gd.get(id_col, ""))
+                if existing_game_ids and gid in existing_game_ids:
+                    continue
+                f: dict[str, Any] = {
+                    "game_id": gid,
+                    "season": season,
+                    "date": str(gd.get(date_col, "")) if date_col else "",
+                    "sport": self.sport,
+                    "field_size": float(gd.get("field_size", 0) or 0),
+                    "purse": float(gd.get("purse", 0) or 0),
+                    "round_number": float(idx + 1),
+                    "total_rounds": float(gd.get("total_rounds", gd.get("rounds", 4)) or 4),
+                    "home_score": float(gd.get("home_score", gd.get("winning_score", 0)) or 0),
+                    "away_score": 0.0,
+                }
+                features.append(f)
+            logger.info("%s fallback: %d tournament-level rows", self.sport, len(features))
+            return pd.DataFrame(features) if features else pd.DataFrame()
 
         # Pre-compute indexed columns once
         stats["_pid"] = stats["player_id"].astype(str)
@@ -175,6 +207,10 @@ class GolfExtractor(BaseFeatureExtractor):
             game_status = str(game.get("status", "")).lower()
 
             if game_status not in ("final", "complete", "closed", "finished"):
+                continue
+
+            # Incremental: skip already-extracted tournaments
+            if existing_game_ids and game_id in existing_game_ids:
                 continue
 
             tournament = current_stats[current_stats["_gid"] == game_id]
