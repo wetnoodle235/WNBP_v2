@@ -5,10 +5,11 @@ import Link from "next/link";
 import { SectionBand, Pagination } from "@/components/ui";
 import { getDisplayName, getSportColor, getSportIcon } from "@/lib/sports-config";
 import { formatPropType } from "@/lib/formatters";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 const API_BASE =
   typeof window === "undefined"
-    ? (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000")
+    ? resolveServerApiBase()
     : "/api/proxy";
 
 const TIER_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };

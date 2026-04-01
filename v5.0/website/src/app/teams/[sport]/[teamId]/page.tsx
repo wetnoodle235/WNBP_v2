@@ -6,12 +6,13 @@ import { SectionBand, Badge, TeamBadge } from "@/components/ui";
 import { getDisplayName } from "@/lib/sports-config";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 interface PageProps {
   params: Promise<{ sport: string; teamId: string }>;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE = resolveServerApiBase();
 
 async function getTeamDetail(sport: string, teamId: string) {
   try {

@@ -27,7 +27,9 @@ type GuideEndpoint = {
   exampleResponse: string;
 };
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
+import { resolveServerApiBase } from "@/lib/api-base";
+
+const API_BASE = resolveServerApiBase();
 const SELLABLE_OPENAPI_URL = `${API_BASE}/openapi-sellable.json`;
 
 const GUIDE_ENDPOINTS: GuideEndpoint[] = [

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { SectionBand, EmptyState, FavoriteButton } from "@/components/ui";
 import { useFavorites } from "@/lib/hooks";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 interface FavoriteGameInfo {
   game_id: string;
@@ -16,7 +17,7 @@ interface FavoriteGameInfo {
 
 const API_BASE =
   typeof window === "undefined"
-    ? (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000")
+    ? resolveServerApiBase()
     : "/api/proxy";
 
 export function FavoritesClient() {

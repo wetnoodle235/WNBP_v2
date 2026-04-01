@@ -4,9 +4,10 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { SectionBand, Pagination } from "@/components/ui";
 import { getDisplayName, getSportColor } from "@/lib/sports-config";
 import { formatGameTime, formatOdds, formatPropType, formatSpread, formatTotal } from "@/lib/formatters";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 const API_BASE = typeof window === "undefined"
-  ? (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000")
+  ? resolveServerApiBase()
   : "/api/proxy";
 const REFRESH_INTERVAL_MS = 30_000;
 

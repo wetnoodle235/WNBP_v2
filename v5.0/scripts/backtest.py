@@ -23,6 +23,7 @@ import logging
 import sys
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -348,16 +349,16 @@ class Backtester:
                         break
             self._run_golf(sport, models_dir, start_date, sport_end)
 
-        # Run predictions per sport — load predictor ONLY if games exist
-        any_loaded = False
-        for sport in team_sports:
+        # Run predictions per sport — parallelized across sports
+        # Each sport gets its own predictor (no shared state → thread-safe).
+        def _backtest_one_sport(sport: str) -> list[dict[str, Any]]:
+            """Backtest a single sport; returns list of records."""
             models_dir = MODELS_ROOT / sport
             if not (models_dir / "joint_models.pkl").exists() and not (
                 models_dir / "separate_models.pkl"
             ).exists():
-                continue
+                return []
 
-            # Determine effective window end
             sport_end = base_end
             if self.end_date is None and not _sport_in_season(sport, base_end):
                 probe = base_end
@@ -371,19 +372,16 @@ class Backtester:
                     sport, sport_end,
                 )
 
-            # Load games FIRST — skip predictor init if no games
             games_df = _load_recent_games(sport, self.days, end_date=sport_end)
             if games_df.empty:
                 logger.debug("No recent completed games for %s — skipping", sport)
-                continue
+                return []
 
-            # Now load predictor (expensive — only when we know we have games)
             try:
                 predictor = GamePredictor(sport, models_dir, DATA_DIR)
             except Exception as exc:
                 logger.warning("Could not load predictor for %s: %s", sport, exc)
-                continue
-            any_loaded = True
+                return []
 
             logger.info(
                 "Backtesting %s: %d games (%s to %s)",
@@ -393,55 +391,44 @@ class Backtester:
                 games_df["date"].max().date(),
             )
 
-            # Use pre-computed features when available (batch fast path)
-            precomp = _load_precomputed_features(sport)
-            if precomp is not None:
-                logger.info("  %s: batch predict via pre-computed features", sport)
-                gdf = games_df.copy()
-                if "game_id" not in gdf.columns and "id" in gdf.columns:
-                    gdf["game_id"] = gdf["id"]
+            records: list[dict[str, Any]] = []
+            for _, row in games_df.iterrows():
+                game = row.to_dict()
+                if "game_id" not in game and "id" in game:
+                    game["game_id"] = game["id"]
                 try:
-                    batch_preds = predictor.predict_batch_precomputed(precomp, gdf)
-                    game_id_col = "game_id" if "game_id" in gdf.columns else "id"
-                    game_lookup = {
-                        str(r[game_id_col]): r
-                        for _, r in gdf.iterrows()
-                    }
-                    for pred in batch_preds:
-                        game_dict = game_lookup.get(str(pred.game_id), {})
-                        record = self._evaluate(pred, game_dict)
-                        if record:
-                            self.records.append(record)
+                    pred = predictor.predict_game(game)
+                except Exception:
+                    logger.debug(
+                        "Prediction failed for %s game %s",
+                        sport, game.get("game_id", "?"), exc_info=True,
+                    )
+                    continue
+                record = self._evaluate(pred, game)
+                if record:
+                    records.append(record)
+
+            logger.info("  %s: %d predictions evaluated", sport, len(records))
+            return records
+
+        any_loaded = False
+        # Use up to 4 parallel threads — each sport loads its own data/model
+        with ThreadPoolExecutor(max_workers=min(4, len(team_sports))) as pool:
+            futures = {
+                pool.submit(_backtest_one_sport, sport): sport
+                for sport in team_sports
+            }
+            for fut in as_completed(futures):
+                sport = futures[fut]
+                try:
+                    records = fut.result()
+                    if records:
+                        any_loaded = True
+                        self.records.extend(records)
                 except Exception:
                     logger.warning(
-                        "Batch predict failed for %s, falling back to per-game",
-                        sport, exc_info=True,
+                        "Backtest failed for %s", sport, exc_info=True,
                     )
-                    precomp = None  # fall through to per-game below
-
-            if precomp is None:
-                # Per-game fallback (slower)
-                for _, row in games_df.iterrows():
-                    game = row.to_dict()
-                    if "game_id" not in game and "id" in game:
-                        game["game_id"] = game["id"]
-                    try:
-                        pred = predictor.predict_game(game)
-                    except Exception:
-                        logger.debug(
-                            "Prediction failed for %s game %s",
-                            sport, game.get("game_id", "?"), exc_info=True,
-                        )
-                        continue
-                    record = self._evaluate(pred, game)
-                    if record:
-                        self.records.append(record)
-
-            logger.info(
-                "  %s: %d predictions evaluated",
-                sport,
-                sum(1 for r in self.records if r["sport"] == sport),
-            )
 
         if not any_loaded and not golf_sports:
             logger.warning("No trained models found — nothing to backtest")
@@ -1056,10 +1043,9 @@ class Backtester:
                 record["double_chance_12_correct"] = (float(dc_12) >= 0.5) == actual_12
 
         # ── NRFI / YRFI ─────────────────────────────────────
-        game_row_nrfi = getattr(game_row, "_asdict", lambda: {}).__call__() if hasattr(game_row, "_asdict") else {}
-        if hasattr(game_row, "home_i1"):
-            hi1 = getattr(game_row, "home_i1", None)
-            ai1 = getattr(game_row, "away_i1", None)
+        if "home_i1" in actual:
+            hi1 = actual.get("home_i1")
+            ai1 = actual.get("away_i1")
             if hi1 is not None and ai1 is not None:
                 nrfi_p_bt = pred_dict.get("nrfi_prob")
                 if nrfi_p_bt is not None:
@@ -1649,6 +1635,50 @@ class Backtester:
                 "correct": cb_a_c,
                 "accuracy": round(cb_a_c / len(cb_a_recs), 4),
             }
+
+        # ── Double Chance ─────────────────────────────────
+        for dc_key in ("double_chance_1X", "double_chance_X2", "double_chance_12"):
+            recs_dc = [r for r in records if f"{dc_key}_correct" in r]
+            if recs_dc:
+                c_dc = sum(1 for r in recs_dc if r[f"{dc_key}_correct"])
+                result[dc_key] = {
+                    "total": len(recs_dc),
+                    "correct": c_dc,
+                    "accuracy": round(c_dc / len(recs_dc), 4),
+                }
+
+        # ── NRFI / YRFI ──────────────────────────────────
+        for nrfi_key in ("nrfi", "yrfi"):
+            recs_nr = [r for r in records if f"{nrfi_key}_correct" in r]
+            if recs_nr:
+                c_nr = sum(1 for r in recs_nr if r[f"{nrfi_key}_correct"])
+                result[nrfi_key] = {
+                    "total": len(recs_nr),
+                    "correct": c_nr,
+                    "accuracy": round(c_nr / len(recs_nr), 4),
+                }
+
+        # ── Shutout ───────────────────────────────────────
+        for so_key in ("shutout_home", "shutout_away"):
+            recs_so = [r for r in records if f"{so_key}_correct" in r]
+            if recs_so:
+                c_so = sum(1 for r in recs_so if r[f"{so_key}_correct"])
+                result[so_key] = {
+                    "total": len(recs_so),
+                    "correct": c_so,
+                    "accuracy": round(c_so / len(recs_so), 4),
+                }
+
+        # ── Asian Handicap ────────────────────────────────
+        for ah_key in ("ah_minus1_home", "ah_minus1_away", "ah_plus1_home", "ah_plus1_away"):
+            recs_ah = [r for r in records if f"{ah_key}_correct" in r]
+            if recs_ah:
+                c_ah = sum(1 for r in recs_ah if r[f"{ah_key}_correct"])
+                result[ah_key] = {
+                    "total": len(recs_ah),
+                    "correct": c_ah,
+                    "accuracy": round(c_ah / len(recs_ah), 4),
+                }
 
         # ── Esports map-win markets ───────────────────────
         sweep_recs = [r for r in records if "esports_clean_sweep_correct" in r]

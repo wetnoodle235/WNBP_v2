@@ -15,8 +15,17 @@ import type {
 } from "./schemas";
 
 const isServer = typeof window === "undefined";
+
+function resolveServerApiBase(): string {
+  return (
+    process.env.PLATFORM_BACKEND_URL
+    ?? process.env.NEXT_PUBLIC_API_URL
+    ?? "http://127.0.0.1:8000"
+  ).replace(/\/$/, "");
+}
+
 const API_BASE = isServer
-  ? (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000")
+  ? resolveServerApiBase()
   : "/api/proxy";
 const TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 2;

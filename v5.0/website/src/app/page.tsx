@@ -1,6 +1,7 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import type { Metadata } from "next";
-import { getGames, getPredictions, getNews, getTeams } from "@/lib/api";
+import { getGames, getPredictions, getNews } from "@/lib/api";
 import { buildPageMetadata, buildCollectionJsonLd } from "@/lib/seo";
 import { formatRelativeTime, formatProbability } from "@/lib/formatters";
 import {
@@ -60,11 +61,19 @@ type GameMatchup = {
   confidence?: string;
 };
 
-const HOME_SPORTS = Array.from(
-  new Set(
-    SPORT_CATEGORIES.flatMap((cat) => cat.sports.map((sport) => (sport === "cs2" ? "csgo" : sport))),
-  ),
-);
+// Keep homepage fetch fan-out intentionally small for fast first render.
+const HOME_SPORTS = [
+  "nba",
+  "nfl",
+  "mlb",
+  "nhl",
+  "ncaab",
+  "wnba",
+  "epl",
+  "ufc",
+  "f1",
+  "csgo",
+] as const;
 
 const CONF_VARIANTS: Record<string, "live" | "win" | "free"> = {
   LOCK: "live", STRONG: "live", ELITE: "live",
@@ -72,20 +81,6 @@ const CONF_VARIANTS: Record<string, "live" | "win" | "free"> = {
   MEDIUM: "free", WEAK: "free", LOW: "free",
 };
 
-type TeamRow = {
-  id?: string;
-  name?: string;
-  abbreviation?: string;
-  logo_url?: string;
-};
-
-function normalizeName(value?: string): string {
-  return (value ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 function isFinalStatus(status?: string): boolean {
   const s = (status ?? "").trim().toLowerCase();
@@ -108,51 +103,37 @@ function formatTimeToStart(startTime?: string | null): string | undefined {
   return undefined;
 }
 
+const HOME_REQUEST_TIMEOUT_MS = 2500;
+
+async function withHomeTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await Promise.race<T>([
+      promise,
+      new Promise<T>((resolve) => setTimeout(() => resolve(fallback), HOME_REQUEST_TIMEOUT_MS)),
+    ]);
+  } catch {
+    return fallback;
+  }
+}
+
 async function getHomeData(hasPremium: boolean) {
   const todayDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  const [gamesResults, newsResults, predictionsResults, teamsResults] = await Promise.all([
-    Promise.allSettled(HOME_SPORTS.map((s) => getGames(s, { date: todayDate }))),
-    Promise.allSettled(HOME_SPORTS.map((s) => getNews(s, 3))),
-    Promise.allSettled(HOME_SPORTS.map((s) => getPredictions(s, { date: todayDate }))),
-    Promise.allSettled(HOME_SPORTS.map((s) => getTeams(s))),
+  const [gamesResults, newsResults, predictionsResults] = await Promise.all([
+    Promise.allSettled(HOME_SPORTS.map((s) => withHomeTimeout(getGames(s, { date: todayDate, limit: "6" }), []))),
+    Promise.allSettled(HOME_SPORTS.map((s) => withHomeTimeout(getNews(s, 2), []))),
+    Promise.allSettled(HOME_SPORTS.map((s) => withHomeTimeout(getPredictions(s, { date: todayDate, limit: "12" }), []))),
   ]);
-
-  const teamMaps = teamsResults.map((r) => {
-    const byId = new Map<string, string>();
-    const byName = new Map<string, string>();
-    if (r.status !== "fulfilled") return { byId, byName };
-    for (const team of r.value as TeamRow[]) {
-      const logo = team.logo_url;
-      if (!logo) continue;
-      if (team.id) byId.set(String(team.id), logo);
-      if (team.name) byName.set(normalizeName(team.name), logo);
-      if (team.abbreviation) byName.set(normalizeName(team.abbreviation), logo);
-    }
-    return { byId, byName };
-  });
-
   const allMatchups: GameMatchup[] = gamesResults.flatMap((r, i) => {
     if (r.status !== "fulfilled") return [];
-    const map = teamMaps[i];
-
-    const logoFor = (teamId?: string | null, teamName?: string | null) => {
-      if (!map) return undefined;
-      if (teamId && map.byId.has(String(teamId))) return map.byId.get(String(teamId));
-      const key = normalizeName(teamName ?? undefined);
-      if (key && map.byName.has(key)) return map.byName.get(key);
-      return undefined;
-    };
 
     return r.value
       .filter((g) => !isFinalStatus(g.status ?? undefined))
-      .slice(0, 8)
+      .slice(0, 6)
       .map((g) => ({
-      id: g.id ?? `${HOME_SPORTS[i]}-${Math.random()}`,
+      id: g.id ?? `${HOME_SPORTS[i]}-${i}`,
       sport: g.sport || HOME_SPORTS[i],
       homeName: g.home_team ?? "HOME",
       awayName: g.away_team ?? "AWAY",
-      homeLogo: logoFor(g.home_team_id ?? null, g.home_team ?? null),
-      awayLogo: logoFor(g.away_team_id ?? null, g.away_team ?? null),
       homeScore: g.home_score ?? undefined,
       awayScore: g.away_score ?? undefined,
       status: g.status ?? undefined,
@@ -229,21 +210,36 @@ async function getHomeData(hasPremium: boolean) {
   };
 }
 
-export default async function HomePage() {
-  const tier = await getViewerTier();
-  const hasPremium = hasPremiumTier(tier);
-  const hasEnterpriseAccess = hasEnterpriseDocsAccess(tier);
+/* ── Loading skeleton shown while HomeDataSections streams in ─── */
+function HomeDataSkeleton() {
+  return (
+    <div role="status" aria-live="polite" aria-label="Loading sports data…" style={{ padding: "var(--space-4)" }}>
+      <div className="grid-4" style={{ gap: "var(--space-4)", marginBottom: "var(--space-6)" }}>
+        {[0, 1, 2, 3].map((i) => (
+          <div
+            key={i}
+            style={{
+              height: 76,
+              borderRadius: "var(--radius-md)",
+              background: "var(--color-bg-2)",
+              border: "1px solid var(--color-border)",
+              opacity: 0.6,
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── Async server component: all data-dependent sections ─────── */
+async function HomeDataSections({ hasPremium }: { hasPremium: boolean }) {
   const homeData = await getHomeData(hasPremium);
   const {
-    allMatchups, stories, predictions, elitePicks, sportsCovered,
+    allMatchups, stories, predictions, elitePicks,
     totalPredictions, highConfPredictions, topConfidence, highConfidenceRate, liveGames,
   } = homeData;
   const visiblePredictions = hasPremium ? predictions : predictions.slice(0, 3);
-  const jsonLd = buildCollectionJsonLd({
-    name: "WNBP Home",
-    path: "/",
-    description: "Editorial home for multi-sport predictions and stories.",
-  });
 
   const gamesBySport = allMatchups.reduce<Record<string, number>>((acc, game) => {
     const s = game.sport.toLowerCase();
@@ -253,83 +249,8 @@ export default async function HomePage() {
   const activeSports = Object.keys(gamesBySport);
 
   return (
-    <main>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
-
-      {/* ── VALUE PROPOSITION BANNER (TOP OF PAGE) ── */}
-      <section className="home-pitch-banner" aria-labelledby="home-pitch-heading">
-        <div className="home-pitch-inner">
-          <div className="home-pitch-text">
-            <h1 id="home-pitch-heading" className="home-pitch-headline">Stop Guessing. Start Knowing.</h1>
-            <p className="home-pitch-sub">
-              Our machine learning models crunch thousands of data points every day — player trends,
-              matchup history, pace, injury impact, and line movement — so you always have an edge
-              before tip-off or first pitch.
-            </p>
-            <div className="home-pitch-features">
-              <div className="home-pitch-feature">
-                <span className="home-pitch-icon">🎯</span>
-                <div>
-                  <strong>Data-Driven Props</strong>
-                  <span>Multi-sport player props with model-predicted values and confidence tiers</span>
-                </div>
-              </div>
-              <div className="home-pitch-feature">
-                <span className="home-pitch-icon">📊</span>
-                <div>
-                  <strong>Game Predictions</strong>
-                  <span>Full matchup analysis — winner, spread, total, and projected final score</span>
-                </div>
-              </div>
-              <div className="home-pitch-feature">
-                <span className="home-pitch-icon">⚡</span>
-                <div>
-                  <strong>Daily Fresh Picks</strong>
-                  <span>New predictions every morning. Free picks available, premium unlocks everything</span>
-                </div>
-              </div>
-            </div>
-            <div className="home-pitch-actions">
-              <Link href="/predictions" className="btn btn-primary">View Today&apos;s Picks</Link>
-              <Link href="/pricing" className="btn btn-secondary">See Plans</Link>
-              {hasEnterpriseAccess && (
-                <Link href="/api-guide" className="btn btn-ghost">API Guide</Link>
-              )}
-            </div>
-          </div>
-          <div className="home-pitch-stat-block">
-            <div className="home-pitch-big-stat">
-              <span className="home-pitch-big-num">{allMatchups.length > 0 ? allMatchups.length : "—"}</span>
-              <span className="home-pitch-big-label">Games Today</span>
-            </div>
-            <div className="home-pitch-divider" />
-            <div className="home-pitch-big-stat">
-              <span className="home-pitch-big-num">{totalPredictions > 0 ? totalPredictions : "—"}</span>
-              <span className="home-pitch-big-label">Active Predictions</span>
-            </div>
-            <div className="home-pitch-divider" />
-            <div className="home-pitch-big-stat">
-              <span className="home-pitch-big-num">
-                {hasPremium && topConfidence != null && topConfidence > 0 ? formatProbability(topConfidence) : "🔒"}
-              </span>
-              <span className="home-pitch-big-label">Top Confidence</span>
-            </div>
-          </div>
-          <div className="home-pitch-trust" aria-label="Supported sports">
-            <span className="home-pitch-trust-label">Covering</span>
-            <span className="home-pitch-trust-sports">
-              {activeSports.slice(0, 8).map((s) => (
-                <Link key={s} href={`/${s}`} className="home-pitch-trust-pill">
-                  {getSportIcon(s)} {s.toUpperCase()}
-                </Link>
-              ))}
-              {activeSports.length > 8 && (
-                <span className="home-pitch-trust-pill">+{activeSports.length - 8} more</span>
-              )}
-            </span>
-          </div>
-        </div>
-      </section>
+    <>
+      {/* ── DASHBOARD STAT CARDS ── */}
       <SectionBand
         id="home-overview"
         title="📊 Dashboard"
@@ -619,7 +540,6 @@ export default async function HomePage() {
           action={<Link href="/news">All headlines →</Link>}
         >
           <div className="home-news-split">
-            {/* Featured story — left half */}
             {stories[0] && (
               <StoryCard
                 key={`${stories[0].sport}_${stories[0].id}_featured`}
@@ -637,7 +557,6 @@ export default async function HomePage() {
                 size="featured"
               />
             )}
-            {/* Grid — right half */}
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
               {stories.slice(1, 4).map((story, si) => (
                 <StoryCard
@@ -666,6 +585,82 @@ export default async function HomePage() {
           ctaHref="/pricing"
         />
       )}
+    </>
+  );
+}
+
+export default async function HomePage() {
+  const tier = await getViewerTier();
+  const hasPremium = hasPremiumTier(tier);
+  const hasEnterpriseAccess = hasEnterpriseDocsAccess(tier);
+  const jsonLd = buildCollectionJsonLd({
+    name: "WNBP Home",
+    path: "/",
+    description: "Editorial home for multi-sport predictions and stories.",
+  });
+
+  return (
+    <main>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
+
+      {/* ── VALUE PROPOSITION BANNER — renders immediately on auth ── */}
+      <section className="home-pitch-banner" aria-labelledby="home-pitch-heading">
+        <div className="home-pitch-inner">
+          <div className="home-pitch-text">
+            <h1 id="home-pitch-heading" className="home-pitch-headline">Stop Guessing. Start Knowing.</h1>
+            <p className="home-pitch-sub">
+              Our machine learning models crunch thousands of data points every day — player trends,
+              matchup history, pace, injury impact, and line movement — so you always have an edge
+              before tip-off or first pitch.
+            </p>
+            <div className="home-pitch-features">
+              <div className="home-pitch-feature">
+                <span className="home-pitch-icon">🎯</span>
+                <div>
+                  <strong>Data-Driven Props</strong>
+                  <span>Multi-sport player props with model-predicted values and confidence tiers</span>
+                </div>
+              </div>
+              <div className="home-pitch-feature">
+                <span className="home-pitch-icon">📊</span>
+                <div>
+                  <strong>Game Predictions</strong>
+                  <span>Full matchup analysis — winner, spread, total, and projected final score</span>
+                </div>
+              </div>
+              <div className="home-pitch-feature">
+                <span className="home-pitch-icon">⚡</span>
+                <div>
+                  <strong>Daily Fresh Picks</strong>
+                  <span>New predictions every morning. Free picks available, premium unlocks everything</span>
+                </div>
+              </div>
+            </div>
+            <div className="home-pitch-actions">
+              <Link href="/predictions" className="btn btn-primary">View Today&apos;s Picks</Link>
+              <Link href="/pricing" className="btn btn-secondary">See Plans</Link>
+              {hasEnterpriseAccess && (
+                <Link href="/api-guide" className="btn btn-ghost">API Guide</Link>
+              )}
+            </div>
+          </div>
+          <div className="home-pitch-trust" aria-label="Supported sports">
+            <span className="home-pitch-trust-label">Covering</span>
+            <span className="home-pitch-trust-sports">
+              {HOME_SPORTS.map((s) => (
+                <Link key={s} href={`/${s}`} className="home-pitch-trust-pill">
+                  {getSportIcon(s)} {s.toUpperCase()}
+                </Link>
+              ))}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      {/* ── DATA SECTIONS — stream in while hero is already visible ── */}
+      <Suspense fallback={<HomeDataSkeleton />}>
+        <HomeDataSections hasPremium={hasPremium} />
+      </Suspense>
     </main>
   );
 }

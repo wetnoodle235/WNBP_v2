@@ -43,12 +43,20 @@ export function hasEnterpriseDocsAccess(tier: string): boolean {
   return ENTERPRISE_DOC_TIERS.has(tier.trim().toLowerCase());
 }
 
+function resolveServerApiBase(): string {
+  return (
+    process.env.PLATFORM_BACKEND_URL
+    ?? process.env.NEXT_PUBLIC_API_URL
+    ?? "http://127.0.0.1:8000"
+  ).replace(/\/$/, "");
+}
+
 export async function getViewerTier(): Promise<string> {
   const cookieStore = await cookies();
   const token = cookieStore.get("wnbp_token")?.value;
   if (!token) return "free";
 
-  const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+  const apiBase = resolveServerApiBase();
   try {
     const res = await fetch(`${apiBase}/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },

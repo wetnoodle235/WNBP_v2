@@ -5,12 +5,13 @@ import { SectionBand, PremiumTeaser } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { getDisplayName, getSportColor, getSportIcon } from "@/lib/sports-config";
 import { SkeletonCard, SkeletonTable } from "@/components/LoadingSkeleton";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 /* ── Constants ─────────────────────────────────────────────────── */
 
 const API =
   typeof window === "undefined"
-    ? (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000")
+    ? resolveServerApiBase()
     : "/api/proxy";
 
 const SPORTS = [

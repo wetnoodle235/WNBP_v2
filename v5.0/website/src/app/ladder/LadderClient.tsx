@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { SectionBand } from "@/components/ui";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API = "/api/proxy";
 
 interface Leader {
   rank: number;

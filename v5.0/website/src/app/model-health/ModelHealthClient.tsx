@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { ALL_SPORT_KEYS } from "@/lib/sports";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 const API_BASE = typeof window === "undefined"
-  ? (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000")
+  ? resolveServerApiBase()
   : "/api/proxy";
 
 type CalibrationBin = {

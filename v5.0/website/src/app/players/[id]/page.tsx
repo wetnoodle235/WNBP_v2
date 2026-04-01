@@ -10,6 +10,7 @@ import Image from "next/image";
 import Link from "next/link";
 
 import type { Player } from "../page";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 /* ------------------------------------------------------------------ */
 /*  Types & helpers                                                    */
@@ -20,7 +21,7 @@ interface PageProps {
   searchParams: Promise<{ sport?: string }>;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE = resolveServerApiBase();
 
 async function getPlayerStats(sport: string, playerId: string) {
   try {

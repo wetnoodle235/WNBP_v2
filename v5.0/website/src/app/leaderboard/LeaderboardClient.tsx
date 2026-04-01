@@ -3,9 +3,10 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { getDisplayName, getSportColor } from "@/lib/sports-config";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 const API_BASE = typeof window === "undefined"
-  ? (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000")
+  ? resolveServerApiBase()
   : "/api/proxy";
 
 interface LeaderboardEntry {

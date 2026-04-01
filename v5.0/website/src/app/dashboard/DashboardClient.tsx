@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { fetchAPI } from "@/lib/api";
 import { useRecentlyViewed } from "@/lib/hooks";
 import UpcomingEventsWidget from "@/components/UpcomingEventsWidget";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 /* ── Types ──────────────────────────────────────────────────────── */
 
@@ -73,7 +74,7 @@ export default function DashboardClient() {
   const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
   const API_BASE = typeof window === "undefined"
-    ? (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000")
+    ? resolveServerApiBase()
     : "/api/proxy";
 
   useEffect(() => {

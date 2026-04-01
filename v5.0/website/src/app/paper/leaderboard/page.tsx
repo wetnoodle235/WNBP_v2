@@ -1,6 +1,7 @@
 import LeaderboardClient from "./LeaderboardClient";
+import { resolveServerApiBase } from "@/lib/api-base";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API = resolveServerApiBase();
 
 export const dynamic = "force-dynamic";
 

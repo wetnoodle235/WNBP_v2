@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { getSportIcon, getSportColor } from "@/lib/sports-config";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 interface UpcomingEvent {
   id: string;
@@ -96,7 +97,7 @@ export default function UpcomingEventsWidget({
   const base =
     apiBase ??
     (typeof window === "undefined"
-      ? (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000")
+      ? resolveServerApiBase()
       : "/api/proxy");
 
   useEffect(() => {

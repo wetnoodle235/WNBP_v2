@@ -2,6 +2,7 @@ import { buildPageMetadata } from "@/lib/seo";
 import type { Metadata } from "next";
 import { ALL_SPORT_KEYS } from "@/lib/sports";
 import { StatsClient } from "./StatsClient";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,7 @@ export const metadata: Metadata = buildPageMetadata({
   path: "/stats",
 });
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE = resolveServerApiBase();
 
 /** Return the current season year for a sport based on current date.
  *  Cross-year leagues use end-year labelling (e.g. NBA 2025-26 → "2026"). */

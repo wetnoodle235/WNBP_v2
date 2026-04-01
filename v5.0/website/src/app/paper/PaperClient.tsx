@@ -5,13 +5,14 @@ import Link from "next/link";
 import { SectionBand, Pagination } from "@/components/ui";
 import { formatOdds } from "@/lib/formatters";
 import { getStoredToken, authHeaders } from "@/lib/api";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 const STORAGE_KEY = "wnbp_paper_trades";
 const STARTING_BALANCE = 10_000;
 const PER_PAGE = 15;
 const API_BASE =
   typeof window === "undefined"
-    ? (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000")
+    ? resolveServerApiBase()
     : "/api/proxy";
 
 interface PaperBet {

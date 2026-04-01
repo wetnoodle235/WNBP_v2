@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { isSportKey } from "@/lib/sports";
 import { getViewerTier, hasPremiumTier } from "@/lib/server-access";
+import { resolveServerApiBase } from "@/lib/api-base";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE = resolveServerApiBase();
 
 // Sports available to free tier
 const FREE_TIER_SPORTS = new Set(["nba"]);
