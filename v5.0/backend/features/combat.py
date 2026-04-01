@@ -273,6 +273,19 @@ class CombatExtractor(BaseFeatureExtractor):
         features["home_momentum"] = self.momentum(h_id, date, games_df)
         features["away_momentum"] = self.momentum(a_id, date, games_df)
 
+        # Differential features — critical for UFC which has no home field advantage
+        features["win_pct_diff"] = h_rec["win_pct"] - a_rec["win_pct"]
+        features["win_streak_diff"] = h_rec["win_streak"] - a_rec["win_streak"]
+        features["finish_rate_diff"] = h_rec["finish_rate"] - a_rec["finish_rate"]
+        features["sig_strike_pct_diff"] = h_stats["sig_strike_pct"] - a_stats["sig_strike_pct"]
+        features["sig_strikes_per_fight_diff"] = h_stats["sig_strikes_per_fight"] - a_stats["sig_strikes_per_fight"]
+        features["strike_differential_diff"] = h_stats["strike_differential"] - a_stats["strike_differential"]
+        features["knockdowns_diff"] = h_stats["knockdowns_per_fight"] - a_stats["knockdowns_per_fight"]
+        features["control_time_diff"] = h_stats["control_time_avg"] - a_stats["control_time_avg"]
+        features["takedown_pct_diff"] = h_stats["takedown_pct"] - a_stats["takedown_pct"]
+        features["elo_diff"] = features.get("home_elo", 1500.0) - features.get("away_elo", 1500.0)
+        features["early_finish_rate_diff"] = h_rec["early_finish_rate"] - a_rec["early_finish_rate"]
+
         # Odds
         odds = self._odds_features(game_id, odds_df)
         features.update(odds)
@@ -306,6 +319,16 @@ class CombatExtractor(BaseFeatureExtractor):
             "reach_advantage", "height_advantage", "age_diff",
             # Style
             "home_style_code", "away_style_code", "same_style",
+            # Key differentials
+            "win_pct_diff", "win_streak_diff", "finish_rate_diff",
+            "sig_strike_pct_diff", "sig_strikes_per_fight_diff",
+            "strike_differential_diff", "knockdowns_diff",
+            "control_time_diff", "takedown_pct_diff", "elo_diff",
+            "early_finish_rate_diff",
+            # ELO & momentum
+            "home_elo", "home_elo_diff", "home_elo_expected_win",
+            "away_elo", "away_elo_diff", "away_elo_expected_win",
+            "home_momentum", "away_momentum",
             # Odds
             "home_moneyline", "away_moneyline", "spread", "total", "home_implied_prob",
         ]

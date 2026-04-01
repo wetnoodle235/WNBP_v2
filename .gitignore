@@ -45,3 +45,8 @@ v5.0/cloudflare-worker/node_modules
 .git-rewrite/
 .playwright-mcp/
 nohup.out
+
+# Local environment files (never commit actual keys)
+v5.0/.env
+v5.0/backend/.env
+v5.0/importers/.env
