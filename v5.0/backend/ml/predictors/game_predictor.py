@@ -57,6 +57,21 @@ _META_COLS = {
     # quarter/period/inning target columns — never used as features
     "home_q1", "home_q2", "home_q3", "home_q4", "home_ot",
     "away_q1", "away_q2", "away_q3", "away_q4", "away_ot",
+    # MLB inning-by-inning scores (outcome data — must not be input features)
+    "home_i1", "home_i2", "home_i3", "home_i4", "home_i5",
+    "home_i6", "home_i7", "home_i8", "home_i9", "home_extras",
+    "away_i1", "away_i2", "away_i3", "away_i4", "away_i5",
+    "away_i6", "away_i7", "away_i8", "away_i9", "away_extras",
+    # Soccer half scores (outcome data)
+    "home_h1", "home_h2", "away_h1", "away_h2",
+    "home_h1_score", "home_h2_score", "away_h1_score", "away_h2_score",
+    # Hockey period scores (outcome data)
+    "home_p1", "home_p2", "home_p3", "away_p1", "away_p2", "away_p3",
+    # Motorsport current-race outcome columns — NOT available pre-race
+    "podium", "points_finish", "dnf", "fastest_lap",
+    "laps_completed", "laps_completion_pct",
+    "avg_speed_kph", "pit_stops", "avg_pit_time_s",
+    "safety_car_count", "dnf_count", "red_flag_count", "race_pit_stops_total",
 }
 
 
@@ -421,6 +436,53 @@ class GamePredictor:
             cs_a = _cls("clean_sheet_away")
             if cs_a is not None:
                 result.away_clean_sheet_prob = round(cs_a, 4)
+
+            # ── Double Chance ───────────────────────
+            dc_1x = _cls("double_chance_1X")
+            if dc_1x is not None:
+                result.double_chance_1X_prob = round(dc_1x, 4)
+            dc_x2 = _cls("double_chance_X2")
+            if dc_x2 is not None:
+                result.double_chance_X2_prob = round(dc_x2, 4)
+            dc_12 = _cls("double_chance_12")
+            if dc_12 is not None:
+                result.double_chance_12_prob = round(dc_12, 4)
+
+            # ── NRFI / YRFI ─────────────────────────
+            nrfi_p2 = _cls("nrfi")
+            if nrfi_p2 is not None:
+                result.nrfi_prob = round(nrfi_p2, 4)
+            yrfi_p2 = _cls("yrfi")
+            if yrfi_p2 is not None:
+                result.yrfi_prob = round(yrfi_p2, 4)
+            h_i1_p2 = _cls("home_scores_i1")
+            if h_i1_p2 is not None:
+                result.home_scores_i1_prob = round(h_i1_p2, 4)
+            a_i1_p2 = _cls("away_scores_i1")
+            if a_i1_p2 is not None:
+                result.away_scores_i1_prob = round(a_i1_p2, 4)
+
+            # ── Asian Handicap ───────────────────────
+            ah_m1h2 = _cls("ah_minus1_home")
+            if ah_m1h2 is not None:
+                result.ah_minus1_home_prob = round(ah_m1h2, 4)
+            ah_m1a2 = _cls("ah_minus1_away")
+            if ah_m1a2 is not None:
+                result.ah_minus1_away_prob = round(ah_m1a2, 4)
+            ah_p1h2 = _cls("ah_plus1_home")
+            if ah_p1h2 is not None:
+                result.ah_plus1_home_prob = round(ah_p1h2, 4)
+            ah_p1a2 = _cls("ah_plus1_away")
+            if ah_p1a2 is not None:
+                result.ah_plus1_away_prob = round(ah_p1a2, 4)
+
+            # ── Shutout ──────────────────────────────
+            so_h2 = _cls("shutout_home")
+            if so_h2 is not None:
+                result.shutout_home_prob = round(so_h2, 4)
+            so_a2 = _cls("shutout_away")
+            if so_a2 is not None:
+                result.shutout_away_prob = round(so_a2, 4)
 
             dec_p = _cls("ufc_decision")
             ko_p = _cls("ufc_ko_tko")
@@ -848,6 +910,53 @@ class GamePredictor:
         if cb_a is not None:
             result.comeback_away_prob = round(cb_a, 4)
 
+        # ── Double Chance (model-backed) ─────────────────
+        dc_1x = _cls_prob("double_chance_1X")
+        if dc_1x is not None:
+            result.double_chance_1X_prob = round(dc_1x, 4)
+        dc_x2 = _cls_prob("double_chance_X2")
+        if dc_x2 is not None:
+            result.double_chance_X2_prob = round(dc_x2, 4)
+        dc_12 = _cls_prob("double_chance_12")
+        if dc_12 is not None:
+            result.double_chance_12_prob = round(dc_12, 4)
+
+        # ── NRFI / YRFI (MLB) ────────────────────────────
+        nrfi_p = _cls_prob("nrfi")
+        if nrfi_p is not None:
+            result.nrfi_prob = round(nrfi_p, 4)
+        yrfi_p = _cls_prob("yrfi")
+        if yrfi_p is not None:
+            result.yrfi_prob = round(yrfi_p, 4)
+        h_i1_p = _cls_prob("home_scores_i1")
+        if h_i1_p is not None:
+            result.home_scores_i1_prob = round(h_i1_p, 4)
+        a_i1_p = _cls_prob("away_scores_i1")
+        if a_i1_p is not None:
+            result.away_scores_i1_prob = round(a_i1_p, 4)
+
+        # ── Asian Handicap ────────────────────────────────
+        ah_m1h = _cls_prob("ah_minus1_home")
+        if ah_m1h is not None:
+            result.ah_minus1_home_prob = round(ah_m1h, 4)
+        ah_m1a = _cls_prob("ah_minus1_away")
+        if ah_m1a is not None:
+            result.ah_minus1_away_prob = round(ah_m1a, 4)
+        ah_p1h = _cls_prob("ah_plus1_home")
+        if ah_p1h is not None:
+            result.ah_plus1_home_prob = round(ah_p1h, 4)
+        ah_p1a = _cls_prob("ah_plus1_away")
+        if ah_p1a is not None:
+            result.ah_plus1_away_prob = round(ah_p1a, 4)
+
+        # ── Shutout / NHL clean sheet ─────────────────────
+        so_h = _cls_prob("shutout_home")
+        if so_h is not None:
+            result.shutout_home_prob = round(so_h, 4)
+        so_a = _cls_prob("shutout_away")
+        if so_a is not None:
+            result.shutout_away_prob = round(so_a, 4)
+
         # ── Esports extra markets ─────────────────────────
         # Available for CSGO, Dota2, LoL, Valorant
         cs_p = _cls_prob("esports_clean_sweep")
@@ -956,7 +1065,7 @@ class GamePredictor:
     # Sports whose season aligns with the calendar year (start in spring/summer)
     _CALENDAR_YEAR_SPORTS = frozenset({
         "mlb", "mls", "nwsl", "f1", "atp", "wta", "ufc",
-        "csgo", "lol", "dota2", "valorant", "golf",
+        "csgo", "lol", "dota2", "valorant", "golf", "lpga", "indycar",
     })
 
     # End-year sports: season label = year the season ENDS.

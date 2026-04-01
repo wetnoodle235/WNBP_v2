@@ -46,18 +46,22 @@ class DataService:
         date: str | None = None,
         columns: list[str] | None = None,
     ) -> list[dict]:
-        key = f"games:{sport}:{season}:{date}:{','.join(columns) if columns else 'all'}"
+        # Cache the full season dataset so that every date/filter variant shares
+        # the same warm cache entry instead of triggering a fresh parquet load.
+        key = f"games:{sport}:{season}"
         ttl = self._settings.cache_ttl_games
 
         def loader() -> list[dict]:
             df = self._load_kind(sport, "games", season=season, columns=columns)
             if df.empty:
                 return []
-            if date is not None and "date" in df.columns:
-                df = df[df["date"].astype(str) == date]
             return self._df_to_records(df)
 
-        return self._get_cached(key, ttl, loader)
+        records = self._get_cached(key, ttl, loader)
+        # Apply date filter in-memory from the already-cached list.
+        if date is not None:
+            records = [r for r in records if str(r.get("date", "")).startswith(date)]
+        return records
 
     def get_teams(self, sport: str, season: str | None = None) -> list[dict]:
         key = f"teams:{sport}:{season}"
@@ -66,6 +70,27 @@ class DataService:
         def loader() -> list[dict]:
             df = self._load_kind(sport, "teams", season=season)
             return self._df_to_records(df)
+
+        return self._get_cached(key, ttl, loader)
+
+    def get_teams_index(self, sport: str, season: str | None = None) -> dict[str, dict]:
+        """Return a dict of team records indexed by both team ID and lower-case abbreviation.
+
+        Allows O(1) team lookup instead of a linear scan over the full roster.
+        """
+        key = f"teams_index:{sport}:{season}"
+        ttl = self._settings.cache_ttl_players
+
+        def loader() -> dict[str, dict]:
+            index: dict[str, dict] = {}
+            for t in self.get_teams(sport, season=season):
+                tid = str(t.get("id", ""))
+                abbr = str(t.get("abbreviation", "")).lower()
+                if tid:
+                    index[tid] = t
+                if abbr:
+                    index[abbr] = t
+            return index
 
         return self._get_cached(key, ttl, loader)
 
@@ -105,20 +130,25 @@ class DataService:
         team_id: str | None = None,
         search: str | None = None,
     ) -> list[dict]:
-        key = f"players:{sport}:{season}:{team_id}:{search}"
+        # Cache the full season roster so that team/search filters all share
+        # one cache entry instead of each combination being a separate miss.
+        key = f"players:{sport}:{season}"
         ttl = self._settings.cache_ttl_players
 
         def loader() -> list[dict]:
             df = self._load_kind(sport, "players", season=season)
             if df.empty:
                 return []
-            if team_id and "team_id" in df.columns:
-                df = df[df["team_id"].astype(str) == team_id]
-            if search and "name" in df.columns:
-                df = df[df["name"].str.contains(search, case=False, na=False)]
             return self._df_to_records(df)
 
-        return self._get_cached(key, ttl, loader)
+        records = self._get_cached(key, ttl, loader)
+        # Apply filters in-memory from the already-cached list.
+        if team_id:
+            records = [r for r in records if str(r.get("team_id", "")) == team_id]
+        if search:
+            sl = search.lower()
+            records = [r for r in records if sl in str(r.get("name", "")).lower()]
+        return records
 
     def get_player_stats(
         self,
@@ -141,6 +171,24 @@ class DataService:
             return self._df_to_records(df)
 
         return self._get_cached(key, ttl, loader)
+
+    async def get_player_stats_async(
+        self,
+        sport: str,
+        season: str | None = None,
+        player_id: str | None = None,
+        aggregate: bool = False,
+    ) -> list[dict]:
+        """Async wrapper that offloads heavy aggregation to a thread pool.
+
+        Use this from async route handlers when aggregate=True to avoid
+        blocking the event loop during O(n log n) pandas operations.
+        """
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, self.get_player_stats, sport, season, player_id, aggregate
+        )
 
     # NBA Stats API team IDs → standard abbreviations
     _NBA_TEAM_MAP: dict[str, str] = {
@@ -463,50 +511,70 @@ class DataService:
     # ── Inventory helpers (for meta endpoints) ────────────
 
     def list_available_sports(self) -> list[dict]:
-        """Return sports that have at least one parquet file on disk."""
-        norm = self._settings.normalized_dir
-        if not norm.exists():
-            return []
-        results = []
-        for sport_dir in sorted(norm.iterdir()):
-            if not sport_dir.is_dir():
-                continue
-            sport = sport_dir.name
-            kinds: dict[str, int] = {}
-            for f in sport_dir.glob("*.parquet"):
-                kind = self._kind_from_filename(f.name)
-                if kind:
-                    kinds[kind] = kinds.get(kind, 0) + 1
-            if kinds:
-                defn = SPORT_DEFINITIONS.get(sport, {})
-                results.append({
-                    "key": sport,
-                    **defn,
-                    "data_types": kinds,
-                    "file_count": sum(kinds.values()),
-                })
-        return results
+        """Return sports that have at least one parquet file on disk.
+
+        Result is cached for 5 minutes to avoid repeated directory scans
+        on every request to /v1/sports or /v1/meta/providers.
+        """
+        key = "meta:available_sports"
+        ttl = 300  # 5 minutes
+
+        def loader() -> list[dict]:
+            norm = self._settings.normalized_dir
+            if not norm.exists():
+                return []
+            results = []
+            for sport_dir in sorted(norm.iterdir()):
+                if not sport_dir.is_dir():
+                    continue
+                sport = sport_dir.name
+                kinds: dict[str, int] = {}
+                for f in sport_dir.glob("*.parquet"):
+                    kind = self._kind_from_filename(f.name)
+                    if kind:
+                        kinds[kind] = kinds.get(kind, 0) + 1
+                if kinds:
+                    defn = SPORT_DEFINITIONS.get(sport, {})
+                    results.append({
+                        "key": sport,
+                        **defn,
+                        "data_types": kinds,
+                        "file_count": sum(kinds.values()),
+                    })
+            return results
+
+        return self._get_cached(key, ttl, loader)
 
     def get_data_freshness(self) -> dict[str, dict]:
-        """Per-sport, per-kind file modification timestamps."""
-        norm = self._settings.normalized_dir
-        if not norm.exists():
-            return {}
-        result: dict[str, dict] = {}
-        for sport_dir in sorted(norm.iterdir()):
-            if not sport_dir.is_dir():
-                continue
-            sport = sport_dir.name
-            kinds_info: dict[str, str] = {}
-            for f in sorted(sport_dir.glob("*.parquet")):
-                kind = self._kind_from_filename(f.name)
-                if kind:
-                    mtime = f.stat().st_mtime
-                    ts = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
-                    kinds_info[f.name] = ts
-            if kinds_info:
-                result[sport] = kinds_info
-        return result
+        """Per-sport, per-kind file modification timestamps.
+
+        Cached for 60 seconds — calling stat() on every parquet file on
+        every request can mean 1000+ syscalls per call.
+        """
+        key = "meta:data_freshness"
+        ttl = 60  # 1 minute
+
+        def loader() -> dict[str, dict]:
+            norm = self._settings.normalized_dir
+            if not norm.exists():
+                return {}
+            result: dict[str, dict] = {}
+            for sport_dir in sorted(norm.iterdir()):
+                if not sport_dir.is_dir():
+                    continue
+                sport = sport_dir.name
+                kinds_info: dict[str, str] = {}
+                for f in sorted(sport_dir.glob("*.parquet")):
+                    kind = self._kind_from_filename(f.name)
+                    if kind:
+                        mtime = f.stat().st_mtime
+                        ts = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+                        kinds_info[f.name] = ts
+                if kinds_info:
+                    result[sport] = kinds_info
+            return result
+
+        return self._get_cached(key, ttl, loader)
 
     def get_seasons(self, sport: str, kind: str = "games") -> list[str]:
         """Return available seasons for a sport/kind combo.
@@ -539,12 +607,19 @@ class DataService:
 
     def warm_cache(self, sports: list[str]) -> None:
         """Pre-load commonly accessed data for the given sports."""
+        # Pre-populate the sports inventory cache (used by /v1/sports)
+        self.list_available_sports()
         for sport in sports:
-            for kind in ("games", "teams", "standings"):
+            for kind in ("games", "teams", "standings", "players", "odds", "injuries"):
                 try:
                     self._load_kind(sport, kind)
                 except Exception:
                     logger.debug("warm_cache: no %s data for %s", kind, sport)
+            # Build teams index while we're at it
+            try:
+                self.get_teams_index(sport)
+            except Exception:
+                logger.debug("warm_cache: could not build teams index for %s", sport)
 
     # ── Internal helpers ──────────────────────────────────
 

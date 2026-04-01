@@ -477,11 +477,11 @@ async def get_team(
     await rate_limit_check(api_key)
     response.headers["X-User-Tier"] = api_key.tier
     effective_season = _resolve_season(sport, season)
-    teams = ds.get_teams(sport, season=effective_season)
-    match = [t for t in teams if str(t.get("id")) == team_id or str(t.get("abbreviation", "")).lower() == team_id.lower()]
+    team_index = ds.get_teams_index(sport, season=effective_season)
+    match = team_index.get(team_id) or team_index.get(team_id.lower())
     if not match:
         raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found")
-    team_data = match[0]
+    team_data = match.copy()
     players = ds.get_players(sport, season=effective_season, team_id=team_id)
     team_data["roster"] = players[:50] if players else []
     return {"success": True, "data": team_data, "meta": {"sport": sport, "season": effective_season}}
@@ -777,7 +777,7 @@ async def list_player_stats(
     await check_tier_access(api_key, sport, "stats")
     await rate_limit_check(api_key)
     effective_season = _resolve_season(sport, season)
-    stats = ds.get_player_stats(sport, season=effective_season, player_id=player_id, aggregate=aggregate)
+    stats = await ds.get_player_stats_async(sport, season=effective_season, player_id=player_id, aggregate=aggregate)
     return _paginated_response(stats, sport, limit=limit, offset=offset, season=effective_season, api_key=api_key, response=response)
 
 

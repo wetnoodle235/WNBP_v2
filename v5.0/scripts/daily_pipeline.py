@@ -309,7 +309,7 @@ def _worker_extract_features(
         output_path = features_dir / f"{sport}_{s}.parquet"
         cmd = [
             sys.executable, "-m", "ml.feature_extraction",
-            "--sport", sport, "--season", s, "--output", str(output_path),
+            "--sport", sport, "--seasons", s, "--output", str(output_path),
             "--incremental",
         ]
         proc = _run_subprocess(cmd, cwd=backend_dir, timeout=_FEATURE_EXTRACT_TIMEOUT)

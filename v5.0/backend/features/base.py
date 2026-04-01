@@ -75,6 +75,28 @@ class BaseFeatureExtractor(ABC):
     def _parquet_path(self, data_type: str, season: int) -> Path:
         return self.normalized_dir / self.sport / f"{data_type}_{season}.parquet"
 
+    def _load_all_games(self) -> pd.DataFrame:
+        """Load and concatenate all season game parquets for cross-season form/H2H.
+
+        Results are cached on the instance.  Subclasses that override ``__init__``
+        must call ``super().__init__`` to ensure ``_all_games_cache`` exists.
+        """
+        if getattr(self, "_all_games_cache", None) is not None:
+            return self._all_games_cache  # type: ignore[return-value]
+        sport_dir = self.normalized_dir / self.sport
+        frames: list[pd.DataFrame] = []
+        for p in sorted(sport_dir.glob("games_*.parquet")):
+            try:
+                frames.append(pd.read_parquet(p))
+            except Exception:
+                pass
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if not combined.empty and "date" in combined.columns:
+            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+            combined.sort_values("date", inplace=True, ignore_index=True)
+        self._all_games_cache: pd.DataFrame | None = combined  # type: ignore[assignment]
+        return combined
+
     def _parquet_path_fallback(self, data_type: str, season: int) -> Path | None:
         """Return the path for a data type, trying season-suffixed first, then bare."""
         path = self._parquet_path(data_type, season)

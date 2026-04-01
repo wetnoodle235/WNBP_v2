@@ -31,6 +31,7 @@ export const GameSchema = z.object({
   attendance: optNum,
   weather: optStr,
   broadcast: optStr,
+  broadcast_url: optStr,
   start_time: optStr,
   period: optStr,
   is_neutral_site: z.boolean().default(false),

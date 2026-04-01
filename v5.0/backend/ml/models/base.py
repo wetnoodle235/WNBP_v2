@@ -160,6 +160,27 @@ class PredictionResult:
     comeback_home_prob: float | None = None   # P(home wins if trailing at half)
     comeback_away_prob: float | None = None   # P(away wins if trailing at half)
 
+    # ── Double Chance (model-backed, more accurate than derived) ───────────
+    double_chance_1X_prob: float | None = None  # P(home wins OR draw) — model-based
+    double_chance_X2_prob: float | None = None  # P(away wins OR draw) — model-based
+    double_chance_12_prob: float | None = None  # P(no draw / game decided outright)
+
+    # ── NRFI / YRFI (MLB: no/yes run first inning) ────────────────────────
+    nrfi_prob: float | None = None             # P(neither team scores in inning 1)
+    yrfi_prob: float | None = None             # P(at least one team scores in inning 1)
+    home_scores_i1_prob: float | None = None   # P(home team scores in inning 1)
+    away_scores_i1_prob: float | None = None   # P(away team scores in inning 1)
+
+    # ── Asian Handicap Lines (soccer / hockey) ────────────────────────────
+    ah_minus1_home_prob: float | None = None   # P(home wins by 2+ goals)
+    ah_minus1_away_prob: float | None = None   # P(away wins by 2+ goals)
+    ah_plus1_home_prob: float | None = None    # P(home covers +1: wins/draws/loses by 1)
+    ah_plus1_away_prob: float | None = None    # P(away covers +1)
+
+    # ── Shutout (hockey clean-sheet equivalent) ───────────────────────────
+    shutout_home_prob: float | None = None     # P(away_score == 0, NHL)
+    shutout_away_prob: float | None = None     # P(home_score == 0, NHL)
+
     # ── Esports-specific ──────────────────────────────────
     # Available for CSGO, Dota2, LoL, Valorant
     esports_clean_sweep_prob: float | None = None   # P(winner takes all maps, e.g. 2-0 or 3-0)

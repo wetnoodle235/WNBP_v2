@@ -40,9 +40,11 @@ const SPORT_DISPLAY_CONFIG: Record<string, SportDisplayInfo> = {
   wta: { name: "WTA", fullName: "WTA Tour (Women's Tennis)", icon: "🎾", color: "#71205e", category: "Individual Sports", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/wta.png" },
   pga: { name: "PGA", fullName: "PGA Tour", icon: "⛳", color: "#003865", category: "Individual Sports", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/pga.png" },
   mma: { name: "MMA", fullName: "Mixed Martial Arts", icon: "🥊", color: "#d20a0a", category: "Individual Sports", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/mma.png" },
-  f1: { name: "F1", fullName: "Formula 1", icon: "🏎️", color: "#e10600", category: "Individual Sports", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/f1.png" },
+  f1: { name: "F1", fullName: "Formula 1", icon: "🏎️", color: "#e10600", category: "Racing", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/f1.png" },
+  indycar: { name: "IndyCar", fullName: "NTT IndyCar Series", icon: "🏎️", color: "#0056a2", category: "Racing", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/indycar.png" },
   ufc: { name: "UFC", fullName: "Ultimate Fighting Championship", icon: "🥊", color: "#d20a0a", category: "Individual Sports", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/ufc.png" },
-  golf: { name: "Golf", fullName: "PGA Tour", icon: "⛳", color: "#003865", category: "Individual Sports", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/pga.png" },
+  golf: { name: "PGA Tour", fullName: "PGA Tour", icon: "⛳", color: "#003865", category: "Golf", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/pga.png" },
+  lpga: { name: "LPGA", fullName: "LPGA Tour", icon: "⛳", color: "#6a0dad", category: "Golf", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/lpga.png" },
 
   // Esports
   cs2: { name: "CS2", fullName: "Counter-Strike 2", icon: "🎮", color: "#de9b35", category: "Esports" },
@@ -56,7 +58,9 @@ export const SPORT_CATEGORIES = [
   { label: "Major US Sports", icon: "🇺🇸", sports: ["nba", "nfl", "mlb", "nhl", "wnba"] },
   { label: "College Sports", icon: "🎓", sports: ["ncaab", "ncaaw", "ncaaf"] },
   { label: "Soccer", icon: "⚽", sports: ["epl", "laliga", "bundesliga", "seriea", "ligue1", "mls", "ucl", "nwsl"] },
-  { label: "Individual Sports", icon: "🏆", sports: ["f1", "atp", "wta", "ufc", "golf"] },
+  { label: "Individual Sports", icon: "🏆", sports: ["atp", "wta", "ufc", "mma"] },
+  { label: "Racing", icon: "🏎️", sports: ["f1", "indycar"] },
+  { label: "Golf", icon: "⛳", sports: ["golf", "lpga", "pga"] },
   { label: "Esports", icon: "🎮", sports: ["lol", "cs2", "dota2", "valorant"] },
 ];
 

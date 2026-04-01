@@ -5,8 +5,7 @@ import { getStandingsWithMeta, getTeams } from "@/lib/api";
 import type { Standing } from "@/lib/schemas";
 import { StandingsClient } from "./StandingsClient";
 
-export const dynamic = "auto";
-export const revalidate = 180;
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = buildPageMetadata({
   title: "Standings",
@@ -23,28 +22,53 @@ const STANDINGS_SPORTS = [
 export type TeamLookup = Record<string, { name: string; abbrev?: string }>;
 
 export default async function StandingsPage() {
-  const results = await Promise.all(
-    STANDINGS_SPORTS.map(async (sport) => {
-      const [standingsResult, teams] = await Promise.all([
-        getStandingsWithMeta(sport),
-        getTeams(sport),
-      ]);
-      const teamLookup: TeamLookup = {};
-      for (const t of teams) {
-        teamLookup[t.id] = {
-          name: t.name,
-          abbrev: t.abbreviation ?? undefined,
-        };
-      }
-      return {
-        sport,
-        standings: standingsResult.data,
-        teamLookup,
-        seasonActive: standingsResult.seasonActive,
-        seasonYear: standingsResult.seasonYear,
-      };
-    }),
-  );
+  // Fetch in batches of 4 to avoid overwhelming the API during SSR
+  const BATCH = 4;
+  const all = [...STANDINGS_SPORTS];
+  const results: Array<{
+    sport: string;
+    standings: Standing[];
+    teamLookup: TeamLookup;
+    seasonActive: boolean;
+    seasonYear: string | null;
+  }> = [];
+
+  for (let i = 0; i < all.length; i += BATCH) {
+    const batch = all.slice(i, i + BATCH);
+    const batchResults = await Promise.all(
+      batch.map(async (sport) => {
+        try {
+          const [standingsResult, teams] = await Promise.all([
+            getStandingsWithMeta(sport),
+            getTeams(sport),
+          ]);
+          const teamLookup: TeamLookup = {};
+          for (const t of teams) {
+            teamLookup[t.id] = {
+              name: t.name,
+              abbrev: t.abbreviation ?? undefined,
+            };
+          }
+          return {
+            sport,
+            standings: standingsResult.data,
+            teamLookup,
+            seasonActive: standingsResult.seasonActive,
+            seasonYear: standingsResult.seasonYear,
+          };
+        } catch {
+          return {
+            sport,
+            standings: [] as Standing[],
+            teamLookup: {} as TeamLookup,
+            seasonActive: false,
+            seasonYear: null,
+          };
+        }
+      }),
+    );
+    results.push(...batchResults);
+  }
 
   const standingsBySport: Record<string, Standing[]> = {};
   const teamsBySport: Record<string, TeamLookup> = {};

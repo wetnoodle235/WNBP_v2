@@ -52,10 +52,30 @@ class BaseballExtractor(BaseFeatureExtractor):
     def __init__(self, sport: str, data_dir: Path) -> None:
         super().__init__(data_dir)
         self.sport = sport
+        self._all_games_cache: pd.DataFrame | None = None
         self._all_pstats_cache: pd.DataFrame | None = None
         # Pre-built indexes: {abbrev: DataFrame sorted by date}
         self._pitcher_idx: dict[str, pd.DataFrame] = {}
         self._batter_idx: dict[str, pd.DataFrame] = {}
+
+    def _load_all_games(self) -> pd.DataFrame:
+        """Load and cache all seasons' game data for cross-season form calculations."""
+        if self._all_games_cache is not None:
+            return self._all_games_cache
+        sport_dir = self.data_dir / "normalized" / self.sport
+        frames = []
+        for p in sorted(sport_dir.glob("games_*.parquet")):
+            try:
+                df = pd.read_parquet(p)
+                frames.append(df)
+            except Exception:
+                pass
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if not combined.empty and "date" in combined.columns:
+            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+            combined.sort_values("date", inplace=True, ignore_index=True)
+        self._all_games_cache = combined
+        return combined
 
     def _load_all_player_stats(self) -> pd.DataFrame:
         """Load and cache all MLB player stats parquets, building per-team indexes."""
@@ -481,6 +501,46 @@ class BaseballExtractor(BaseFeatureExtractor):
             "same_handedness": 1.0 if h_throws == a_throws else 0.0,
         }
 
+    def _advanced_batting_team(
+        self,
+        team_id: str,
+        season: int,
+    ) -> dict[str, float]:
+        """Aggregate woba/wrc_plus/iso/bb_pct/k_pct from advanced_batting.parquet for a team+season."""
+        defaults = {"woba": 0.0, "wrc_plus": 100.0, "iso": 0.0, "bb_pct": 0.0, "k_pct": 0.0}
+        adv_path = self.data_dir / "normalized" / self.sport / "advanced_batting.parquet"
+        if not adv_path.exists():
+            return defaults
+        if not hasattr(self, "_adv_batting_cache"):
+            try:
+                df = pd.read_parquet(adv_path)
+                df["season"] = pd.to_numeric(df["season"], errors="coerce")
+                self._adv_batting_cache = df
+            except Exception:
+                self._adv_batting_cache = pd.DataFrame()
+        adv = self._adv_batting_cache
+        if adv.empty:
+            return defaults
+        mask = (adv["team_id"].astype(str) == str(team_id)) & (adv["season"] == int(season))
+        team_df = adv[mask].copy()
+        if team_df.empty:
+            return defaults
+        team_df["plate_appearances"] = pd.to_numeric(team_df["plate_appearances"], errors="coerce").fillna(0)
+        pa = team_df["plate_appearances"].values
+        total_pa = pa.sum()
+        if total_pa <= 0:
+            return defaults
+        def _wavg(col: str) -> float:
+            vals = pd.to_numeric(team_df[col], errors="coerce").fillna(0).values
+            return float(np.dot(vals, pa) / total_pa)
+        return {
+            "woba": _wavg("woba"),
+            "wrc_plus": _wavg("wrc_plus"),
+            "iso": _wavg("iso"),
+            "bb_pct": _wavg("bb_pct"),
+            "k_pct": _wavg("k_pct"),
+        }
+
     def _defensive_efficiency(
         self,
         team_id: str,
@@ -599,10 +659,12 @@ class BaseballExtractor(BaseFeatureExtractor):
 
     def extract_game_features(self, game: dict[str, Any]) -> dict[str, Any]:
         season = game.get("season", 0)
-        games_df = self.load_games(season)
+        # Use cross-season history for form/H2H/momentum so early-season games have signal
+        games_df = self._load_all_games()
+        current_season_games = self.load_games(season)  # used only for splits
         odds_df = self.load_odds(season)
 
-        h_id, a_id = self._resolve_game_team_ids(game, games_df)
+        h_id, a_id = self._resolve_game_team_ids(game, current_season_games)
         date = str(game.get("date", ""))
         game_id = str(game.get("id", ""))
         home_team = str(game.get("home_team", ""))
@@ -636,7 +698,7 @@ class BaseballExtractor(BaseFeatureExtractor):
             "away_i9": pd.to_numeric(game.get("away_i9"), errors="coerce"),
         }
 
-        # Common features
+        # Common features — use full cross-season history for richer signal
         h_form = self.team_form(h_id, date, games_df)
         features.update({f"home_{k}": v for k, v in h_form.items()})
         a_form = self.team_form(a_id, date, games_df)
@@ -646,10 +708,11 @@ class BaseballExtractor(BaseFeatureExtractor):
         features.update(h2h)
         features["home_momentum"] = self.momentum(h_id, date, games_df)
         features["away_momentum"] = self.momentum(a_id, date, games_df)
+        features["momentum_diff"] = features["home_momentum"] - features["away_momentum"]
 
-        h_splits = self.home_away_splits(h_id, games_df, season)
+        h_splits = self.home_away_splits(h_id, current_season_games, season)
         features["home_home_win_pct"] = h_splits["home_win_pct"]
-        a_splits = self.home_away_splits(a_id, games_df, season)
+        a_splits = self.home_away_splits(a_id, current_season_games, season)
         features["away_away_win_pct"] = a_splits["away_win_pct"]
 
         # Rest
@@ -690,6 +753,12 @@ class BaseballExtractor(BaseFeatureExtractor):
         features.update({f"home_{k}": v for k, v in h_bat_ps.items()})
         a_bat_ps = self._team_batting_from_stats(a_id, date)
         features.update({f"away_{k}": v for k, v in a_bat_ps.items()})
+
+        # Advanced batting (woba, wrc+, iso, bb%, k%)
+        h_adv = self._advanced_batting_team(h_id, int(season))
+        features.update({f"home_{k}": v for k, v in h_adv.items()})
+        a_adv = self._advanced_batting_team(a_id, int(season))
+        features.update({f"away_{k}": v for k, v in a_adv.items()})
 
         # Park & platoon
         features["park_factor"] = self._park_factor(game)
@@ -757,6 +826,24 @@ class BaseballExtractor(BaseFeatureExtractor):
         a_per = self._period_rolling_stats(a_id, date, games_df, n=10, period_scheme="innings")
         features.update({f"away_{k}": v for k, v in a_per.items()})
         features["period_first_ppg_diff"] = h_per["period_first_ppg"] - a_per["period_first_ppg"]
+        features["period_first_win_pct_diff"] = h_per["period_first_win_pct"] - a_per["period_first_win_pct"]
+        features["period_first_opp_ppg_diff"] = h_per["period_first_opp_ppg"] - a_per["period_first_opp_ppg"]
+
+        # ── Key differentials ─────────────────────────────
+        features["era_diff"] = features.get("away_sp_era", 0.0) - features.get("home_sp_era", 0.0)  # lower ERA is better
+        features["whip_diff"] = features.get("away_sp_whip", 0.0) - features.get("home_sp_whip", 0.0)
+        features["era_plus_diff"] = features.get("home_sp_era_plus", 100.0) - features.get("away_sp_era_plus", 100.0)
+        features["woba_diff"] = features.get("home_woba", 0.0) - features.get("away_woba", 0.0)
+        features["wrc_plus_diff"] = features.get("home_wrc_plus", 100.0) - features.get("away_wrc_plus", 100.0)
+        features["iso_diff"] = features.get("home_iso", 0.0) - features.get("away_iso", 0.0)
+        features["k_rate_diff"] = features.get("away_k_rate", 0.0) - features.get("home_k_rate", 0.0)  # lower K rate is better for offense
+        features["bb_rate_diff"] = features.get("home_bb_rate", 0.0) - features.get("away_bb_rate", 0.0)
+        features["bullpen_era_diff"] = features.get("away_bullpen_era", 0.0) - features.get("home_bullpen_era", 0.0)
+        features["pythag_diff"] = features.get("home_pythag_wpct", 0.0) - features.get("away_pythag_wpct", 0.0)
+        features["ops_diff"] = features.get("home_ops", 0.0) - features.get("away_ops", 0.0)
+        features["runs_pg_diff"] = features.get("home_runs_pg", 0.0) - features.get("away_runs_pg", 0.0)
+        features["bb_pct_diff"] = features.get("home_bb_pct", 0.0) - features.get("away_bb_pct", 0.0)
+        features["k_pct_diff"] = features.get("away_k_pct", 0.0) - features.get("home_k_pct", 0.0)  # lower K% is better for offense
 
         # Safety: replace any inf/-inf with 0
         for k, v in features.items():
@@ -775,7 +862,7 @@ class BaseballExtractor(BaseFeatureExtractor):
             # H2H
             "h2h_games", "h2h_win_pct", "h2h_avg_margin",
             # Momentum & splits
-            "home_momentum", "away_momentum",
+            "home_momentum", "away_momentum", "momentum_diff",
             "home_home_win_pct", "away_away_win_pct",
             # Rest
             "home_rest_days", "away_rest_days",
@@ -820,4 +907,17 @@ class BaseballExtractor(BaseFeatureExtractor):
             "home_fatigue_games_last_14d", "home_fatigue_score",
             "away_fatigue_rest_days", "away_fatigue_is_back_to_back", "away_fatigue_games_last_7d",
             "away_fatigue_games_last_14d", "away_fatigue_score", "fatigue_score_diff",
+            # Key differentials
+            "era_diff", "whip_diff", "era_plus_diff", "woba_diff", "wrc_plus_diff",
+            "iso_diff", "k_rate_diff", "bb_rate_diff", "bullpen_era_diff",
+            "pythag_diff", "ops_diff", "runs_pg_diff",
+            # Advanced batting (from advanced_batting.parquet)
+            "home_woba", "home_wrc_plus", "home_iso", "home_bb_pct", "home_k_pct",
+            "away_woba", "away_wrc_plus", "away_iso", "away_bb_pct", "away_k_pct",
+            "bb_pct_diff", "k_pct_diff",
+            # Inning rolling stats (1st inning early scoring)
+            "home_period_first_ppg", "away_period_first_ppg",
+            "home_period_first_opp_ppg", "away_period_first_opp_ppg",
+            "home_period_first_win_pct", "away_period_first_win_pct",
+            "period_first_ppg_diff", "period_first_opp_ppg_diff", "period_first_win_pct_diff",
         ]

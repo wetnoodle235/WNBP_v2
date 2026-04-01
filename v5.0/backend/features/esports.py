@@ -28,6 +28,28 @@ class EsportsExtractor(BaseFeatureExtractor):
     def __init__(self, sport: str, data_dir: Path) -> None:
         super().__init__(data_dir)
         self.sport = sport
+        self._all_games_cache: pd.DataFrame | None = None
+
+    def _load_all_games(self) -> pd.DataFrame:
+        """Load and concatenate games from all available seasons for cross-season history."""
+        if self._all_games_cache is not None:
+            return self._all_games_cache
+        sport_dir = self.data_dir / "normalized" / self.sport
+        frames = []
+        for p in sorted(sport_dir.glob("games_*.parquet")):
+            try:
+                season = int(p.stem.split("_")[-1])
+            except ValueError:
+                continue
+            df = self.load_games(season)
+            if not df.empty:
+                frames.append(df)
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if not combined.empty and "date" in combined.columns:
+            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+            combined.sort_values("date", inplace=True, ignore_index=True)
+        self._all_games_cache = combined
+        return combined
 
     # ── Helpers ────────────────────────────────────────────
 
@@ -434,7 +456,9 @@ class EsportsExtractor(BaseFeatureExtractor):
 
     def extract_game_features(self, game: dict[str, Any]) -> dict[str, Any]:
         season = game.get("season", 0)
-        games_df = self.load_games(season)
+        # Use full cross-season history for form/H2H so early-season games have signal
+        all_games_df = self._load_all_games()
+        games_df = all_games_df  # alias for methods that use games_df param
         odds_df = self.load_odds(season)
         player_stats = self.load_player_stats(season)
 
@@ -453,29 +477,30 @@ class EsportsExtractor(BaseFeatureExtractor):
             "away_score": pd.to_numeric(game.get("away_score"), errors="coerce"),
         }
 
-        # Overall form
-        h_form = self.team_form(h_id, date, games_df)
+        # Overall form — use cross-season history for richer signal
+        h_form = self.team_form(h_id, date, all_games_df)
         features.update({f"home_{k}": v for k, v in h_form.items()})
-        a_form = self.team_form(a_id, date, games_df)
+        a_form = self.team_form(a_id, date, all_games_df)
         features.update({f"away_{k}": v for k, v in a_form.items()})
 
         # H2H
-        h2h = self.head_to_head(h_id, a_id, games_df, date=date)
+        h2h = self.head_to_head(h_id, a_id, all_games_df, date=date)
         features.update(h2h)
 
-        features["home_momentum"] = self.momentum(h_id, date, games_df)
-        features["away_momentum"] = self.momentum(a_id, date, games_df)
+        features["home_momentum"] = self.momentum(h_id, date, all_games_df)
+        features["away_momentum"] = self.momentum(a_id, date, all_games_df)
+        features["momentum_diff"] = features["home_momentum"] - features["away_momentum"]
 
-        # K/D/A and duration
-        h_stats = self._match_stats(h_id, date, games_df)
+        # K/D/A and duration — also use cross-season history
+        h_stats = self._match_stats(h_id, date, all_games_df)
         features.update({f"home_{k}": v for k, v in h_stats.items()})
-        a_stats = self._match_stats(a_id, date, games_df)
+        a_stats = self._match_stats(a_id, date, all_games_df)
         features.update({f"away_{k}": v for k, v in a_stats.items()})
 
         # Objectives
-        h_obj = self._objective_features(h_id, date, games_df)
+        h_obj = self._objective_features(h_id, date, all_games_df)
         features.update({f"home_{k}": v for k, v in h_obj.items()})
-        a_obj = self._objective_features(a_id, date, games_df)
+        a_obj = self._objective_features(a_id, date, all_games_df)
         features.update({f"away_{k}": v for k, v in a_obj.items()})
 
         # Economy
@@ -520,6 +545,13 @@ class EsportsExtractor(BaseFeatureExtractor):
         features["player_kda_diff"] = features.get("home_player_avg_kda", 0.0) - features.get("away_player_avg_kda", 0.0)
         features["player_gpm_diff"] = features.get("home_player_avg_gpm", 0.0) - features.get("away_player_avg_gpm", 0.0)
         features["player_rating_diff"] = features.get("home_player_avg_rating", 0.0) - features.get("away_player_avg_rating", 0.0)
+        # Team-level offensive/objective differentials
+        features["kills_pg_diff"] = features.get("home_kills_pg", 0.0) - features.get("away_kills_pg", 0.0)
+        features["kda_diff"] = features.get("home_kda", 0.0) - features.get("away_kda", 0.0)
+        features["objectives_pg_diff"] = features.get("home_objectives_pg", 0.0) - features.get("away_objectives_pg", 0.0)
+        features["first_objective_diff"] = features.get("home_first_objective_rate", 0.0) - features.get("away_first_objective_rate", 0.0)
+        features["gold_per_min_diff"] = features.get("home_gold_per_min", 0.0) - features.get("away_gold_per_min", 0.0)
+        features["towers_pg_diff"] = features.get("home_towers_pg", 0.0) - features.get("away_towers_pg", 0.0)
 
         # Hero / draft features (Dota2 only)
         if self.sport == "dota2" and "home_heroes" in games_df.columns:
@@ -542,7 +574,7 @@ class EsportsExtractor(BaseFeatureExtractor):
             # H2H
             "h2h_games", "h2h_win_pct", "h2h_avg_margin",
             # Momentum
-            "home_momentum", "away_momentum",
+            "home_momentum", "away_momentum", "momentum_diff",
             # K/D/A
             "home_kills_pg", "home_deaths_pg", "home_assists_pg", "home_kda",
             "home_avg_duration_min", "home_duration_std",
@@ -569,6 +601,9 @@ class EsportsExtractor(BaseFeatureExtractor):
             "away_player_form_std", "away_player_avg_damage", "away_player_star_kda",
             # Player advantage differentials
             "player_kda_diff", "player_gpm_diff", "player_rating_diff",
+            # Team-level offensive/objective differentials
+            "kills_pg_diff", "kda_diff", "objectives_pg_diff",
+            "first_objective_diff", "gold_per_min_diff", "towers_pg_diff",
             # Hero / draft features (Dota2)
             "home_draft_quality", "away_draft_quality", "draft_quality_diff",
             "home_meta_picks", "away_meta_picks",

@@ -49,6 +49,26 @@ class HockeyExtractor(BaseFeatureExtractor):
         super().__init__(data_dir)
         self.sport = sport
         self._ps_abr_to_id_cache: dict[int, dict[str, str]] = {}
+        self._all_games_cache: pd.DataFrame | None = None
+
+    def _load_all_games(self) -> pd.DataFrame:
+        """Load and cache all seasons' game data for cross-season form calculations."""
+        if self._all_games_cache is not None:
+            return self._all_games_cache
+        sport_dir = self.data_dir / "normalized" / self.sport
+        frames = []
+        for p in sorted(sport_dir.glob("games_*.parquet")):
+            try:
+                df = pd.read_parquet(p)
+                frames.append(df)
+            except Exception:
+                pass
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if not combined.empty and "date" in combined.columns:
+            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+            combined.sort_values("date", inplace=True, ignore_index=True)
+        self._all_games_cache = combined
+        return combined
 
     def _build_ps_abr_to_id(self, season: int) -> dict[str, str]:
         """Build abbreviation → ESPN team_id map from games data for PS lookup."""
@@ -544,10 +564,11 @@ class HockeyExtractor(BaseFeatureExtractor):
 
     def extract_game_features(self, game: dict[str, Any]) -> dict[str, Any]:
         season = game.get("season", 0)
-        games_df = self.load_games(season)
+        games_df = self._load_all_games()
+        current_season_games = self.load_games(season)
         odds_df = self.load_odds(season)
 
-        h_id, a_id = self._resolve_game_team_ids(game, games_df)
+        h_id, a_id = self._resolve_game_team_ids(game, current_season_games)
         date = str(game.get("date", ""))
         game_id = str(game.get("id", ""))
         home_team = str(game.get("home_team", ""))
@@ -584,6 +605,7 @@ class HockeyExtractor(BaseFeatureExtractor):
         features.update(h2h)
         features["home_momentum"] = self.momentum(h_id, date, games_df)
         features["away_momentum"] = self.momentum(a_id, date, games_df)
+        features["momentum_diff"] = features["home_momentum"] - features["away_momentum"]
 
         h_splits = self.home_away_splits(h_id, games_df, season)
         features["home_home_win_pct"] = h_splits["home_win_pct"]
@@ -645,6 +667,9 @@ class HockeyExtractor(BaseFeatureExtractor):
         features.update({f"home_{k}": v for k, v in h_sk.items()})
         a_sk = self._skater_features(a_id, date, season)
         features.update({f"away_{k}": v for k, v in a_sk.items()})
+        # Skater differentials
+        for key in h_sk:
+            features[f"sk_{key}_diff"] = h_sk[key] - a_sk[key]
 
         # ELO ratings
         h_elo = self.elo_features(h_id, a_id, date, games_df)
@@ -675,6 +700,21 @@ class HockeyExtractor(BaseFeatureExtractor):
         features["period_first_ppg_diff"] = h_per["period_first_ppg"] - a_per["period_first_ppg"]
         features["period_first_win_pct_diff"] = h_per["period_first_win_pct"] - a_per["period_first_win_pct"]
         features["period_comeback_diff"] = h_per["period_comeback_rate"] - a_per["period_comeback_rate"]
+        features["period_first_half_win_pct_diff"] = h_per["period_first_half_win_pct"] - a_per["period_first_half_win_pct"]
+        features["period_first_opp_ppg_diff"] = h_per["period_first_opp_ppg"] - a_per["period_first_opp_ppg"]
+        features["period_second_half_ppg_diff"] = h_per["period_second_half_ppg"] - a_per["period_second_half_ppg"]
+        features["period_ot_rate_diff"] = h_per["period_ot_rate"] - a_per["period_ot_rate"]
+
+        # ── Key differentials ─────────────────────────────
+        features["faceoff_pct_diff"] = features.get("home_faceoff_pct", 0.0) - features.get("away_faceoff_pct", 0.0)
+        features["takeaway_giveaway_diff"] = features.get("home_takeaway_giveaway_ratio", 1.0) - features.get("away_takeaway_giveaway_ratio", 1.0)
+        features["save_pct_diff"] = features.get("home_goalie_sv_pct", 0.0) - features.get("away_goalie_sv_pct", 0.0)
+        features["shots_on_goal_diff"] = features.get("home_shots_for_pg", 0.0) - features.get("away_shots_for_pg", 0.0)
+        features["pp_pct_diff"] = features.get("home_pp_pct", 0.0) - features.get("away_pp_pct", 0.0)
+        features["pk_pct_diff"] = features.get("home_pk_pct", 0.0) - features.get("away_pk_pct", 0.0)
+        features["hits_pg_diff"] = features.get("home_hits_pg", 0.0) - features.get("away_hits_pg", 0.0)
+        features["blocks_pg_diff"] = features.get("home_blocked_shots_pg", 0.0) - features.get("away_blocked_shots_pg", 0.0)
+        features["standing_diff"] = features.get("home_std_stnd_win_pct", 0.0) - features.get("away_std_stnd_win_pct", 0.0)
 
         return features
 
@@ -688,7 +728,7 @@ class HockeyExtractor(BaseFeatureExtractor):
             # H2H
             "h2h_games", "h2h_win_pct", "h2h_avg_margin",
             # Momentum & splits
-            "home_momentum", "away_momentum",
+            "home_momentum", "away_momentum", "momentum_diff",
             "home_home_win_pct", "away_away_win_pct",
             # Rest
             "home_rest_days", "away_rest_days", "home_is_b2b", "away_is_b2b",
@@ -726,6 +766,9 @@ class HockeyExtractor(BaseFeatureExtractor):
             # Skater star-player features
             "home_avg_plus_minus", "home_top_scorer_pts_pg", "home_team_pts_pg", "home_team_shots_pg",
             "away_avg_plus_minus", "away_top_scorer_pts_pg", "away_team_pts_pg", "away_team_shots_pg",
+            # Skater differentials
+            "sk_avg_plus_minus_diff", "sk_top_scorer_pts_pg_diff",
+            "sk_team_pts_pg_diff", "sk_team_shots_pg_diff",
             # ELO ratings
             "home_elo", "home_elo_diff", "home_elo_expected_win",
             "away_elo", "away_elo_diff", "away_elo_expected_win",
@@ -741,4 +784,21 @@ class HockeyExtractor(BaseFeatureExtractor):
             "home_fatigue_games_last_14d", "home_fatigue_score",
             "away_fatigue_rest_days", "away_fatigue_is_back_to_back", "away_fatigue_games_last_7d",
             "away_fatigue_games_last_14d", "away_fatigue_score", "fatigue_score_diff",
+            # Key differentials
+            "faceoff_pct_diff", "takeaway_giveaway_diff", "save_pct_diff",
+            "shots_on_goal_diff", "pp_pct_diff", "pk_pct_diff",
+            "hits_pg_diff", "blocks_pg_diff", "standing_diff",
+            # Period rolling stats
+            "home_period_first_ppg", "away_period_first_ppg",
+            "home_period_first_opp_ppg", "away_period_first_opp_ppg",
+            "home_period_first_win_pct", "away_period_first_win_pct",
+            "home_period_first_half_ppg", "away_period_first_half_ppg",
+            "home_period_first_half_opp_ppg", "away_period_first_half_opp_ppg",
+            "home_period_first_half_win_pct", "away_period_first_half_win_pct",
+            "home_period_second_half_ppg", "away_period_second_half_ppg",
+            "home_period_comeback_rate", "away_period_comeback_rate",
+            "home_period_ot_rate", "away_period_ot_rate",
+            "period_first_ppg_diff", "period_first_opp_ppg_diff",
+            "period_first_win_pct_diff", "period_first_half_win_pct_diff",
+            "period_second_half_ppg_diff", "period_comeback_diff", "period_ot_rate_diff",
         ]

@@ -63,10 +63,25 @@ _META_COLS = {
     # quarter/period/inning scores — targets for extra markets, not input features
     "home_q1", "home_q2", "home_q3", "home_q4", "home_ot",
     "away_q1", "away_q2", "away_q3", "away_q4", "away_ot",
+    # MLB inning-by-inning scores (outcome data — must not be input features)
+    "home_i1", "home_i2", "home_i3", "home_i4", "home_i5",
+    "home_i6", "home_i7", "home_i8", "home_i9", "home_extras",
+    "away_i1", "away_i2", "away_i3", "away_i4", "away_i5",
+    "away_i6", "away_i7", "away_i8", "away_i9", "away_extras",
+    # Soccer half scores (outcome data)
+    "home_h1", "home_h2", "away_h1", "away_h2",
+    "home_h1_score", "home_h2_score", "away_h1_score", "away_h2_score",
+    # Hockey period scores (outcome data)
+    "home_p1", "home_p2", "home_p3", "away_p1", "away_p2", "away_p3",
+    # Motorsport (F1) current-race outcome columns — NOT available pre-race
+    "podium", "points_finish", "dnf", "fastest_lap",
+    "laps_completed", "laps_completion_pct",
+    "avg_speed_kph", "pit_stops", "avg_pit_time_s",
+    "safety_car_count", "dnf_count", "red_flag_count", "race_pit_stops_total",
 }
 
 # Sports that can legitimately end in a draw/tie at full time
-_DRAW_SPORTS = frozenset({"epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl", "nfl"})
+_DRAW_SPORTS = frozenset({"epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl", "nfl", "europa", "ligamx"})
 # Sports that use q1–q4 (or periods 1–3) for halftime/period markets
 _PERIOD_SPORTS = frozenset({"nba", "nfl", "nhl", "mlb", "ncaab", "ncaaf", "wnba", "ncaaw"})
 # Per-sport period label for display
@@ -76,21 +91,29 @@ _PERIOD_LABEL: dict[str, str] = {
     "nhl": "period", "mlb": "inning",
 }
 # Soccer sports use h1/h2 columns for halftime (not q1/q2)
-_SOCCER_HALF_SPORTS = frozenset({"epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl"})
+_SOCCER_HALF_SPORTS = frozenset({"epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl", "europa", "ligamx"})
 # Sports with meaningful halftime (first-half data in q1+q2 or h1)
-_HALFTIME_SPORTS = frozenset({"nba", "nfl", "ncaab", "ncaaf", "wnba", "ncaaw", "epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl"})
+_HALFTIME_SPORTS = frozenset({"nba", "nfl", "ncaab", "ncaaf", "wnba", "ncaaw", "epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl", "europa", "ligamx"})
 # Soccer-family sports (BTTS, clean sheet)
-_SOCCER_SPORTS = frozenset({"epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl"})
+_SOCCER_SPORTS = frozenset({"epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl", "europa", "ligamx"})
 # Sports with OT/extra time
-_OT_SPORTS = frozenset({"nba", "nfl", "nhl", "mlb", "ncaab", "ncaaf", "wnba", "ncaaw", "epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl"})
+_OT_SPORTS = frozenset({"nba", "nfl", "nhl", "mlb", "ncaab", "ncaaf", "wnba", "ncaaw", "epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "europa", "ligamx"})
 # Sports with meaningful margin/total bands (team-vs-team scoring games)
-_MARGIN_SPORTS = frozenset({"nba", "nfl", "nhl", "mlb", "ncaab", "ncaaf", "epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl", "wnba", "ncaaw", "csgo", "dota2", "lol", "valorant"})
+_MARGIN_SPORTS = frozenset({"nba", "nfl", "nhl", "mlb", "ncaab", "ncaaf", "epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl", "wnba", "ncaaw", "csgo", "dota2", "lol", "valorant", "europa", "ligamx"})
 # Sports where 2nd-half/comeback models are meaningful
 _SECOND_HALF_SPORTS = _HALFTIME_SPORTS
 # Sports to skip ALL extra markets (pure binary outcome — no subgame structure)
-_NO_EXTRA_MARKETS = frozenset({"f1", "golf"})
+_NO_EXTRA_MARKETS = frozenset({"f1", "golf", "lpga", "indycar"})
 # Esports: home_score/away_score represent MAP WINS in a series (max 3)
 _ESPORTS_SPORTS = frozenset({"csgo", "dota2", "lol", "valorant"})
+# Sports with double-chance markets (1X, 12, X2) — any sport that allows draws
+_DOUBLE_CHANCE_SPORTS = _DRAW_SPORTS
+# Sports where shutout/clean-sheet models are meaningful beyond soccer (hockey, low-scoring)
+_SHUTOUT_SPORTS = _SOCCER_SPORTS | frozenset({"nhl"})
+# Sports where NRFI/YRFI (no/yes run first inning) is a valid market
+_NRFI_SPORTS = frozenset({"mlb"})
+# Sports where Asian Handicap lines (−1, −1.5) are meaningful
+_ASIAN_HANDICAP_SPORTS = _SOCCER_SPORTS | frozenset({"nhl"})
 
 
 def _add_delta_features(X: pd.DataFrame) -> pd.DataFrame:
@@ -272,6 +295,24 @@ class Trainer:
         away_score = away_score.reset_index(drop=True)
         return X, home_score, away_score
 
+    @staticmethod
+    def _apply_variance_filter(X_train: pd.DataFrame, X_val: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Remove near-zero-variance columns from X_train and align X_val to same columns.
+
+        Variance is computed from training data only. Val set is trimmed to match.
+        Odds/implied-prob columns are always kept.
+        """
+        odds_cols = {"home_moneyline", "away_moneyline", "spread", "total", "home_implied_prob"}
+        keep_cols = [c for c in X_train.columns if X_train[c].std() > 1e-6 or c in odds_cols]
+        X_train_filt = X_train[keep_cols]
+        # Align val to same columns (add missing as 0, drop extra)
+        shared = [c for c in keep_cols if c in X_val.columns]
+        X_val_filt = X_val.reindex(columns=keep_cols, fill_value=0)
+        dropped = len(X_train.columns) - len(keep_cols)
+        if dropped > 0:
+            logger.debug("Variance filter dropped %d near-zero-variance features", dropped)
+        return X_train_filt, X_val_filt
+
     # ── Joint training ───────────────────────────────────
 
     def train_joint(self) -> dict[str, Any]:
@@ -288,11 +329,13 @@ class Trainer:
         train_df, val_df = self.prepare_data()
 
         # ── Golf: per-player tournament model ──────────────────────
-        if self.config.sport == "golf":
+        if self.config.sport in ("golf", "lpga"):
             return self._train_golf(train_df, val_df)
 
         X_train, home_train, away_train = self._split_xy(train_df)
         X_val, home_val, away_val = self._split_xy(val_df)
+        # Apply consistent variance filter: compute from train, align val
+        X_train, X_val = self._apply_variance_filter(X_train, X_val)
 
         # Winner label: 1 = home win, 0 = away win
         # Exclude draws from classification training: draws encode the same
@@ -318,6 +361,17 @@ class Trainer:
         logger.info("Training winner classifier …")
         winner_ensemble = EnsembleVoter()
         cls_metrics = winner_ensemble.fit_classifiers(X_train_cls, y_train_cls, X_val_cls, y_val_cls)
+
+        # Log top feature importances after fitting
+        try:
+            fi = winner_ensemble.get_feature_importances()
+            if fi:
+                top10 = list(fi.items())[:10]
+                logger.info("Top-10 winner features: %s", top10)
+                fi_path = self.models_dir / "feature_importances.json"
+                fi_path.write_text(json.dumps(fi, indent=2))
+        except Exception:
+            pass
 
         logger.info("Training home-score regressor …")
         home_ensemble = EnsembleVoter()
@@ -379,12 +433,13 @@ class Trainer:
         X_train, pos_train, top10_train = _split_golf(train_df)
         X_val, pos_val, top10_val = _split_golf(val_df)
 
-        # Classification: top-10 finish
+        # Classification: top-10 finish (use balanced weights — top-10 rate is ~6.7%)
         logger.info("Training golf top-10 classifier …")
         top10_ensemble = EnsembleVoter()
         cls_metrics = top10_ensemble.fit_classifiers(
             X_train, top10_train.astype(int),
             X_val, top10_val.astype(int),
+            class_weight="balanced",
         )
 
         # Regression: finish position
@@ -737,6 +792,22 @@ class Trainer:
         # ── 15. Comeback Win (trailing at half → wins) ────────
         if sport in _SECOND_HALF_SPORTS:
             self._train_comeback(train_df, val_df, X_train, X_val, models)
+
+        # ── 16. Double Chance (1X, X2, 12) ────────────────────
+        if sport in _DOUBLE_CHANCE_SPORTS:
+            self._train_double_chance(train_df, val_df, X_train, X_val, models)
+
+        # ── 17. NRFI / YRFI (MLB: no run / yes run first inning)
+        if sport in _NRFI_SPORTS:
+            self._train_nrfi(train_df, val_df, X_train, X_val, models)
+
+        # ── 18. Shutout / Clean Sheet (extended to hockey) ────
+        if sport in _SHUTOUT_SPORTS and sport not in _SOCCER_SPORTS:
+            self._train_shutout(train_df, val_df, X_train, X_val, models)
+
+        # ── 19. Asian Handicap Lines (−1, −1.5) ───────────────
+        if sport in _ASIAN_HANDICAP_SPORTS:
+            self._train_asian_handicap(train_df, val_df, X_train, X_val, models)
 
         logger.info("Extra-market training complete — %d models: %s", len(models), list(models.keys()))
         return {
@@ -1468,6 +1539,249 @@ class Trainer:
                 100 * float(away_trails_tr.mean()),
             )
 
+    def _train_double_chance(
+        self,
+        train_df: "pd.DataFrame",
+        val_df: "pd.DataFrame",
+        X_train: "pd.DataFrame",
+        X_val: "pd.DataFrame",
+        models: dict,
+    ) -> None:
+        """Train double-chance classifiers: 1X, X2, 12.
+
+        1X = home wins OR draw  (away doesn't win)
+        X2 = away wins OR draw  (home doesn't win)
+        12 = home wins OR away wins  (no draw / game decided outright)
+        """
+        hs_tr = train_df.get("home_score", pd.Series(dtype=float)).fillna(0)
+        as_tr = train_df.get("away_score", pd.Series(dtype=float)).fillna(0)
+        hs_va = val_df.get("home_score", pd.Series(dtype=float)).fillna(0)
+        as_va = val_df.get("away_score", pd.Series(dtype=float)).fillna(0)
+
+        valid_tr = (hs_tr + as_tr > 0)
+        valid_va = (hs_va + as_va > 0)
+        if valid_tr.sum() < 80 or valid_va.sum() < 20:
+            return
+
+        Xv_tr = X_train.loc[valid_tr]
+        Xv_va = X_val.loc[valid_va]
+        hs_t, as_t = hs_tr[valid_tr], as_tr[valid_tr]
+        hs_v, as_v = hs_va[valid_va], as_va[valid_va]
+
+        logger.info("Training double-chance models (%d/%d rows) …", int(valid_tr.sum()), int(valid_va.sum()))
+
+        # 1X: home wins or draw → away doesn't win
+        y1x_tr = (hs_t >= as_t).astype(int)
+        y1x_va = (hs_v >= as_v).astype(int)
+        m = self._fit_cls_safe("double_chance_1X", Xv_tr, y1x_tr, Xv_va, y1x_va)
+        if m:
+            models["double_chance_1X"] = m
+            logger.info("  double_chance_1X fitted (rate=%.1f%%)", 100 * float(y1x_tr.mean()))
+
+        # X2: away wins or draw → home doesn't win
+        yx2_tr = (as_t >= hs_t).astype(int)
+        yx2_va = (as_v >= hs_v).astype(int)
+        m = self._fit_cls_safe("double_chance_X2", Xv_tr, yx2_tr, Xv_va, yx2_va)
+        if m:
+            models["double_chance_X2"] = m
+            logger.info("  double_chance_X2 fitted (rate=%.1f%%)", 100 * float(yx2_tr.mean()))
+
+        # 12: no draw → home or away wins
+        y12_tr = (hs_t != as_t).astype(int)
+        y12_va = (hs_v != as_v).astype(int)
+        if y12_tr.sum() >= 40:
+            m = self._fit_cls_safe("double_chance_12", Xv_tr, y12_tr, Xv_va, y12_va)
+            if m:
+                models["double_chance_12"] = m
+                logger.info("  double_chance_12 fitted (rate=%.1f%%)", 100 * float(y12_tr.mean()))
+
+    def _train_nrfi(
+        self,
+        train_df: "pd.DataFrame",
+        val_df: "pd.DataFrame",
+        X_train: "pd.DataFrame",
+        X_val: "pd.DataFrame",
+        models: dict,
+    ) -> None:
+        """Train MLB NRFI/YRFI models (No/Yes Run First Inning).
+
+        NRFI = neither team scores in the 1st inning (P(home_i1==0 AND away_i1==0))
+        YRFI = at least one team scores in the 1st inning (complement of NRFI)
+        """
+        if "home_i1" not in train_df.columns or "away_i1" not in train_df.columns:
+            return
+
+        mask_tr = train_df["home_i1"].notna() & train_df["away_i1"].notna()
+        mask_va = val_df["home_i1"].notna() & val_df["away_i1"].notna()
+        n_tr = int(mask_tr.sum())
+        n_va = int(mask_va.sum())
+        if n_tr < 80 or n_va < 20:
+            return
+
+        logger.info("Training NRFI/YRFI models (%d/%d rows) …", n_tr, n_va)
+
+        hi1_tr = train_df.loc[mask_tr, "home_i1"].fillna(0)
+        ai1_tr = train_df.loc[mask_tr, "away_i1"].fillna(0)
+        hi1_va = val_df.loc[mask_va, "home_i1"].fillna(0)
+        ai1_va = val_df.loc[mask_va, "away_i1"].fillna(0)
+
+        Xn_tr = X_train.loc[mask_tr]
+        Xn_va = X_val.loc[mask_va]
+
+        # NRFI: no scoring in first inning
+        y_nrfi_tr = ((hi1_tr == 0) & (ai1_tr == 0)).astype(int)
+        y_nrfi_va = ((hi1_va == 0) & (ai1_va == 0)).astype(int)
+        m = self._fit_cls_safe("nrfi", Xn_tr, y_nrfi_tr, Xn_va, y_nrfi_va)
+        if m:
+            models["nrfi"] = m
+            logger.info("  nrfi fitted (nrfi_rate=%.1f%%)", 100 * float(y_nrfi_tr.mean()))
+
+        # YRFI: at least one team scores in first inning
+        y_yrfi_tr = ((hi1_tr > 0) | (ai1_tr > 0)).astype(int)
+        y_yrfi_va = ((hi1_va > 0) | (ai1_va > 0)).astype(int)
+        m = self._fit_cls_safe("yrfi", Xn_tr, y_yrfi_tr, Xn_va, y_yrfi_va)
+        if m:
+            models["yrfi"] = m
+            logger.info("  yrfi fitted (yrfi_rate=%.1f%%)", 100 * float(y_yrfi_tr.mean()))
+
+        # Home team scores first inning (home_i1 > 0)
+        y_hyrfi_tr = (hi1_tr > 0).astype(int)
+        y_hyrfi_va = (hi1_va > 0).astype(int)
+        if y_hyrfi_tr.sum() >= 40:
+            m = self._fit_cls_safe("home_scores_i1", Xn_tr, y_hyrfi_tr, Xn_va, y_hyrfi_va)
+            if m:
+                models["home_scores_i1"] = m
+
+        # Away team scores first inning
+        y_ayrfi_tr = (ai1_tr > 0).astype(int)
+        y_ayrfi_va = (ai1_va > 0).astype(int)
+        if y_ayrfi_tr.sum() >= 40:
+            m = self._fit_cls_safe("away_scores_i1", Xn_tr, y_ayrfi_tr, Xn_va, y_ayrfi_va)
+            if m:
+                models["away_scores_i1"] = m
+
+    def _train_shutout(
+        self,
+        train_df: "pd.DataFrame",
+        val_df: "pd.DataFrame",
+        X_train: "pd.DataFrame",
+        X_val: "pd.DataFrame",
+        models: dict,
+    ) -> None:
+        """Train shutout/clean-sheet models for low-scoring sports (e.g. NHL).
+
+        shutout_home = P(away_score == 0) — home team shuts out the away team
+        shutout_away = P(home_score == 0) — away team shuts out the home team
+        btts        = P(both teams score ≥ 1 goal)
+        """
+        hs_tr = train_df.get("home_score", pd.Series(dtype=float)).fillna(0)
+        as_tr = train_df.get("away_score", pd.Series(dtype=float)).fillna(0)
+        hs_va = val_df.get("home_score", pd.Series(dtype=float)).fillna(0)
+        as_va = val_df.get("away_score", pd.Series(dtype=float)).fillna(0)
+
+        valid_tr = (hs_tr + as_tr > 0)
+        valid_va = (hs_va + as_va > 0)
+        if valid_tr.sum() < 80 or valid_va.sum() < 20:
+            return
+
+        logger.info("Training shutout/BTTS models (%d/%d rows) …", int(valid_tr.sum()), int(valid_va.sum()))
+        Xv_tr = X_train.loc[valid_tr]
+        Xv_va = X_val.loc[valid_va]
+        hs_t, as_t = hs_tr[valid_tr], as_tr[valid_tr]
+        hs_v, as_v = hs_va[valid_va], as_va[valid_va]
+
+        # Shutout home (away scores 0)
+        y_sh_tr = (as_t == 0).astype(int)
+        y_sh_va = (as_v == 0).astype(int)
+        if y_sh_tr.sum() >= 30:
+            m = self._fit_cls_safe("shutout_home", Xv_tr, y_sh_tr, Xv_va, y_sh_va)
+            if m:
+                models["shutout_home"] = m
+                logger.info("  shutout_home fitted (rate=%.1f%%)", 100 * float(y_sh_tr.mean()))
+
+        # Shutout away (home scores 0)
+        y_sa_tr = (hs_t == 0).astype(int)
+        y_sa_va = (hs_v == 0).astype(int)
+        if y_sa_tr.sum() >= 30:
+            m = self._fit_cls_safe("shutout_away", Xv_tr, y_sa_tr, Xv_va, y_sa_va)
+            if m:
+                models["shutout_away"] = m
+                logger.info("  shutout_away fitted (rate=%.1f%%)", 100 * float(y_sa_tr.mean()))
+
+        # BTTS (both score)
+        y_btts_tr = ((hs_t > 0) & (as_t > 0)).astype(int)
+        y_btts_va = ((hs_v > 0) & (as_v > 0)).astype(int)
+        m = self._fit_cls_safe("btts", Xv_tr, y_btts_tr, Xv_va, y_btts_va)
+        if m:
+            models["btts"] = m
+            logger.info("  btts fitted (rate=%.1f%%)", 100 * float(y_btts_tr.mean()))
+
+    def _train_asian_handicap(
+        self,
+        train_df: "pd.DataFrame",
+        val_df: "pd.DataFrame",
+        X_train: "pd.DataFrame",
+        X_val: "pd.DataFrame",
+        models: dict,
+    ) -> None:
+        """Train Asian Handicap line classifiers.
+
+        AH -1 home  = home wins by 2+ goals (covers −1 handicap)
+        AH -1 away  = away wins by 2+ goals
+        AH -1.5 home = home wins by 2+ (same as AH -1 for integer sports)
+        AH +1 home  = home wins or draws or loses by exactly 1 (covers +1)
+        """
+        hs_tr = train_df.get("home_score", pd.Series(dtype=float)).fillna(0)
+        as_tr = train_df.get("away_score", pd.Series(dtype=float)).fillna(0)
+        hs_va = val_df.get("home_score", pd.Series(dtype=float)).fillna(0)
+        as_va = val_df.get("away_score", pd.Series(dtype=float)).fillna(0)
+
+        valid_tr = hs_tr.notna() & as_tr.notna() & ((hs_tr + as_tr) > 0)
+        valid_va = hs_va.notna() & as_va.notna() & ((hs_va + as_va) > 0)
+        if valid_tr.sum() < 80 or valid_va.sum() < 20:
+            return
+
+        margin_tr = hs_tr[valid_tr] - as_tr[valid_tr]
+        margin_va = hs_va[valid_va] - as_va[valid_va]
+        Xv_tr = X_train.loc[valid_tr]
+        Xv_va = X_val.loc[valid_va]
+
+        logger.info("Training Asian Handicap models (%d/%d rows) …", int(valid_tr.sum()), int(valid_va.sum()))
+
+        # AH -1 home: home wins by 2+ goals
+        y_ah1h_tr = (margin_tr >= 2).astype(int)
+        y_ah1h_va = (margin_va >= 2).astype(int)
+        if y_ah1h_tr.sum() >= 40:
+            m = self._fit_cls_safe("ah_minus1_home", Xv_tr, y_ah1h_tr, Xv_va, y_ah1h_va)
+            if m:
+                models["ah_minus1_home"] = m
+                logger.info("  ah_minus1_home fitted (rate=%.1f%%)", 100 * float(y_ah1h_tr.mean()))
+
+        # AH -1 away: away wins by 2+ goals
+        y_ah1a_tr = (margin_tr <= -2).astype(int)
+        y_ah1a_va = (margin_va <= -2).astype(int)
+        if y_ah1a_tr.sum() >= 40:
+            m = self._fit_cls_safe("ah_minus1_away", Xv_tr, y_ah1a_tr, Xv_va, y_ah1a_va)
+            if m:
+                models["ah_minus1_away"] = m
+                logger.info("  ah_minus1_away fitted (rate=%.1f%%)", 100 * float(y_ah1a_tr.mean()))
+
+        # AH +1 home: home doesn't lose by 2+ (wins, draws, or 1-goal loss)
+        y_ahp1h_tr = (margin_tr > -2).astype(int)
+        y_ahp1h_va = (margin_va > -2).astype(int)
+        m = self._fit_cls_safe("ah_plus1_home", Xv_tr, y_ahp1h_tr, Xv_va, y_ahp1h_va)
+        if m:
+            models["ah_plus1_home"] = m
+            logger.info("  ah_plus1_home fitted (rate=%.1f%%)", 100 * float(y_ahp1h_tr.mean()))
+
+        # AH +1 away: away doesn't lose by 2+
+        y_ahp1a_tr = (margin_tr < 2).astype(int)
+        y_ahp1a_va = (margin_va < 2).astype(int)
+        m = self._fit_cls_safe("ah_plus1_away", Xv_tr, y_ahp1a_tr, Xv_va, y_ahp1a_va)
+        if m:
+            models["ah_plus1_away"] = m
+            logger.info("  ah_plus1_away fitted (rate=%.1f%%)", 100 * float(y_ahp1a_tr.mean()))
+
     # ── Separate training ────────────────────────────────
 
     def train_separate(self) -> dict[str, Any]:
@@ -1481,6 +1795,7 @@ class Trainer:
         train_df, val_df = self.prepare_data()
         X_train, home_train, away_train = self._split_xy(train_df)
         X_val, home_val, away_val = self._split_xy(val_df)
+        X_train, X_val = self._apply_variance_filter(X_train, X_val)
 
         y_train_cls = (home_train > away_train).astype(int)
         y_val_cls = (home_val > away_val).astype(int)
@@ -1494,7 +1809,16 @@ class Trainer:
         winner_ensemble = EnsembleVoter()
         cls_metrics = winner_ensemble.fit_classifiers(X_train, y_train_cls, X_val, y_val_cls)
 
-        logger.info("Training total regressor …")
+        # Log top feature importances
+        try:
+            fi = winner_ensemble.get_feature_importances()
+            if fi:
+                top10 = list(fi.items())[:10]
+                logger.info("Top-10 winner features: %s", top10)
+                fi_path = self.models_dir / "feature_importances.json"
+                fi_path.write_text(json.dumps(fi, indent=2))
+        except Exception:
+            pass
         total_ensemble = EnsembleVoter()
         total_metrics = total_ensemble.fit_regressors(X_train, total_train, X_val, total_val)
 

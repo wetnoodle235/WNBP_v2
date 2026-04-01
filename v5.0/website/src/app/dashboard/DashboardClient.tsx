@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { fetchAPI } from "@/lib/api";
 import { useRecentlyViewed } from "@/lib/hooks";
+import UpcomingEventsWidget from "@/components/UpcomingEventsWidget";
 
 /* ── Types ──────────────────────────────────────────────────────── */
 
@@ -52,6 +53,13 @@ export default function DashboardClient() {
   const [revoking, setRevoking] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [referralData, setReferralData] = useState<{
+    rewards: Array<{tier_rewarded: string; days_granted: number; expires_at: string}>;
+    active_free_days: Record<string, number>;
+  } | null>(null);
+  const [referralTierPref, setReferralTierPref] = useState<string>("starter");
+  const [savingReferralTier, setSavingReferralTier] = useState(false);
+  const [referralCopied, setReferralCopied] = useState(false);
   const [trainedModels, setTrainedModels] = useState<TrainedModel[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [fetchErrors, setFetchErrors] = useState<{ models?: boolean; leaderboard?: boolean }>({});
@@ -108,14 +116,32 @@ export default function DashboardClient() {
     }
   }, [token]);
 
+  const fetchReferrals = useCallback(async () => {
+    if (!token) return;
+    const res = await fetchAPI<Record<string, unknown>>("/auth/referrals", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok && res.data) {
+      const d = (res.data as Record<string, unknown>).data ?? res.data;
+      setReferralData(d as any);
+    }
+  }, [token]);
+
   useEffect(() => {
     if (!isLoading && !user) {
       router.push("/login?callbackUrl=/dashboard");
       return;
     }
     // Fetch usage and subscription in parallel for faster load
-    Promise.all([fetchUsage(), fetchSubscription()]);
-  }, [isLoading, user, router, fetchUsage, fetchSubscription]);
+    Promise.all([fetchUsage(), fetchSubscription(), fetchReferrals()]);
+  }, [isLoading, user, router, fetchUsage, fetchSubscription, fetchReferrals]);
+
+  // Initialize referral tier pref from user data
+  useEffect(() => {
+    if (user && (user as any).referral_reward_tier) {
+      setReferralTierPref((user as any).referral_reward_tier);
+    }
+  }, [user]);
 
   async function handleCreateKey() {
     setActionError(null);
@@ -183,6 +209,24 @@ export default function DashboardClient() {
         }
       },
     });
+  }
+
+  async function handleSaveReferralTier(newTier: string) {
+    setSavingReferralTier(true);
+    const res = await fetchAPI<Record<string, unknown>>("/auth/referrals/reward-tier", {
+      method: "PUT",
+      headers: { ...authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ tier: newTier }),
+    });
+    setSavingReferralTier(false);
+    if (res.ok) setReferralTierPref(newTier);
+  }
+
+  function handleCopyReferralLink() {
+    const link = `${window.location.origin}/register?ref=${user?.referral_code ?? ""}`;
+    navigator.clipboard.writeText(link);
+    setReferralCopied(true);
+    setTimeout(() => setReferralCopied(false), 2000);
   }
 
   function handleCopyKey() {
@@ -363,6 +407,65 @@ export default function DashboardClient() {
       </section>
     </div>
 
+      {/* Referrals card */}
+      <section className="card dashboard-referral" aria-labelledby="dash-referral-heading">
+        <div className="card-header">
+          <h2 id="dash-referral-heading" className="card-heading">Referrals</h2>
+        </div>
+        <div className="card-body">
+          {/* Referral link */}
+          {user?.referral_code && (
+            <div className="dashboard-sub-row" style={{ marginBottom: "var(--space-3)" }}>
+              <span className="dashboard-sub-label">Your referral link</span>
+              <button
+                type="button"
+                className="api-key-copy"
+                onClick={handleCopyReferralLink}
+              >
+                {referralCopied ? "✓ Copied!" : "Copy Link"}
+              </button>
+            </div>
+          )}
+
+          {/* Reward tier preference */}
+          <div className="dashboard-sub-row" style={{ marginBottom: "var(--space-3)" }}>
+            <span className="dashboard-sub-label">Reward tier</span>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              {(["starter", "pro", "enterprise"] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  className={`btn btn-sm ${referralTierPref === t ? "btn-primary" : "btn-outline"}`}
+                  onClick={() => { setReferralTierPref(t); handleSaveReferralTier(t); }}
+                  disabled={savingReferralTier}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Earned days */}
+          {referralData?.active_free_days && Object.keys(referralData.active_free_days).length > 0 && (
+            <div>
+              <p className="dashboard-sub-label" style={{ marginBottom: "0.25rem" }}>Earned free days</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                {Object.entries(referralData.active_free_days).map(([tier, days]) => (
+                  <span key={tier} className={`tier-badge tier-badge-${tier}`}>
+                    {tier}: {days}d
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {(!referralData?.active_free_days || Object.keys(referralData.active_free_days).length === 0) && (
+            <p className="dashboard-text-muted-sm">
+              Share your referral link to earn free subscription days when friends subscribe.
+            </p>
+          )}
+        </div>
+      </section>
+
       {/* Prop Models Status */}
       {(trainedModels.length > 0 || fetchErrors.models) && (
         <section className="card dashboard-mt-6" aria-labelledby="dash-models-heading">
@@ -449,6 +552,9 @@ export default function DashboardClient() {
                 </div>
               </section>
             )}
+
+            {/* Upcoming Racing & Golf Events */}
+            <UpcomingEventsWidget sports={["f1", "indycar", "golf", "lpga"]} days={60} maxEvents={8} apiBase={API_BASE} />
 
             {/* Recently Viewed */}
             {recentPages.length > 0 && (

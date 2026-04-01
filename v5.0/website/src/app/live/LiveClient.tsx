@@ -26,6 +26,8 @@ interface GameItem {
   start_time?: string | null;
   period?: string | null;
   venue?: string | null;
+  broadcast?: string | null;
+  broadcast_url?: string | null;
 }
 
 interface LivePredictionItem {
@@ -81,6 +83,63 @@ interface Props {
 }
 
 const PER_PAGE = 12;
+
+const BROADCAST_LINKS: Record<string, string> = {
+  "abc": "https://abc.com/watch-live",
+  "apple tv": "https://tv.apple.com/",
+  "cbs": "https://www.paramountplus.com/live-tv/",
+  "cbs sports": "https://www.cbssports.com/live/",
+  "cbs sports network": "https://www.cbssports.com/live/",
+  "espn": "https://www.espn.com/watch/",
+  "espn+": "https://www.espn.com/watch/",
+  "fanatiz": "https://www.fanatiz.com/",
+  "fox": "https://www.foxsports.com/live",
+  "fox sports": "https://www.foxsports.com/live",
+  "fubo": "https://www.fubo.tv/",
+  "fubotv": "https://www.fubo.tv/",
+  "golf channel": "https://www.nbcsports.com/golf",
+  "golf chnl": "https://www.nbcsports.com/golf",
+  "max": "https://www.max.com/sports",
+  "mlb.tv": "https://www.mlb.com/live-stream-games",
+  "nba league pass": "https://www.nba.com/watch/league-pass-stream",
+  "nbc": "https://www.peacocktv.com/sports",
+  "nbc sports": "https://www.peacocktv.com/sports",
+  "paramount+": "https://www.paramountplus.com/",
+  "peacock": "https://www.peacocktv.com/sports",
+  "prime video": "https://www.primevideo.com/",
+  "tnt": "https://www.max.com/sports",
+  "tnt sports": "https://www.max.com/sports",
+};
+
+function splitBroadcasts(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[,/|]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function normalizeBroadcastToken(token: string): string {
+  return token.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function providerLink(token: string): string {
+  const normalized = normalizeBroadcastToken(token);
+  if (BROADCAST_LINKS[normalized]) {
+    return BROADCAST_LINKS[normalized];
+  }
+  return `https://www.google.com/search?q=${encodeURIComponent(`${token} live stream`)}`;
+}
+
+function normalizeWatchUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
+  }
+  return `https://${trimmed}`;
+}
 
 function isLive(status: string): boolean {
   const s = status.toLowerCase();
@@ -693,6 +752,8 @@ export function LiveClient({ games: initialGames, sports }: Props) {
               {pageSlice.map((game) => {
                 const live = isLive(game.status);
                 const sportColor = getSportColor(game.sport);
+                const broadcasts = splitBroadcasts(game.broadcast);
+                const directBroadcastUrl = normalizeWatchUrl(game.broadcast_url);
                 const homeLogoUrl = getTeamLogoUrl(game.sport, game.home_team_id);
                 const awayLogoUrl = getTeamLogoUrl(game.sport, game.away_team_id);
                 const prediction = livePredictions[String(game.id)];
@@ -1020,6 +1081,83 @@ export function LiveClient({ games: initialGames, sports }: Props) {
                             : formatGameTime(game.date)}
                         </span>
                       </div>
+
+                      {(broadcasts.length > 0 || directBroadcastUrl || game.id) && (
+                        <div
+                          style={{
+                            marginTop: "var(--space-2)",
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: "var(--space-2)",
+                            alignItems: "center",
+                          }}
+                        >
+                          {directBroadcastUrl && (
+                            <a
+                              href={directBroadcastUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                border: "1px solid var(--border)",
+                                borderRadius: "9999px",
+                                padding: "2px 8px",
+                                fontSize: "0.68rem",
+                                fontWeight: 700,
+                                color: "inherit",
+                                textDecoration: "none",
+                                background: "var(--surface)",
+                              }}
+                              title="Open official live stream"
+                            >
+                              Watch live
+                            </a>
+                          )}
+
+                          {broadcasts.slice(0, 3).map((network) => (
+                            <a
+                              key={`${game.sport}-${game.id}-${network}`}
+                              href={providerLink(network)}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                border: "1px solid var(--border)",
+                                borderRadius: "9999px",
+                                padding: "2px 8px",
+                                fontSize: "0.68rem",
+                                fontWeight: 600,
+                                color: "inherit",
+                                textDecoration: "none",
+                              }}
+                              title={`Watch on ${network}`}
+                            >
+                              Watch {network}
+                            </a>
+                          ))}
+
+                          <a
+                            href={`/games/${game.sport}/${game.id}`}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              border: "1px solid var(--border)",
+                              borderRadius: "9999px",
+                              padding: "2px 8px",
+                              fontSize: "0.68rem",
+                              fontWeight: 600,
+                              color: "inherit",
+                              textDecoration: "none",
+                              background: "var(--surface)",
+                            }}
+                            title="Open game detail"
+                          >
+                            Live view
+                          </a>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

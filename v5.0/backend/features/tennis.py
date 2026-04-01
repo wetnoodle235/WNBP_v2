@@ -29,6 +29,26 @@ class TennisExtractor(BaseFeatureExtractor):
     def __init__(self, sport: str, data_dir: Path) -> None:
         super().__init__(data_dir)
         self.sport = sport
+        self._all_games_cache: pd.DataFrame | None = None
+
+    def _load_all_games(self) -> pd.DataFrame:
+        """Load and cache all seasons' game data for cross-season form calculations."""
+        if self._all_games_cache is not None:
+            return self._all_games_cache
+        sport_dir = self.data_dir / "normalized" / self.sport
+        frames = []
+        for p in sorted(sport_dir.glob("games_*.parquet")):
+            try:
+                df = pd.read_parquet(p)
+                frames.append(df)
+            except Exception:
+                pass
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if not combined.empty and "date" in combined.columns:
+            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+            combined.sort_values("date", inplace=True, ignore_index=True)
+        self._all_games_cache = combined
+        return combined
 
     def extract_all(
         self, season: int, *, existing_game_ids: set[str] | None = None,
@@ -38,6 +58,7 @@ class TennisExtractor(BaseFeatureExtractor):
         This prevents 9,605× redundant file loads that were causing hangs.
         """
         games = self.load_games(season)
+        all_games = self._load_all_games()
         odds = self.load_odds(season)
         standings = self.load_standings(season)
         if games.empty:
@@ -79,7 +100,7 @@ class TennisExtractor(BaseFeatureExtractor):
 
         for _, game in games.iterrows():
             try:
-                f = self.extract_game_features_cached(game.to_dict(), games, odds, standings)
+                f = self.extract_game_features_cached(game.to_dict(), all_games, odds, standings)
                 features.append(f)
                 success += 1
             except Exception as e:
@@ -190,6 +211,60 @@ class TennisExtractor(BaseFeatureExtractor):
         features.update({f"home_{k}": v for k, v in h_elo.items()})
         a_elo = self.elo_features(a_id, h_id, date, games_df)
         features.update({f"away_{k}": v for k, v in a_elo.items()})
+
+        # Key differentials
+        features["surface_win_pct_diff"] = (
+            features.get("home_surface_win_pct", 0.0) - features.get("away_surface_win_pct", 0.0)
+        )
+        features["first_serve_pct_diff"] = (
+            features.get("home_first_serve_pct", 0.0) - features.get("away_first_serve_pct", 0.0)
+        )
+        features["first_serve_won_pct_diff"] = (
+            features.get("home_first_serve_won_pct", 0.0) - features.get("away_first_serve_won_pct", 0.0)
+        )
+        features["second_serve_won_pct_diff"] = (
+            features.get("home_second_serve_won_pct", 0.0) - features.get("away_second_serve_won_pct", 0.0)
+        )
+        features["break_point_conversion_diff"] = (
+            features.get("home_break_point_conversion", 0.0) - features.get("away_break_point_conversion", 0.0)
+        )
+        features["break_points_saved_pct_diff"] = (
+            features.get("home_break_points_saved_pct", 0.0) - features.get("away_break_points_saved_pct", 0.0)
+        )
+        features["aces_per_match_diff"] = (
+            features.get("home_aces_per_match", 0.0) - features.get("away_aces_per_match", 0.0)
+        )
+        features["double_faults_per_match_diff"] = (
+            features.get("away_double_faults_per_match", 0.0) - features.get("home_double_faults_per_match", 0.0)
+        )
+        features["set_win_rate_diff"] = (
+            features.get("home_set_win_rate", 0.0) - features.get("away_set_win_rate", 0.0)
+        )
+        features["elo_diff"] = (
+            features.get("home_elo", 1500.0) - features.get("away_elo", 1500.0)
+        )
+        features["fatigue_diff"] = (
+            features.get("away_matches_7d", 0.0) - features.get("home_matches_7d", 0.0)
+        )
+
+        # Form differentials (overall recent form)
+        features["form_win_pct_diff"] = (
+            features.get("home_form_win_pct", 0.0) - features.get("away_form_win_pct", 0.0)
+        )
+        features["form_ppg_diff"] = (
+            features.get("home_form_ppg", 0.0) - features.get("away_form_ppg", 0.0)
+        )
+        features["form_margin_diff"] = (
+            features.get("home_form_avg_margin", 0.0) - features.get("away_form_avg_margin", 0.0)
+        )
+        # Ranking points differential (raw points, not just rank number)
+        features["ranking_points_diff"] = (
+            features.get("home_ranking_points", 0.0) - features.get("away_ranking_points", 0.0)
+        )
+        # Surface-specific H2H win rate on current surface
+        h2h_surface = self._h2h_surface_win_pct(h_id, a_id, surface, games_df, date=date)
+        features["h2h_surface_win_pct"] = h2h_surface
+        features["h2h_surface_win_pct_diff"] = h2h_surface - 0.5  # centred signal
 
         # Odds
         odds = self._odds_features(game_id, odds_df)
@@ -483,99 +558,40 @@ class TennisExtractor(BaseFeatureExtractor):
         total = sets_won.sum() + sets_lost.sum()
         return float(sets_won.sum() / total) if total > 0 else 0.0
 
+
+    def _h2h_surface_win_pct(
+        self,
+        player_a: str,
+        player_b: str,
+        surface: str,
+        games: pd.DataFrame,
+        date: str | None = None,
+        n: int = 15,
+    ) -> float:
+        """H2H win rate for player_a vs player_b on the specific surface."""
+        if games.empty:
+            return 0.5  # neutral default
+
+        effective_date = date or "2099-01-01"
+        a_games = self._team_games_before(games, player_a, effective_date, limit=500)
+        if a_games.empty:
+            return 0.5
+
+        is_home_a = a_games["home_team_id"] == player_a
+        opp = a_games["away_team_id"].where(is_home_a, a_games["home_team_id"])
+        h2h = a_games[opp == player_b]
+
+        if "surface" in h2h.columns:
+            h2h = h2h[h2h["surface"].str.lower().eq(surface)]
+
+        h2h = h2h.head(n)
+        if h2h.empty:
+            return 0.5
+
+        wins_a = self._vec_win_flags(h2h, player_a)
+        return float(wins_a.mean())
+
     # ── Main Extraction ───────────────────────────────────
-
-    def extract_game_features(self, game: dict[str, Any]) -> dict[str, Any]:
-        season = game.get("season", 0)
-        games_df = self.load_games(season)
-        odds_df = self.load_odds(season)
-        standings_df = self.load_standings(season)
-
-        h_id = str(game.get("home_team_id", game.get("player_a_id", "")))
-        a_id = str(game.get("away_team_id", game.get("player_b_id", "")))
-        date = str(game.get("date", ""))
-        game_id = str(game.get("id", ""))
-        surface = str(game.get("surface", "hard")).lower()
-
-        features: dict[str, Any] = {
-            "game_id": game_id,
-            "date": date,
-            "home_team_id": h_id,
-            "away_team_id": a_id,
-            "home_score": pd.to_numeric(game.get("home_score"), errors="coerce"),
-            "away_score": pd.to_numeric(game.get("away_score"), errors="coerce"),
-        }
-
-        # Surface encoding
-        for s in _SURFACES:
-            features[f"surface_{s}"] = 1.0 if surface == s else 0.0
-
-        # Match format: Grand Slams (best-of-5) vs regular (best-of-3)
-        best_of = int(game.get("best_of", 3) or 3)
-        features["is_best_of_5"] = 1.0 if best_of >= 5 else 0.0
-
-        # Overall form
-        h_form = self.team_form(h_id, date, games_df, window=10)
-        features.update({f"home_{k}": v for k, v in h_form.items()})
-        a_form = self.team_form(a_id, date, games_df, window=10)
-        features.update({f"away_{k}": v for k, v in a_form.items()})
-
-        # Surface form
-        h_sf = self._surface_form(h_id, date, surface, games_df)
-        features["home_surface_win_pct"] = h_sf["surface_win_pct"]
-        features["home_surface_matches"] = float(h_sf["surface_matches"])
-        a_sf = self._surface_form(a_id, date, surface, games_df)
-        features["away_surface_win_pct"] = a_sf["surface_win_pct"]
-        features["away_surface_matches"] = float(a_sf["surface_matches"])
-
-        # H2H
-        h2h = self.head_to_head(h_id, a_id, games_df, date=date)
-        features.update(h2h)
-
-        # Serve — use rolling player stats (player_stats files) + game history
-        h_serve = self._player_serve_stats(h_id, date, games_df=games_df)
-        features.update({f"home_{k}": v for k, v in h_serve.items()})
-        a_serve = self._player_serve_stats(a_id, date, games_df=games_df)
-        features.update({f"away_{k}": v for k, v in a_serve.items()})
-
-        # Return
-        h_ret = {"break_point_conversion": h_serve.get("break_point_conversion", 0.0),
-                 "break_points_saved_pct": h_serve.get("break_points_saved_pct", 0.0),
-                 "return_points_won_pct": h_serve.get("return_points_won_pct", 0.0)}
-        features.update({f"home_{k}": v for k, v in h_ret.items()})
-        a_ret = {"break_point_conversion": a_serve.get("break_point_conversion", 0.0),
-                 "break_points_saved_pct": a_serve.get("break_points_saved_pct", 0.0),
-                 "return_points_won_pct": a_serve.get("return_points_won_pct", 0.0)}
-        features.update({f"away_{k}": v for k, v in a_ret.items()})
-
-        # Ranking
-        h_rank = self._ranking_features(game, "home_", standings_df=standings_df)
-        features.update({f"home_{k}": v for k, v in h_rank.items()})
-        a_rank = self._ranking_features(game, "away_", standings_df=standings_df)
-        features.update({f"away_{k}": v for k, v in a_rank.items()})
-        features["ranking_diff"] = features["home_ranking"] - features["away_ranking"]
-
-        # Fatigue
-        h_fat = self._fatigue_features(h_id, date, games_df)
-        features.update({f"home_{k}": v for k, v in h_fat.items()})
-        a_fat = self._fatigue_features(a_id, date, games_df)
-        features.update({f"away_{k}": v for k, v in a_fat.items()})
-
-        # Set win rate
-        features["home_set_win_rate"] = self._set_win_rate(h_id, date, games_df)
-        features["away_set_win_rate"] = self._set_win_rate(a_id, date, games_df)
-
-        # ELO ratings (computed from match history)
-        h_elo = self.elo_features(h_id, a_id, date, games_df)
-        features.update({f"home_{k}": v for k, v in h_elo.items()})
-        a_elo = self.elo_features(a_id, h_id, date, games_df)
-        features.update({f"away_{k}": v for k, v in a_elo.items()})
-
-        # Odds
-        odds = self._odds_features(game_id, odds_df)
-        features.update(odds)
-
-        return features
 
     def extract_game_features(self, game: dict[str, Any]) -> dict[str, Any]:
         """Backwards-compatible extract_game_features that loads games/odds locally.
@@ -583,7 +599,7 @@ class TennisExtractor(BaseFeatureExtractor):
         Called by external code. For extract_all, use extract_game_features_cached instead.
         """
         season = game.get("season", 0)
-        games_df = self.load_games(season)
+        games_df = self._load_all_games()
         odds_df = self.load_odds(season)
         standings_df = self.load_standings(season)
         return self.extract_game_features_cached(game, games_df, odds_df, standings_df)
@@ -622,6 +638,14 @@ class TennisExtractor(BaseFeatureExtractor):
             # ELO
             "home_elo", "home_elo_diff", "home_elo_expected_win",
             "away_elo", "away_elo_diff", "away_elo_expected_win",
+            # Differentials
+            "surface_win_pct_diff", "first_serve_pct_diff", "first_serve_won_pct_diff",
+            "second_serve_won_pct_diff", "break_point_conversion_diff", "break_points_saved_pct_diff",
+            "aces_per_match_diff", "double_faults_per_match_diff", "set_win_rate_diff",
+            "elo_diff", "fatigue_diff",
+            "form_win_pct_diff", "form_ppg_diff", "form_margin_diff",
+            "ranking_points_diff",
+            "h2h_surface_win_pct", "h2h_surface_win_pct_diff",
             # Odds
             "home_moneyline", "away_moneyline", "spread", "total", "home_implied_prob",
         ]

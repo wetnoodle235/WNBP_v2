@@ -43,6 +43,26 @@ class BasketballExtractor(BaseFeatureExtractor):
         super().__init__(data_dir)
         self.sport = sport
         self._standings_conf_cache: dict[int, dict[str, str]] = {}
+        self._all_games_cache: pd.DataFrame | None = None
+
+    def _load_all_games(self) -> pd.DataFrame:
+        """Load and cache all seasons' game data for cross-season form calculations."""
+        if self._all_games_cache is not None:
+            return self._all_games_cache
+        sport_dir = self.data_dir / "normalized" / self.sport
+        frames = []
+        for p in sorted(sport_dir.glob("games_*.parquet")):
+            try:
+                df = pd.read_parquet(p)
+                frames.append(df)
+            except Exception:
+                pass
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if not combined.empty and "date" in combined.columns:
+            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+            combined.sort_values("date", inplace=True, ignore_index=True)
+        self._all_games_cache = combined
+        return combined
 
     # ── Score-Based Advanced Helpers ──────────────────────
 
@@ -181,6 +201,9 @@ class BasketballExtractor(BaseFeatureExtractor):
             "stl_pg": 0.0, "blk_pg": 0.0,
             "efg_pct": 0.0, "ts_pct": 0.0, "possessions_pg": 0.0,
             "fouls_pg": 0.0, "largest_lead_pg": 0.0,
+            "off_rtg_pg": 0.0, "def_rtg_pg": 0.0, "net_rtg_pg": 0.0,
+            "three_pct": 0.0, "three_a_pg": 0.0, "ft_pct": 0.0,
+            "ast_to_ratio": 0.0,
         }
         if recent.empty:
             return defaults
@@ -223,6 +246,25 @@ class BasketballExtractor(BaseFeatureExtractor):
         possessions = float(valid_poss.mean()) if len(valid_poss) > 0 else \
             float((fga + 0.44 * fta - orb + to_) / max(n, 1))
 
+        # Offensive / Defensive / Net ratings (per-100-possessions from game data)
+        off_rtg_raw = _col_team("home_offensive_rating", "away_offensive_rating")
+        def_rtg_raw = _col_team("home_defensive_rating", "away_defensive_rating")
+        net_rtg_raw = _col_team("home_net_rating", "away_net_rating")
+        off_rtg = float(off_rtg_raw[off_rtg_raw > 0].mean()) if len(off_rtg_raw[off_rtg_raw > 0]) > 0 else 0.0
+        def_rtg = float(def_rtg_raw[def_rtg_raw > 0].mean()) if len(def_rtg_raw[def_rtg_raw > 0]) > 0 else 0.0
+        net_rtg = float(net_rtg_raw.mean()) if len(net_rtg_raw) > 0 else 0.0
+
+        # 3-point shooting
+        three_a = _col_team("home_three_a", "away_three_a").sum()
+        three_pct = float(three_m / max(three_a, 1))
+
+        # Free throw efficiency
+        ft_pct = float(ftm / max(fta, 1))
+
+        # Assist-to-turnover ratio
+        ast = _col_team("home_assists", "away_assists").sum()
+        ast_to = float(ast / max(to_, 1))
+
         return {
             "fast_break_pg": float(fb / n),
             "paint_pts_pg": float(pp / n),
@@ -237,6 +279,13 @@ class BasketballExtractor(BaseFeatureExtractor):
             "possessions_pg": possessions,
             "fouls_pg": float(fouls / n),
             "largest_lead_pg": float(largest_lead / n),
+            "off_rtg_pg": off_rtg,
+            "def_rtg_pg": def_rtg,
+            "net_rtg_pg": net_rtg,
+            "three_pct": three_pct,
+            "three_a_pg": float(three_a / n),
+            "ft_pct": ft_pct,
+            "ast_to_ratio": ast_to,
         }
 
     # ── Conference / Standings ────────────────────────────
@@ -435,10 +484,11 @@ class BasketballExtractor(BaseFeatureExtractor):
 
     def extract_game_features(self, game: dict[str, Any]) -> dict[str, Any]:
         season = game.get("season", 0)
-        games_df = self.load_games(season)
+        games_df = self._load_all_games()
+        current_season_games = self.load_games(season)
         odds_df = self.load_odds(season)
 
-        h_id, a_id = self._resolve_game_team_ids(game, games_df)
+        h_id, a_id = self._resolve_game_team_ids(game, current_season_games)
         date = str(game.get("date", ""))
         game_id = str(game.get("id", ""))
         home_team = str(game.get("home_team", ""))
@@ -508,6 +558,7 @@ class BasketballExtractor(BaseFeatureExtractor):
         # ── Momentum ──────────────────────────────────────
         features["home_momentum"] = self.momentum(h_id, date, games_df)
         features["away_momentum"] = self.momentum(a_id, date, games_df)
+        features["momentum_diff"] = features["home_momentum"] - features["away_momentum"]
 
         # ── Home/away splits ──────────────────────────────
         h_splits = self.home_away_splits(h_id, games_df, season)
@@ -616,6 +667,16 @@ class BasketballExtractor(BaseFeatureExtractor):
         features["efg_pct_diff"] = h_box["efg_pct"] - a_box["efg_pct"]
         features["ts_pct_diff"] = h_box["ts_pct"] - a_box["ts_pct"]
         features["pace_diff"] = h_box["possessions_pg"] - a_box["possessions_pg"]
+        # Advanced rating differentials
+        features["off_rtg_diff"] = h_box["off_rtg_pg"] - a_box["off_rtg_pg"]
+        features["def_rtg_diff"] = a_box["def_rtg_pg"] - h_box["def_rtg_pg"]  # lower def_rtg is better → invert
+        features["net_rtg_diff"] = h_box["net_rtg_pg"] - a_box["net_rtg_pg"]
+        features["three_pct_diff"] = h_box["three_pct"] - a_box["three_pct"]
+        features["ft_pct_diff"] = h_box["ft_pct"] - a_box["ft_pct"]
+        features["ast_to_diff"] = h_box["ast_to_ratio"] - a_box["ast_to_ratio"]
+        features["stl_diff"] = h_box["stl_pg"] - a_box["stl_pg"]
+        features["blk_diff"] = h_box["blk_pg"] - a_box["blk_pg"]
+        features["def_reb_diff"] = h_box["def_reb_pg"] - a_box["def_reb_pg"]
 
         # ── Period/Quarter Rolling Stats ─────────────────
         h_per = self._period_rolling_stats(h_id, date, games_df, n=10, period_scheme="quarters")
@@ -626,6 +687,23 @@ class BasketballExtractor(BaseFeatureExtractor):
         features["period_first_win_pct_diff"] = h_per["period_first_win_pct"] - a_per["period_first_win_pct"]
         features["period_first_half_win_pct_diff"] = h_per["period_first_half_win_pct"] - a_per["period_first_half_win_pct"]
         features["period_comeback_diff"] = h_per["period_comeback_rate"] - a_per["period_comeback_rate"]
+        features["period_first_opp_ppg_diff"] = h_per["period_first_opp_ppg"] - a_per["period_first_opp_ppg"]
+        features["period_second_half_ppg_diff"] = h_per["period_second_half_ppg"] - a_per["period_second_half_ppg"]
+        features["period_ot_rate_diff"] = h_per["period_ot_rate"] - a_per["period_ot_rate"]
+
+        # Player-stats differentials
+        features["pstats_plus_minus_diff"] = (
+            features.get("home_pstats_avg_plus_minus", 0.0) - features.get("away_pstats_avg_plus_minus", 0.0)
+        )
+        features["pstats_top_scorer_diff"] = (
+            features.get("home_pstats_top_scorer_ppg", 0.0) - features.get("away_pstats_top_scorer_ppg", 0.0)
+        )
+        features["pstats_ast_to_diff"] = (
+            features.get("home_pstats_ast_to_ratio", 0.0) - features.get("away_pstats_ast_to_ratio", 0.0)
+        )
+        features["pstats_ts_pct_diff"] = (
+            features.get("home_pstats_ts_pct", 0.0) - features.get("away_pstats_ts_pct", 0.0)
+        )
 
         return features
 
@@ -650,7 +728,7 @@ class BasketballExtractor(BaseFeatureExtractor):
             # H2H
             "h2h_games", "h2h_win_pct", "h2h_avg_margin",
             # Momentum
-            "home_momentum", "away_momentum",
+            "home_momentum", "away_momentum", "momentum_diff",
             # Splits
             "home_home_win_pct", "away_away_win_pct",
             # Season stats
@@ -721,9 +799,32 @@ class BasketballExtractor(BaseFeatureExtractor):
             "home_fast_break_pg", "home_paint_pts_pg", "home_second_chance_pg",
             "home_off_reb_pg", "home_def_reb_pg", "home_to_pg", "home_stl_pg", "home_blk_pg",
             "home_efg_pct", "home_ts_pct", "home_possessions_pg", "home_fouls_pg", "home_largest_lead_pg",
+            "home_off_rtg_pg", "home_def_rtg_pg", "home_net_rtg_pg",
+            "home_three_pct", "home_three_a_pg", "home_ft_pct", "home_ast_to_ratio",
             "away_fast_break_pg", "away_paint_pts_pg", "away_second_chance_pg",
             "away_off_reb_pg", "away_def_reb_pg", "away_to_pg", "away_stl_pg", "away_blk_pg",
             "away_efg_pct", "away_ts_pct", "away_possessions_pg", "away_fouls_pg", "away_largest_lead_pg",
+            "away_off_rtg_pg", "away_def_rtg_pg", "away_net_rtg_pg",
+            "away_three_pct", "away_three_a_pg", "away_ft_pct", "away_ast_to_ratio",
             "fast_break_diff", "paint_pts_diff", "off_reb_diff", "to_diff",
             "efg_pct_diff", "ts_pct_diff", "pace_diff",
+            "off_rtg_diff", "def_rtg_diff", "net_rtg_diff",
+            "three_pct_diff", "ft_pct_diff", "ast_to_diff",
+            "stl_diff", "blk_diff", "def_reb_diff",
+            # Quarter rolling stats
+            "home_period_first_ppg", "away_period_first_ppg",
+            "home_period_first_opp_ppg", "away_period_first_opp_ppg",
+            "home_period_first_win_pct", "away_period_first_win_pct",
+            "home_period_first_half_ppg", "away_period_first_half_ppg",
+            "home_period_first_half_opp_ppg", "away_period_first_half_opp_ppg",
+            "home_period_first_half_win_pct", "away_period_first_half_win_pct",
+            "home_period_second_half_ppg", "away_period_second_half_ppg",
+            "home_period_comeback_rate", "away_period_comeback_rate",
+            "home_period_ot_rate", "away_period_ot_rate",
+            "period_first_ppg_diff", "period_first_opp_ppg_diff",
+            "period_first_win_pct_diff", "period_first_half_win_pct_diff",
+            "period_second_half_ppg_diff", "period_comeback_diff", "period_ot_rate_diff",
+            # Player-stats differentials
+            "pstats_plus_minus_diff", "pstats_top_scorer_diff",
+            "pstats_ast_to_diff", "pstats_ts_pct_diff",
         ]

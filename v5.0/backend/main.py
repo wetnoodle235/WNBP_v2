@@ -378,15 +378,46 @@ def _build_sellable_openapi(app: FastAPI) -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: init auth DB, warm cache. Shutdown: cleanup."""
+    import asyncio
+    from auth.database import close_pool
+
     logger.info("Initialising auth database …")
     await init_db()
     logger.info("Warming data cache …")
     ds = get_data_service()
     ds.warm_cache(ALL_SPORTS)
     logger.info("Cache warm-up complete.")
+
+    # Periodically evict stale rate-limit buckets to prevent unbounded growth.
+    _rl_middleware: RateLimitMiddleware | None = None
+    for mw in app.middleware_stack.__dict__.get("app", []):  # type: ignore[attr-defined]
+        if isinstance(mw, RateLimitMiddleware):
+            _rl_middleware = mw
+            break
+
+    async def _cleanup_rate_limiter() -> None:
+        while True:
+            await asyncio.sleep(3600)  # run every hour
+            try:
+                if _rl_middleware is not None:
+                    removed = _rl_middleware.cleanup_stale()
+                    if removed:
+                        logger.debug("Rate-limit cleanup removed %d stale buckets", removed)
+            except Exception:
+                pass
+
+    cleanup_task = asyncio.create_task(_cleanup_rate_limiter())
+
     yield
-    logger.info("Shutting down — clearing cache.")
+
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Shutting down — clearing cache and closing DB pool.")
     ds.clear_cache()
+    await close_pool()
 
 
 def create_app() -> FastAPI:
@@ -459,7 +490,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(GZipMiddleware, minimum_size=500)
+    app.add_middleware(GZipMiddleware, minimum_size=5000)
     app.add_middleware(
         RateLimitMiddleware,
         config=RateLimitConfig(

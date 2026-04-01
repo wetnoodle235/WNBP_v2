@@ -508,6 +508,48 @@ def _extract_broadcast(comp: dict[str, Any]) -> str | None:
     return None
 
 
+def _iter_candidate_urls(obj: Any) -> Iterator[str]:
+    """Yield URL-like strings found recursively in nested provider payloads."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(value, str) and key in {"href", "url", "link", "mobile", "web"}:
+                yield value
+            yield from _iter_candidate_urls(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _iter_candidate_urls(item)
+
+
+def _is_watch_url(url: str) -> bool:
+    """Return True when *url* looks like a user-facing watch/live stream page."""
+    if not isinstance(url, str):
+        return False
+    candidate = url.strip().lower()
+    if not candidate.startswith(("http://", "https://")):
+        return False
+
+    blocked = (
+        "odds", "sportsbook", "draftkings", "fanduel", "betmgm", "caesars", "pointsbet", "wynn",
+    )
+    if any(tok in candidate for tok in blocked):
+        return False
+
+    hints = (
+        "watch", "stream", "live", "tv.apple.com", "mlb.com/live", "nba.com/watch", "espn.com/watch",
+        "foxsports.com/live", "paramountplus.com/live", "peacocktv.com/sports", "fubo.tv",
+    )
+    return any(tok in candidate for tok in hints)
+
+
+def _extract_broadcast_url(*payloads: Any) -> str | None:
+    """Extract first plausible live-view URL from one or more provider payload objects."""
+    for payload in payloads:
+        for url in _iter_candidate_urls(payload):
+            if _is_watch_url(url):
+                return url
+    return None
+
+
 # ── Merge / Validate / Write helpers ──────────────────────
 
 def _merge_records(
@@ -954,7 +996,7 @@ def _espn_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
                         has_home_away = True
 
                 # Golf / F1 / individual sports: competitors are athletes, not teams
-                if not has_home_away and sport in ("golf", "f1"):
+                if not has_home_away and sport in ("golf", "f1", "indycar", "lpga", "mma", "ufc"):
                     competitors = comp.get("competitors", [])
                     # Sort by order (1 = leader/winner)
                     sorted_comps = sorted(
@@ -993,6 +1035,14 @@ def _espn_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
                 if status == "scheduled" and comp.get("status", {}).get("type", {}).get("completed"):
                     status = "final"
                 game_date = _utc_to_et_date(comp.get("date") or "") or (comp.get("date") or "")[:10] or None
+                # For racing/event sports: if date is in the future, override erroneous 'final' status
+                if status == "final" and game_date:
+                    try:
+                        from datetime import date as _date
+                        if str(game_date) > _date.today().isoformat():
+                            status = "scheduled"
+                    except Exception:
+                        pass
                 # Extract start_time from full ISO datetime
                 comp_date_str = comp.get("date") or ""
                 game_start_time = _safe_datetime(comp_date_str) if len(comp_date_str) > 10 else None
@@ -1018,6 +1068,7 @@ def _espn_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
                 "away_score": away_score,
                 "venue": venue_name,
                 "broadcast": _extract_broadcast(competitions[0]) if competitions else None,
+                "broadcast_url": _extract_broadcast_url(competitions[0], game_info) if competitions else _extract_broadcast_url(game_info),
                 "attendance": _safe_int(game_info.get("attendance")),
             }
             # Normalise empty team IDs to None
@@ -1026,16 +1077,26 @@ def _espn_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
             if not rec.get("away_team_id"):
                 rec["away_team_id"] = None
 
-            # Golf / F1: store race/tournament name and winner info
-            if sport in ("golf", "f1"):
+            # Golf / F1 / IndyCar / LPGA: store race/tournament name and winner info
+            if sport in ("golf", "f1", "indycar", "lpga"):
                 scoreboard = data.get("scoreboard", {})
                 event_obj = summary.get("event", scoreboard)
-                tournament_name = event_obj.get("name") or event_obj.get("shortName") or ""
+                tournament_name = (event_obj.get("name") or scoreboard.get("name")
+                                   or event_obj.get("shortName") or "")
                 rec["race_name"] = tournament_name
-                rec["winner_name"] = rec["home_team"]  # winner = home
+                rec["winner_name"] = rec["home_team"]  # winner = home (order=1)
                 if sport == "f1":
                     circuit = scoreboard.get("circuit", {})
                     rec["venue"] = circuit.get("fullName") or rec.get("venue")
+                elif sport == "indycar":
+                    # IndyCar: use venue from competition location field
+                    comps_data = scoreboard.get("competitions", [])
+                    if comps_data:
+                        loc = comps_data[0].get("venue") or comps_data[0].get("location", {})
+                        if isinstance(loc, dict):
+                            rec["venue"] = loc.get("fullName") or loc.get("name") or rec.get("venue")
+                        elif isinstance(loc, str):
+                            rec["venue"] = loc or rec.get("venue")
 
             # Extract quarter/period scores and team stats from header competitors
             if competitions:
@@ -2135,6 +2196,7 @@ def _espn_scoreboard_games(base: Path, sport: str, season: str) -> list[dict[str
                 "away_score": _safe_int(away.get("score")),
                 "venue": c.get("venue", {}).get("fullName"),
                 "broadcast": _extract_broadcast(c),
+                "broadcast_url": _extract_broadcast_url(c, event),
                 "attendance": _safe_int(c.get("attendance")),
                 "season_type": None,
             }
@@ -2981,6 +3043,7 @@ def _nflfastr_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]
             "away_score": _safe_int(g.get("away_score")),
             "venue": None,
             "broadcast": None,
+            "broadcast_url": None,
             "attendance": None,
             "season_type": _safe_str(g.get("season_type")),
         }
@@ -3911,11 +3974,17 @@ def _ergast_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
         locality = loc.get("locality") if isinstance(loc, dict) else None
         country = loc.get("country") if isinstance(loc, dict) else None
+        _race_date = r.get("date", "")
+        from datetime import date as _d_cls
+        try:
+            _ergast_status = "final" if _race_date <= _d_cls.today().isoformat() else "scheduled"
+        except Exception:
+            _ergast_status = "final" if results else "scheduled"
         records.append({
             "id": f"{r.get('season', season)}_{round_num or r.get('round', '')}",
             "season": season,
-            "date": r.get("date"),
-            "status": "final",
+            "date": _race_date,
+            "status": _ergast_status,
             "home_team": race_name,
             "away_team": f"{locality}, {country}" if locality and country else (country or locality or ""),
             "home_team_id": str(round_num or ""),
@@ -4120,6 +4189,14 @@ def _openf1_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
         rf_count = sum(1 for e in rc_data if "RED FLAG" in str(e.get("message", "")).upper())
 
         race_name = f"{country} Grand Prix"
+        from datetime import date as _d_cls
+        _race_status = "final"
+        if date_only:
+            try:
+                if date_only > _d_cls.today().isoformat():
+                    _race_status = "scheduled"
+            except Exception:
+                pass
         records.append({
             "id": f"openf1_{sk}",
             "date": date_only,
@@ -4128,7 +4205,7 @@ def _openf1_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
             "away_team": f"{location}, {country}" if location and country else (country or location or ""),
             "home_team_id": str(race.get("circuit_key", "")),
             "away_team_id": None,
-            "status": "final",
+            "status": _race_status,
             "venue": f"{circuit}, {location}",
             "season": season,
             "source": "openf1",
@@ -4473,6 +4550,7 @@ def _lahman_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
             "away_score": _safe_int(t.get("L")),
             "venue": _safe_str(t.get("park")),
             "broadcast": None,
+            "broadcast_url": None,
             "attendance": _safe_int(t.get("attendance")),
             "season_type": "regular",
         })
@@ -6711,6 +6789,7 @@ def _apisports_games(
             "attendance": None,
             "weather": None,
             "broadcast": None,
+            "broadcast_url": None,
             "start_time": start_time,
             "period": str(fixture.get("status", {}).get("elapsed", "")) if status_short not in ("FT", "NS") else None,
             "is_neutral_site": False,

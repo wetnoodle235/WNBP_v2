@@ -31,6 +31,7 @@ class User:
     referral_code: str = ""
     referred_by: Optional[str] = None
     stripe_customer_id: Optional[str] = None
+    referral_reward_tier: str = "starter"
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -117,10 +118,10 @@ async def create_user(
     async with get_db() as db:
         await db.execute(
             """INSERT INTO users
-               (id, email, password_hash, display_name, tier, api_key, referral_code, referred_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, referral_reward_tier)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (user.id, user.email, user.password_hash, user.display_name,
-             user.tier, user.api_key, user.referral_code, user.referred_by),
+             user.tier, user.api_key, user.referral_code, user.referred_by, "starter"),
         )
         await db.commit()
     return user
@@ -128,7 +129,10 @@ async def create_user(
 
 async def get_user_by_email(email: str) -> Optional[User]:
     async with get_db() as db:
-        cursor = await db.execute("SELECT * FROM users WHERE email = ?", (email,))
+        cursor = await db.execute(
+            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, created_at, updated_at FROM users WHERE email = ?",
+            (email,),
+        )
         row = await cursor.fetchone()
         if not row:
             return None
@@ -137,7 +141,10 @@ async def get_user_by_email(email: str) -> Optional[User]:
 
 async def get_user_by_id(user_id: str) -> Optional[User]:
     async with get_db() as db:
-        cursor = await db.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        cursor = await db.execute(
+            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, created_at, updated_at FROM users WHERE id = ?",
+            (user_id,),
+        )
         row = await cursor.fetchone()
         if not row:
             return None
@@ -146,7 +153,10 @@ async def get_user_by_id(user_id: str) -> Optional[User]:
 
 async def get_user_by_api_key(api_key: str) -> Optional[User]:
     async with get_db() as db:
-        cursor = await db.execute("SELECT * FROM users WHERE api_key = ?", (api_key,))
+        cursor = await db.execute(
+            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, created_at, updated_at FROM users WHERE api_key = ?",
+            (api_key,),
+        )
         row = await cursor.fetchone()
         if not row:
             return None
@@ -155,7 +165,10 @@ async def get_user_by_api_key(api_key: str) -> Optional[User]:
 
 async def get_user_by_referral_code(code: str) -> Optional[User]:
     async with get_db() as db:
-        cursor = await db.execute("SELECT * FROM users WHERE referral_code = ?", (code,))
+        cursor = await db.execute(
+            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, created_at, updated_at FROM users WHERE referral_code = ?",
+            (code,),
+        )
         row = await cursor.fetchone()
         if not row:
             return None
@@ -211,6 +224,7 @@ def _row_to_user(row) -> User:
         referral_code=row["referral_code"],
         referred_by=row["referred_by"],
         stripe_customer_id=row["stripe_customer_id"],
+        referral_reward_tier=row["referral_reward_tier"] if "referral_reward_tier" in row.keys() else "starter",
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -231,7 +245,10 @@ async def create_session(user_id: str, token: str, expires_at: str) -> str:
 
 async def get_session_by_token(token: str) -> Optional[dict]:
     async with get_db() as db:
-        cursor = await db.execute("SELECT * FROM sessions WHERE token = ?", (token,))
+        cursor = await db.execute(
+            "SELECT id, user_id, token, expires_at, created_at FROM sessions WHERE token = ?",
+            (token,),
+        )
         row = await cursor.fetchone()
         if not row:
             return None
@@ -264,11 +281,13 @@ async def create_referral_reward(
     referrer_id: str,
     referred_user_id: str,
     tier_purchased: str,
+    preferred_tier: Optional[str] = None,
 ) -> Optional[dict]:
-    """Grant referral reward to referrer. Returns reward info or None if tier not eligible."""
-    days = REFERRAL_DAYS.get(tier_purchased)
-    if not days:
-        return None
+    """Grant referral reward to referrer using their preferred reward tier."""
+    reward_tier = preferred_tier or tier_purchased
+    if reward_tier not in REFERRAL_DAYS:
+        reward_tier = "starter"  # fallback
+    days = REFERRAL_DAYS[reward_tier]
 
     reward_id = str(uuid4())
     now = datetime.now(timezone.utc)
@@ -279,7 +298,7 @@ async def create_referral_reward(
             """INSERT INTO referral_rewards
                (id, user_id, referred_user_id, tier_rewarded, days_granted, activated_at, expires_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (reward_id, referrer_id, referred_user_id, tier_purchased, days, now.isoformat(), expires_at),
+            (reward_id, referrer_id, referred_user_id, reward_tier, days, now.isoformat(), expires_at),
         )
         await db.commit()
 
@@ -287,16 +306,28 @@ async def create_referral_reward(
         "id": reward_id,
         "referrer_id": referrer_id,
         "referred_user_id": referred_user_id,
-        "tier_rewarded": tier_purchased,
+        "tier_rewarded": reward_tier,
         "days_granted": days,
         "expires_at": expires_at,
     }
 
 
+async def update_referral_reward_tier(user_id: str, tier: str) -> None:
+    """Update the user's preferred referral reward tier (starter/pro/enterprise)."""
+    if tier not in ("starter", "pro", "enterprise"):
+        tier = "starter"
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE users SET referral_reward_tier = ?, updated_at = datetime('now') WHERE id = ?",
+            (tier, user_id),
+        )
+        await db.commit()
+
+
 async def get_referral_rewards(user_id: str) -> list[dict]:
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT * FROM referral_rewards WHERE user_id = ? ORDER BY activated_at DESC",
+            "SELECT id, user_id, referred_user_id, tier_rewarded, days_granted, activated_at, expires_at FROM referral_rewards WHERE user_id = ? ORDER BY activated_at DESC",
             (user_id,),
         )
         rows = await cursor.fetchall()
@@ -368,7 +399,7 @@ async def create_api_key(
 async def get_api_key_by_hash(key_hash: str) -> Optional[APIKeyInfo]:
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT * FROM api_keys WHERE key_hash = ? AND is_active = 1",
+            "SELECT id, key_hash, user_id, name, tier, sport_access, rate_limit, created_at, expires_at, is_active FROM api_keys WHERE key_hash = ? AND is_active = 1",
             (key_hash,),
         )
         row = await cursor.fetchone()
@@ -471,7 +502,7 @@ async def create_subscription(
 async def get_active_subscription(user_id: str) -> Optional[dict[str, Any]]:
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT * FROM subscriptions WHERE user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+            "SELECT id, user_id, stripe_subscription_id, tier, sports, status, current_period_start, current_period_end, created_at FROM subscriptions WHERE user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
             (user_id,),
         )
         row = await cursor.fetchone()
@@ -513,7 +544,7 @@ async def update_subscription_period(
 async def get_subscription_by_user_and_tier(user_id: str, tier: str) -> Optional[dict]:
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT * FROM subscriptions WHERE user_id = ? AND tier = ? AND status = 'active' LIMIT 1",
+            "SELECT id, user_id, stripe_subscription_id, tier, sports, status, current_period_start, current_period_end, created_at FROM subscriptions WHERE user_id = ? AND tier = ? AND status = 'active' LIMIT 1",
             (user_id, tier),
         )
         row = await cursor.fetchone()

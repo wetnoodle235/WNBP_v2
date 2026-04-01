@@ -28,6 +28,26 @@ class FootballExtractor(BaseFeatureExtractor):
     def __init__(self, sport: str, data_dir: Path) -> None:
         super().__init__(data_dir)
         self.sport = sport
+        self._all_games_cache: pd.DataFrame | None = None
+
+    def _load_all_games(self) -> pd.DataFrame:
+        """Load and cache all seasons' game data for cross-season form calculations."""
+        if self._all_games_cache is not None:
+            return self._all_games_cache
+        sport_dir = self.data_dir / "normalized" / self.sport
+        frames = []
+        for p in sorted(sport_dir.glob("games_*.parquet")):
+            try:
+                df = pd.read_parquet(p)
+                frames.append(df)
+            except Exception:
+                pass
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if not combined.empty and "date" in combined.columns:
+            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+            combined.sort_values("date", inplace=True, ignore_index=True)
+        self._all_games_cache = combined
+        return combined
 
     # ── Helpers ────────────────────────────────────────────
 
@@ -80,6 +100,13 @@ class FootballExtractor(BaseFeatureExtractor):
             "completion_pct": _avg("completion_pct"),
             "first_downs_pg": _avg("first_downs"),
             "penalty_yards_pg": _avg("penalty_yards"),
+            "passing_tds_pg": _avg("passing_touchdowns"),
+            "rushing_tds_pg": _avg("rushing_touchdowns"),
+            "total_tds_pg": _avg("passing_touchdowns") + _avg("rushing_touchdowns"),
+            "tds_allowed_pg": _avg("passing_touchdowns", opp=True) + _avg("rushing_touchdowns", opp=True),
+            "yards_per_play": _avg("yards_per_play"),
+            "yards_per_play_allowed": _avg("yards_per_play", opp=True),
+            "receiving_yds_pg": _avg("receiving_yards"),
         }
 
     def _epa_features(
@@ -349,10 +376,11 @@ class FootballExtractor(BaseFeatureExtractor):
 
     def extract_game_features(self, game: dict[str, Any]) -> dict[str, Any]:
         season = game.get("season", 0)
-        games_df = self.load_games(season)
+        games_df = self._load_all_games()
+        current_season_games = self.load_games(season)
         odds_df = self.load_odds(season)
 
-        h_id, a_id = self._resolve_game_team_ids(game, games_df)
+        h_id, a_id = self._resolve_game_team_ids(game, current_season_games)
         date = str(game.get("date", ""))
         game_id = str(game.get("id", ""))
         home_team = str(game.get("home_team", ""))
@@ -389,6 +417,7 @@ class FootballExtractor(BaseFeatureExtractor):
 
         features["home_momentum"] = self.momentum(h_id, date, games_df)
         features["away_momentum"] = self.momentum(a_id, date, games_df)
+        features["momentum_diff"] = features["home_momentum"] - features["away_momentum"]
 
         h_splits = self.home_away_splits(h_id, games_df, season)
         features["home_home_win_pct"] = h_splits["home_win_pct"]
@@ -419,6 +448,28 @@ class FootballExtractor(BaseFeatureExtractor):
         features.update({f"home_{k}": v for k, v in h_eff.items()})
         a_eff = self._efficiency_features(a_id, date, games_df)
         features.update({f"away_{k}": v for k, v in a_eff.items()})
+
+        # Stat differentials (key predictive signals)
+        features["total_yds_diff"] = features.get("home_total_yds_pg", 0.0) - features.get("away_total_yds_pg", 0.0)
+        features["turnovers_diff"] = features.get("away_turnovers_pg", 0.0) - features.get("home_turnovers_pg", 0.0)
+        features["sacks_diff"] = features.get("home_sacks_pg", 0.0) - features.get("away_sacks_pg", 0.0)
+        features["tds_diff"] = features.get("home_total_tds_pg", 0.0) - features.get("away_total_tds_pg", 0.0)
+        features["yards_per_play_diff"] = features.get("home_yards_per_play", 0.0) - features.get("away_yards_per_play", 0.0)
+        features["first_downs_diff"] = features.get("home_first_downs_pg", 0.0) - features.get("away_first_downs_pg", 0.0)
+        # EPA differentials — net expected points advantage
+        features["epa_pass_off_diff"] = features.get("home_epa_pass_off", 0.0) - features.get("away_epa_pass_off", 0.0)
+        features["epa_rush_off_diff"] = features.get("home_epa_rush_off", 0.0) - features.get("away_epa_rush_off", 0.0)
+        features["epa_total_off_diff"] = features.get("home_epa_total_off", 0.0) - features.get("away_epa_total_off", 0.0)
+        features["epa_net_diff"] = features.get("home_epa_total_off", 0.0) - features.get("away_epa_total_off", 0.0) \
+            - features.get("home_epa_total_def", 0.0) + features.get("away_epa_total_def", 0.0)
+        # Air yards & YAC differential (passing depth and after-catch efficiency)
+        features["air_yards_diff"] = features.get("home_air_yards_pg", 0.0) - features.get("away_air_yards_pg", 0.0)
+        features["yac_diff"] = features.get("home_yac_pg", 0.0) - features.get("away_yac_pg", 0.0)
+        # Efficiency differentials
+        features["completion_pct_diff"] = features.get("home_completion_pct", 0.0) - features.get("away_completion_pct", 0.0)
+        features["third_down_pct_diff"] = features.get("home_third_down_pct", 0.0) - features.get("away_third_down_pct", 0.0)
+        features["red_zone_pct_diff"] = features.get("home_red_zone_pct", 0.0) - features.get("away_red_zone_pct", 0.0)
+        features["turnover_margin_diff"] = features.get("home_turnover_margin", 0.0) - features.get("away_turnover_margin", 0.0)
 
         # Rush/pass balance
         h_bal = self._rushing_passing_balance(h_id, date, games_df)
@@ -462,6 +513,9 @@ class FootballExtractor(BaseFeatureExtractor):
         features.update({f"home_{k}": v for k, v in h_nfl_ps.items()})
         a_nfl_ps = self._nfl_player_features(a_id, season, date)
         features.update({f"away_{k}": v for k, v in a_nfl_ps.items()})
+        # NFL player stats differentials
+        for key in h_nfl_ps:
+            features[f"{key}_diff"] = h_nfl_ps[key] - a_nfl_ps[key]
 
         # Season kicker FG% from team_stats (100% filled for NFL)
         team_stats = self.load_team_stats(season)
@@ -487,6 +541,9 @@ class FootballExtractor(BaseFeatureExtractor):
         features["period_first_win_pct_diff"] = h_per["period_first_win_pct"] - a_per["period_first_win_pct"]
         features["period_first_half_win_pct_diff"] = h_per["period_first_half_win_pct"] - a_per["period_first_half_win_pct"]
         features["period_comeback_diff"] = h_per["period_comeback_rate"] - a_per["period_comeback_rate"]
+        features["period_first_opp_ppg_diff"] = h_per["period_first_opp_ppg"] - a_per["period_first_opp_ppg"]
+        features["period_second_half_ppg_diff"] = h_per["period_second_half_ppg"] - a_per["period_second_half_ppg"]
+        features["period_ot_rate_diff"] = h_per["period_ot_rate"] - a_per["period_ot_rate"]
 
         # Injury burden (uses shared base._injury_features)
         h_inj = self._injury_features(h_id, season)
@@ -507,7 +564,7 @@ class FootballExtractor(BaseFeatureExtractor):
             # H2H
             "h2h_games", "h2h_win_pct", "h2h_avg_margin",
             # Momentum & splits
-            "home_momentum", "away_momentum",
+            "home_momentum", "away_momentum", "momentum_diff",
             "home_home_win_pct", "away_away_win_pct",
             # Rest
             "home_rest_days", "away_rest_days", "rest_advantage",
@@ -559,6 +616,9 @@ class FootballExtractor(BaseFeatureExtractor):
             "home_nfl_ps_sacks_pg", "home_nfl_ps_def_int_pg", "home_nfl_ps_rush_td_pg",
             "away_nfl_ps_qb_rating", "away_nfl_ps_pass_yds_pg", "away_nfl_ps_rush_yds_pg",
             "away_nfl_ps_sacks_pg", "away_nfl_ps_def_int_pg", "away_nfl_ps_rush_td_pg",
+            # NFL player stats differentials
+            "nfl_ps_qb_rating_diff", "nfl_ps_pass_yds_pg_diff", "nfl_ps_rush_yds_pg_diff",
+            "nfl_ps_sacks_pg_diff", "nfl_ps_def_int_pg_diff", "nfl_ps_rush_td_pg_diff",
             # Kicker FG% from season team_stats
             "home_kicker_fg_pct", "away_kicker_fg_pct", "kicker_fg_pct_diff",
             # Injury burden
@@ -567,4 +627,34 @@ class FootballExtractor(BaseFeatureExtractor):
             "away_injury_count", "away_injury_severity_score", "away_injury_out_count",
             "away_injury_dtd_count", "away_injury_questionable_count",
             "injury_advantage",
+            # Stat differentials
+            "total_yds_diff", "turnovers_diff", "sacks_diff", "tds_diff",
+            "yards_per_play_diff", "first_downs_diff",
+            # EPA differentials
+            "epa_pass_off_diff", "epa_rush_off_diff", "epa_total_off_diff", "epa_net_diff",
+            # Air yards & YAC differentials
+            "air_yards_diff", "yac_diff",
+            # Efficiency differentials
+            "completion_pct_diff", "third_down_pct_diff", "red_zone_pct_diff", "turnover_margin_diff",
+            # Air yards per play
+            "home_air_yards_pg", "home_yac_pg", "home_air_yards_allowed_pg", "home_yac_allowed_pg",
+            "away_air_yards_pg", "away_yac_pg", "away_air_yards_allowed_pg", "away_yac_allowed_pg",
+            # New stat averages
+            "home_passing_tds_pg", "home_rushing_tds_pg", "home_total_tds_pg",
+            "home_tds_allowed_pg", "home_yards_per_play", "home_receiving_yds_pg",
+            "away_passing_tds_pg", "away_rushing_tds_pg", "away_total_tds_pg",
+            "away_tds_allowed_pg", "away_yards_per_play", "away_receiving_yds_pg",
+            # Quarter rolling stats
+            "home_period_first_ppg", "away_period_first_ppg",
+            "home_period_first_opp_ppg", "away_period_first_opp_ppg",
+            "home_period_first_win_pct", "away_period_first_win_pct",
+            "home_period_first_half_ppg", "away_period_first_half_ppg",
+            "home_period_first_half_opp_ppg", "away_period_first_half_opp_ppg",
+            "home_period_first_half_win_pct", "away_period_first_half_win_pct",
+            "home_period_second_half_ppg", "away_period_second_half_ppg",
+            "home_period_comeback_rate", "away_period_comeback_rate",
+            "home_period_ot_rate", "away_period_ot_rate",
+            "period_first_ppg_diff", "period_first_opp_ppg_diff",
+            "period_first_win_pct_diff", "period_first_half_win_pct_diff",
+            "period_second_half_ppg_diff", "period_comeback_diff", "period_ot_rate_diff",
         ]

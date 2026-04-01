@@ -9,11 +9,11 @@ export type SportKey =
   | "mlb"
   | "nhl"
   | "epl" | "laliga" | "bundesliga" | "seriea" | "ligue1" | "mls" | "ucl" | "nwsl"
-  | "f1"
+  | "f1" | "indycar"
   | "atp" | "wta"
   | "ufc"
   | "lol" | "csgo" | "dota2" | "valorant"
-  | "golf";
+  | "golf" | "lpga" | "pga";
 
 export type SportCategory =
   | "basketball" | "football" | "baseball" | "hockey"
@@ -57,6 +57,7 @@ export const SPORTS: Record<SportKey, SportDef> = {
 
   // Motorsport
   f1:         { label: "F1",         color: "var(--color-f1)",         href: "/f1",         category: "motorsport", country: "INT" },
+  indycar:    { label: "IndyCar",    color: "var(--color-indycar, #0056a2)", href: "/indycar", category: "motorsport", country: "US" },
 
   // Tennis
   atp:        { label: "ATP",        color: "var(--color-atp)",        href: "/atp",        category: "tennis",     country: "INT" },
@@ -72,7 +73,9 @@ export const SPORTS: Record<SportKey, SportDef> = {
   valorant:   { label: "Valorant",   color: "var(--color-valorant)",   href: "/valorant",   category: "esports",    country: "INT" },
 
   // Golf
-  golf:       { label: "PGA",        color: "var(--color-pga)",        href: "/golf",       category: "golf",       country: "US" },
+  golf:       { label: "PGA Tour",   color: "var(--color-pga)",        href: "/golf",       category: "golf",       country: "US" },
+  lpga:       { label: "LPGA",       color: "var(--color-lpga, #6a0dad)", href: "/lpga",    category: "golf",       country: "US" },
+  pga:        { label: "PGA",        color: "var(--color-pga)",        href: "/pga",        category: "golf",       country: "US" },
 };
 
 export const ALL_SPORT_KEYS = Object.keys(SPORTS) as SportKey[];
@@ -112,8 +115,8 @@ export const NAV_CATEGORIES = [
   { label: "Hockey",     sports: ["nhl"] as SportKey[] },
   { label: "Soccer",     sports: ["epl", "laliga", "bundesliga", "seriea", "ligue1", "mls", "ucl", "nwsl"] as SportKey[] },
   { label: "Tennis",     sports: ["atp", "wta"] as SportKey[] },
-  { label: "F1",         sports: ["f1"] as SportKey[] },
+  { label: "Racing",     sports: ["f1", "indycar"] as SportKey[] },
   { label: "MMA",        sports: ["ufc"] as SportKey[] },
   { label: "Esports",    sports: ["lol", "csgo", "dota2", "valorant"] as SportKey[] },
-  { label: "Golf",       sports: ["golf"] as SportKey[] },
+  { label: "Golf",       sports: ["golf", "lpga"] as SportKey[] },
 ] as const;

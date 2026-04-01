@@ -28,6 +28,7 @@ from auth.models import (
     get_user_by_referral_code,
     list_user_api_keys,
     regenerate_user_api_key,
+    update_referral_reward_tier,
     update_user_display_name,
 )
 from auth.tiers import BUNDLES, TIERS
@@ -205,6 +206,7 @@ async def get_me(
             "referred_by": db_user.referred_by,
             "subscription": sub,
             "referral_free_days": referral_days,
+            "referral_reward_tier": db_user.referral_reward_tier if hasattr(db_user, 'referral_reward_tier') else "starter",
             "created_at": db_user.created_at,
             "updated_at": db_user.updated_at,
         },
@@ -282,6 +284,21 @@ async def get_referrals(
             "active_free_days": active_days,
         },
     }
+
+
+@router.put(
+    "/referrals/reward-tier",
+    summary="Set preferred referral reward tier",
+    description="Choose which tier (starter, pro, enterprise) you want to receive when your referral converts.",
+)
+async def set_referral_reward_tier(
+    user: Annotated[dict[str, Any], Depends(get_current_user)],
+    tier: str = Body(..., embed=True),
+):
+    if tier not in ("starter", "pro", "enterprise"):
+        raise HTTPException(status_code=400, detail="tier must be 'starter', 'pro', or 'enterprise'")
+    await update_referral_reward_tier(user["sub"], tier)
+    return {"success": True, "data": {"referral_reward_tier": tier}}
 
 
 # ── Tier & Bundle Info (public) ──────────────────────────

@@ -237,15 +237,36 @@ async def meta_sports(ds: DS):
     },
 )
 async def meta_providers(ds: DS):
+    """Scan just the *source* column from one parquet file per sport.
+
+    The previous implementation loaded full games/teams/players datasets for
+    every sport (up to 75 full parquet loads), causing 30-120 second responses.
+    Now we read only the 'source' column from a single file per sport.
+    """
+    settings = get_settings()
     providers: set[str] = set()
-    for sport_info in ds.list_available_sports():
-        sport = sport_info["key"]
-        for kind in ("teams", "games", "players"):
-            records = getattr(ds, f"get_{kind}", lambda s: [])(sport)
-            for r in records[:5]:
-                src = r.get("source")
-                if src:
-                    providers.add(src)
+    norm = settings.normalized_dir
+    if norm.exists():
+        for sport_dir in sorted(norm.iterdir()):
+            if not sport_dir.is_dir():
+                continue
+            # Check one file across preferred kinds — stop as soon as we get sources.
+            for kind in ("games", "teams", "players"):
+                files = sorted(sport_dir.glob(f"{kind}_*.parquet"))
+                if not files:
+                    continue
+                try:
+                    import pyarrow.parquet as pq
+                    schema = pq.read_schema(files[0])
+                    if "source" in schema.names:
+                        import pandas as _pd
+                        df = _pd.read_parquet(files[0], columns=["source"], engine="pyarrow")
+                        for src in df["source"].dropna().unique():
+                            if src:
+                                providers.add(str(src))
+                        break  # Got sources for this sport; move to next sport.
+                except Exception:
+                    continue
     return {
         "success": True,
         "data": sorted(providers),
@@ -393,4 +414,100 @@ async def system_status(ds: DS):
         "cache": ds.cache_stats,
         "data_freshness": data_freshness,
         "configured_sports": len(SPORT_DEFINITIONS),
+    }
+
+
+# ── Upcoming Events (racing / golf / event-based sports) ─────────
+
+_EVENT_SPORTS = ("f1", "indycar", "golf", "lpga", "pga", "mma", "ufc", "atp", "wta")
+
+
+@router.get("/events/upcoming", summary="Upcoming events for racing, golf, and other event-based sports")
+async def upcoming_events(
+    ds: DS,
+    days: int = 60,
+    sports: str | None = None,
+):
+    """Return upcoming events for racing/golf/individual sports within the next N days.
+
+    Unlike /schedule this endpoint:
+    - Works across multiple sports at once
+    - Uses date comparison (not just status) to find future events
+    - Includes race_name, venue, circuit_name, broadcast fields
+    - Supports up to 90 days ahead (default 60)
+    """
+    from datetime import date, timedelta
+    import pandas as pd
+    from config import get_current_season
+    from pathlib import Path
+
+    days = max(1, min(days, 90))
+    today = date.today()
+    future_cutoff = today + timedelta(days=days)
+
+    target_sports = [s.strip().lower() for s in sports.split(",")] if sports else list(_EVENT_SPORTS)
+
+    settings = get_settings()
+    events: list[dict] = []
+
+    for sport in target_sports:
+        try:
+            season = get_current_season(sport)
+            df = ds._load_kind(sport, "games", season=season)
+            if df is None or (hasattr(df, "empty") and df.empty):
+                continue
+
+            if "date" not in df.columns:
+                continue
+
+            df = df.copy()
+            df["_date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+            mask = (df["_date"] >= today) & (df["_date"] <= future_cutoff)
+            upcoming = df[mask].copy()
+
+            if upcoming.empty:
+                continue
+
+            upcoming = upcoming.sort_values("_date")
+
+            keep_cols = [
+                "id", "date", "start_time", "status", "sport",
+                "home_team", "away_team", "venue", "broadcast",
+                "race_name", "circuit_name", "round_number",
+                "winner_name", "day_of_week",
+            ]
+            available = [c for c in keep_cols if c in upcoming.columns]
+            upcoming = upcoming[available]
+            if "sport" not in upcoming.columns:
+                upcoming = upcoming.assign(sport=sport)
+
+            records = upcoming.where(upcoming.notna(), None).to_dict("records")
+            for r in records:
+                # Normalize date to string
+                if r.get("date") is not None:
+                    r["date"] = str(r["date"])
+                # Convert start_time timestamp to ISO string
+                if r.get("start_time") is not None:
+                    try:
+                        r["start_time"] = str(r["start_time"])
+                    except Exception:
+                        r["start_time"] = None
+                r["sport"] = sport
+            events.extend(records)
+        except Exception:
+            continue
+
+    # Sort all events by date
+    events.sort(key=lambda e: e.get("date") or "")
+
+    return {
+        "success": True,
+        "data": events,
+        "meta": {
+            "count": len(events),
+            "sports": target_sports,
+            "days_ahead": days,
+            "from_date": today.isoformat(),
+            "to_date": future_cutoff.isoformat(),
+        },
     }

@@ -61,6 +61,7 @@ class Game(_Base):
     attendance: Optional[int] = None
     weather: Optional[str] = None
     broadcast: Optional[str] = None
+    broadcast_url: Optional[str] = None
     start_time: Optional[datetime] = None
     period: Optional[str] = None
     is_neutral_site: bool = False

@@ -15,6 +15,7 @@ from .models import (
     create_subscription,
     get_active_subscription,
     get_user_by_id,
+    update_referral_reward_tier,
     update_subscription_period,
     update_subscription_status,
     update_user_keys_tier,
@@ -201,14 +202,17 @@ class StripeService:
         # Handle referral rewards
         user = await get_user_by_id(user_id)
         if user and user.referred_by:
+            referrer = await get_user_by_id(user.referred_by)
+            preferred_tier = getattr(referrer, 'referral_reward_tier', 'starter') if referrer else 'starter'
             reward = await create_referral_reward(
                 referrer_id=user.referred_by,
                 referred_user_id=user_id,
                 tier_purchased=tier,
+                preferred_tier=preferred_tier,
             )
             if reward:
                 logger.info("Referral reward granted to %s: %s days of %s",
-                            user.referred_by, reward["days_granted"], tier)
+                            user.referred_by, reward["days_granted"], reward["tier_rewarded"])
 
     async def _on_subscription_updated(self, sub: dict) -> None:
         stripe_sub_id = sub.get("id")

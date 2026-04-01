@@ -30,6 +30,26 @@ class GolfExtractor(BaseFeatureExtractor):
     def __init__(self, sport: str, data_dir: Path) -> None:
         super().__init__(data_dir)
         self.sport = sport
+        self._all_games_cache: pd.DataFrame | None = None
+
+    def _load_all_games(self) -> pd.DataFrame:
+        """Load and cache all seasons' game data."""
+        if self._all_games_cache is not None:
+            return self._all_games_cache
+        sport_dir = self.data_dir / "normalized" / self.sport
+        frames = []
+        for p in sorted(sport_dir.glob("games_*.parquet")):
+            try:
+                df = pd.read_parquet(p)
+                frames.append(df)
+            except Exception:
+                pass
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if not combined.empty and "date" in combined.columns:
+            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+            combined.sort_values("date", inplace=True, ignore_index=True)
+        self._all_games_cache = combined
+        return combined
 
     # ── Fast vectorized helpers (pre-indexed) ─────────────
 
@@ -198,6 +218,23 @@ class GolfExtractor(BaseFeatureExtractor):
                 "field_avg_finish": float(pos.mean()) if len(pos) > 0 else 0.0,
             }
 
+        # Load world rankings/standings for the season
+        standings_lookup: dict[str, dict[str, float]] = {}
+        try:
+            stnd = self.load_standings(season)
+            if not stnd.empty and "team_id" in stnd.columns:
+                stnd["_pid"] = stnd["team_id"].astype(str)
+                for _, row in stnd.iterrows():
+                    pid = str(row.get("_pid", ""))
+                    standings_lookup[pid] = {
+                        "world_rank": float(pd.to_numeric(row.get("rank", 500), errors="coerce") or 500),
+                        "season_wins": float(pd.to_numeric(row.get("wins", 0), errors="coerce") or 0),
+                        "season_points": float(pd.to_numeric(row.get("points", 0), errors="coerce") or 0),
+                        "season_games_played": float(pd.to_numeric(row.get("games_played", 0), errors="coerce") or 0),
+                    }
+        except Exception:
+            pass
+
         features: list[dict[str, Any]] = []
         success, failed = 0, 0
 
@@ -249,6 +286,14 @@ class GolfExtractor(BaseFeatureExtractor):
                     feat.update(self._fast_rest(hist_before, game_date))
                     feat.update(self._fast_momentum(hist_before, 5))
 
+                    # World ranking and season standing features
+                    stnd_row = standings_lookup.get(pid, {})
+                    feat["world_rank"] = stnd_row.get("world_rank", 500.0)
+                    feat["world_rank_inv"] = 1.0 / max(feat["world_rank"], 1.0)
+                    feat["season_wins"] = stnd_row.get("season_wins", 0.0)
+                    feat["season_points"] = stnd_row.get("season_points", 0.0)
+                    feat["season_games_played"] = stnd_row.get("season_games_played", 0.0)
+
                     features.append(feat)
                     success += 1
                 except Exception as exc:
@@ -282,4 +327,7 @@ class GolfExtractor(BaseFeatureExtractor):
             "field_size", "field_avg_finish",
             "rest_days", "tournaments_last_30d",
             "momentum_trend", "improving",
+            # World ranking / season standing (from standings data)
+            "world_rank", "world_rank_inv", "season_wins",
+            "season_points", "season_games_played",
         ]

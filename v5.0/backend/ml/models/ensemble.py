@@ -328,6 +328,7 @@ class EnsembleVoter:
         y_train: pd.Series | np.ndarray,
         X_val: pd.DataFrame | np.ndarray,
         y_val: pd.Series | np.ndarray,
+        class_weight: str | None = None,
     ) -> dict[str, dict[str, float]]:
         """Train all classifiers and compute Brier-score weights.
 
@@ -335,6 +336,7 @@ class EnsembleVoter:
         ----------
         X_train, y_train : training features / labels (binary 0/1).
         X_val, y_val     : hold-out validation set for weight estimation.
+        class_weight     : pass "balanced" to up-weight minority class (e.g. golf top-10).
 
         Returns
         -------
@@ -350,6 +352,12 @@ class EnsembleVoter:
 
         y_tr = np.asarray(y_train).ravel()
         y_v = np.asarray(y_val).ravel()
+
+        # Compute sample weights for imbalanced classes (e.g. golf top-10 at ~6.7%)
+        sample_weight: np.ndarray | None = None
+        if class_weight == "balanced":
+            from sklearn.utils.class_weight import compute_sample_weight
+            sample_weight = compute_sample_weight("balanced", y_tr)
 
         metrics: dict[str, dict[str, float]] = {}
         fitted: list[tuple[str, Any]] = []
@@ -372,6 +380,11 @@ class EnsembleVoter:
                     warnings.simplefilter("ignore")
                     if name == "catboost":
                         model.fit(X_tr, y_tr, eval_set=(X_v, y_v), verbose=False)
+                    elif sample_weight is not None:
+                        try:
+                            model.fit(X_tr, y_tr, sample_weight=sample_weight)
+                        except TypeError:
+                            model.fit(X_tr, y_tr)
                     else:
                         model.fit(X_tr, y_tr)
 
@@ -789,6 +802,39 @@ class EnsembleVoter:
 
     def regressor_names(self) -> list[str]:
         return [n for n, _ in self.regressors]
+
+    def get_feature_importances(self) -> dict[str, float]:
+        """Return averaged feature importances across all tree-based classifiers.
+
+        Supports models with ``feature_importances_`` (RF, ExtraTrees,
+        GradientBoosting, XGBoost, LightGBM, CatBoost).  Weights by each
+        model's classifier weight.  Returns an empty dict if no tree models
+        are fitted or ``feature_names`` is unknown.
+        """
+        if not self.feature_names:
+            return {}
+
+        importance_sum = np.zeros(len(self.feature_names), dtype=np.float64)
+        total_w = 0.0
+        for name, model in self.classifiers:
+            mdl = model.estimator if hasattr(model, "estimator") else model
+            if not hasattr(mdl, "feature_importances_"):
+                continue
+            try:
+                imp = np.asarray(mdl.feature_importances_, dtype=np.float64)
+                if imp.shape[0] != len(self.feature_names):
+                    continue
+                w = self.classifier_weights.get(name, 0.01)
+                importance_sum += w * imp
+                total_w += w
+            except Exception:
+                continue
+
+        if total_w == 0:
+            return {}
+
+        normed = importance_sum / total_w
+        return dict(sorted(zip(self.feature_names, normed.tolist()), key=lambda x: -x[1]))
 
     def summary(self) -> dict[str, Any]:
         """Return a JSON-serialisable summary of the ensemble state."""

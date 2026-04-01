@@ -52,6 +52,7 @@ ALL_SPORTS = [
     "nba", "nhl", "mlb", "nfl",
     # Soccer leagues — models exist or trainable
     "epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl",
+    "europa", "ligamx",
     # Combat / individual
     "ufc",
     # Tennis
@@ -61,13 +62,13 @@ ALL_SPORTS = [
     # Esports
     "csgo", "dota2", "lol", "valorant",
     # Motorsport
-    "f1",
+    "f1", "indycar",
     # Golf — player-centric, uses GolfPredictor (not GamePredictor)
-    "golf",
+    "golf", "lpga",
 ]
 
 # Sports that use a player-centric model (not home vs away)
-_PLAYER_CENTRIC_SPORTS: frozenset[str] = frozenset(["golf"])
+_PLAYER_CENTRIC_SPORTS: frozenset[str] = frozenset(["golf", "lpga"])
 BET_AMOUNT = 100.0  # flat bet size for ROI simulation
 
 # Status values that indicate a completed game across all sports.
@@ -96,7 +97,7 @@ _SOCCER_SPORTS: frozenset[str] = frozenset(
 # recent completed regular season window instead of "last N days".
 _REGULAR_SEASON_MONTHS: dict[str, tuple[int, int]] = {
     "nfl":   (9, 2),   # Sep → Feb (wraps year boundary)
-    "mlb":   (4, 10),  # Apr → Oct
+    "mlb":   (3, 11),  # Mar → Nov (spring training + postseason)
     "nhl":   (10, 6),  # Oct → Jun (wraps)
     "nba":   (10, 6),  # Oct → Jun (wraps)
     "ncaab": (11, 4),  # Nov → Apr (wraps)
@@ -111,7 +112,9 @@ _REGULAR_SEASON_MONTHS: dict[str, tuple[int, int]] = {
     "bundesliga":(8, 5),
     "ligue1":    (8, 5),
     "seriea":    (8, 5),
-    "ucl":       (9, 5),
+    "ucl":       (9, 6),
+    "europa":    (9, 5),
+    "ligamx":    (1, 12),  # year-round (Apertura + Clausura)
     # Esports — year-round (no season restriction)
     # F1 — year-round
 }
@@ -190,9 +193,35 @@ def _load_recent_games(
         logger.warning("No game parquets found for %s in %s", sport, sport_dir)
         return pd.DataFrame()
 
-    frames = [pd.read_parquet(p) for p in parquet_files]
+    # Column-pruning: only read the ~17 columns the backtest actually uses
+    # instead of all 100+ stats columns — big I/O savings.
+    _BACKTEST_COLS = [
+        "id", "game_id", "date", "status", "season",
+        "home_team", "away_team", "home_team_id", "away_team_id",
+        "home_score", "away_score",
+        "home_q1", "home_q2", "home_q3", "home_q4", "home_ot",
+        "away_q1", "away_q2", "away_q3", "away_q4", "away_ot",
+        # golf-specific
+        "won", "top_10", "player_id",
+    ]
+
+    frames = []
+    for p in parquet_files:
+        try:
+            # Only read columns that exist in this file
+            import pyarrow.parquet as pq
+            schema = pq.read_schema(p)
+            available = [c for c in _BACKTEST_COLS if c in schema.names]
+            frames.append(pd.read_parquet(p, columns=available))
+        except Exception:
+            frames.append(pd.read_parquet(p))
     df = pd.concat(frames, ignore_index=True)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+    # Guard: sports without score columns (motorsport, golf) can't be backtested
+    if "home_score" not in df.columns or "away_score" not in df.columns:
+        logger.info("%s: no home_score/away_score columns — skipping backtest", sport)
+        return pd.DataFrame()
 
     if end_date is None:
         end_date = date.today()
@@ -319,41 +348,20 @@ class Backtester:
                         break
             self._run_golf(sport, models_dir, start_date, sport_end)
 
-        # Load predictors for team/standard sports
-        predictors: dict[str, GamePredictor] = {}
-        player_props: dict[str, dict[str, Any]] = {}
+        # Run predictions per sport — load predictor ONLY if games exist
+        any_loaded = False
         for sport in team_sports:
             models_dir = MODELS_ROOT / sport
             if not (models_dir / "joint_models.pkl").exists() and not (
                 models_dir / "separate_models.pkl"
             ).exists():
-                logger.info("No trained models for %s — skipping", sport)
                 continue
-            try:
-                predictors[sport] = GamePredictor(sport, models_dir, DATA_DIR)
-                logger.info("Loaded predictor for %s", sport)
-            except Exception as exc:
-                logger.warning("Could not load predictor for %s: %s", sport, exc)
-            # Load player prop models if available
-            props_bundle = _load_player_props_models(sport)
-            if props_bundle:
-                player_props[sport] = props_bundle
 
-        if not predictors and not golf_sports:
-            logger.warning("No trained models found — nothing to backtest")
-            return self._empty_report(start_date, end_date)
-
-        # Run predictions per sport
-        for sport, predictor in predictors.items():
-            # Determine effective window end: if sport is out of regular season
-            # right now (and no explicit end_date given), walk back to the most
-            # recent month that IS in season so we don't evaluate on pre-season /
-            # spring-training / international-break games.
+            # Determine effective window end
             sport_end = base_end
             if self.end_date is None and not _sport_in_season(sport, base_end):
-                # Find the last date that was in-season within the past 18 months
                 probe = base_end
-                for _ in range(540):  # max 18 months back
+                for _ in range(540):
                     probe -= timedelta(days=1)
                     if _sport_in_season(sport, probe):
                         sport_end = probe
@@ -363,10 +371,19 @@ class Backtester:
                     sport, sport_end,
                 )
 
+            # Load games FIRST — skip predictor init if no games
             games_df = _load_recent_games(sport, self.days, end_date=sport_end)
             if games_df.empty:
-                logger.info("No recent completed games for %s", sport)
+                logger.debug("No recent completed games for %s — skipping", sport)
                 continue
+
+            # Now load predictor (expensive — only when we know we have games)
+            try:
+                predictor = GamePredictor(sport, models_dir, DATA_DIR)
+            except Exception as exc:
+                logger.warning("Could not load predictor for %s: %s", sport, exc)
+                continue
+            any_loaded = True
 
             logger.info(
                 "Backtesting %s: %d games (%s to %s)",
@@ -380,13 +397,11 @@ class Backtester:
             precomp = _load_precomputed_features(sport)
             if precomp is not None:
                 logger.info("  %s: batch predict via pre-computed features", sport)
-                # Ensure games_df has a game_id col for batch lookup
                 gdf = games_df.copy()
                 if "game_id" not in gdf.columns and "id" in gdf.columns:
                     gdf["game_id"] = gdf["id"]
                 try:
                     batch_preds = predictor.predict_batch_precomputed(precomp, gdf)
-                    # Build game lookup for _evaluate
                     game_id_col = "game_id" if "game_id" in gdf.columns else "id"
                     game_lookup = {
                         str(r[game_id_col]): r
@@ -427,6 +442,12 @@ class Backtester:
                 sport,
                 sum(1 for r in self.records if r["sport"] == sport),
             )
+
+        if not any_loaded and not golf_sports:
+            logger.warning("No trained models found — nothing to backtest")
+            return self._empty_report(start_date, end_date)
+
+        return self._build_report(start_date, end_date)
 
         return self._build_report(start_date, end_date)
 
@@ -1018,6 +1039,61 @@ class Backtester:
             if comeback_a_prob is not None and away_trailing_ht and ah_f is not None and aa_f is not None:
                 actual_comeback_a = (aa_f > ah_f)
                 record["comeback_away_correct"] = (float(comeback_a_prob) >= 0.5) == actual_comeback_a
+
+        # ── Double Chance ────────────────────────────────────
+        if ah_f is not None and aa_f is not None:
+            dc_1x = pred_dict.get("double_chance_1X_prob")
+            if dc_1x is not None:
+                actual_1x = (ah_f >= aa_f)
+                record["double_chance_1X_correct"] = (float(dc_1x) >= 0.5) == actual_1x
+            dc_x2 = pred_dict.get("double_chance_X2_prob")
+            if dc_x2 is not None:
+                actual_x2 = (aa_f >= ah_f)
+                record["double_chance_X2_correct"] = (float(dc_x2) >= 0.5) == actual_x2
+            dc_12 = pred_dict.get("double_chance_12_prob")
+            if dc_12 is not None:
+                actual_12 = (ah_f != aa_f)
+                record["double_chance_12_correct"] = (float(dc_12) >= 0.5) == actual_12
+
+        # ── NRFI / YRFI ─────────────────────────────────────
+        game_row_nrfi = getattr(game_row, "_asdict", lambda: {}).__call__() if hasattr(game_row, "_asdict") else {}
+        if hasattr(game_row, "home_i1"):
+            hi1 = getattr(game_row, "home_i1", None)
+            ai1 = getattr(game_row, "away_i1", None)
+            if hi1 is not None and ai1 is not None:
+                nrfi_p_bt = pred_dict.get("nrfi_prob")
+                if nrfi_p_bt is not None:
+                    actual_nrfi = (float(hi1) == 0 and float(ai1) == 0)
+                    record["nrfi_correct"] = (float(nrfi_p_bt) >= 0.5) == actual_nrfi
+                yrfi_p_bt = pred_dict.get("yrfi_prob")
+                if yrfi_p_bt is not None:
+                    actual_yrfi = (float(hi1) > 0 or float(ai1) > 0)
+                    record["yrfi_correct"] = (float(yrfi_p_bt) >= 0.5) == actual_yrfi
+
+        # ── Shutout ──────────────────────────────────────────
+        if ah_f is not None and aa_f is not None:
+            so_h = pred_dict.get("shutout_home_prob")
+            if so_h is not None:
+                record["shutout_home_correct"] = (float(so_h) >= 0.5) == (aa_f == 0)
+            so_a = pred_dict.get("shutout_away_prob")
+            if so_a is not None:
+                record["shutout_away_correct"] = (float(so_a) >= 0.5) == (ah_f == 0)
+
+        # ── Asian Handicap ───────────────────────────────────
+        if ah_f is not None and aa_f is not None:
+            margin = ah_f - aa_f
+            ah_m1h = pred_dict.get("ah_minus1_home_prob")
+            if ah_m1h is not None:
+                record["ah_minus1_home_correct"] = (float(ah_m1h) >= 0.5) == (margin >= 2)
+            ah_m1a = pred_dict.get("ah_minus1_away_prob")
+            if ah_m1a is not None:
+                record["ah_minus1_away_correct"] = (float(ah_m1a) >= 0.5) == (margin <= -2)
+            ah_p1h = pred_dict.get("ah_plus1_home_prob")
+            if ah_p1h is not None:
+                record["ah_plus1_home_correct"] = (float(ah_p1h) >= 0.5) == (margin > -2)
+            ah_p1a = pred_dict.get("ah_plus1_away_prob")
+            if ah_p1a is not None:
+                record["ah_plus1_away_correct"] = (float(ah_p1a) >= 0.5) == (margin < 2)
 
         return record
 

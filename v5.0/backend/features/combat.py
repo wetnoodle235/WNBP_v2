@@ -120,6 +120,7 @@ class CombatExtractor(BaseFeatureExtractor):
         _empty = {
             "sig_strike_pct": 0.0, "sig_strikes_per_fight": 0.0,
             "total_strikes_per_fight": 0.0, "strike_differential": 0.0,
+            "sig_strikes_absorbed": 0.0,
             "takedown_pct": 0.0, "submission_attempts": 0.0,
             "knockdowns_per_fight": 0.0, "control_time_avg": 0.0,
         }
@@ -155,6 +156,7 @@ class CombatExtractor(BaseFeatureExtractor):
             "sig_strikes_per_fight": _mean(sig_landed),
             "total_strikes_per_fight": _mean(total_landed),
             "strike_differential": _mean(sig_landed) - _mean(opp_sig_landed),
+            "sig_strikes_absorbed": _mean(opp_sig_landed),
             "takedown_pct": _mean(td_pct),
             "submission_attempts": _mean(sub_att),
             "knockdowns_per_fight": _mean(knockdowns),
@@ -283,8 +285,12 @@ class CombatExtractor(BaseFeatureExtractor):
         features["knockdowns_diff"] = h_stats["knockdowns_per_fight"] - a_stats["knockdowns_per_fight"]
         features["control_time_diff"] = h_stats["control_time_avg"] - a_stats["control_time_avg"]
         features["takedown_pct_diff"] = h_stats["takedown_pct"] - a_stats["takedown_pct"]
+        features["submission_attempts_diff"] = h_stats["submission_attempts"] - a_stats["submission_attempts"]
+        # Absorption rate differential: lower absorption is better → invert
+        features["sig_absorbed_diff"] = a_stats["sig_strikes_absorbed"] - h_stats["sig_strikes_absorbed"]
         features["elo_diff"] = features.get("home_elo", 1500.0) - features.get("away_elo", 1500.0)
         features["early_finish_rate_diff"] = h_rec["early_finish_rate"] - a_rec["early_finish_rate"]
+        features["momentum_diff"] = features["home_momentum"] - features["away_momentum"]
 
         # Odds
         odds = self._odds_features(game_id, odds_df)
@@ -305,9 +311,9 @@ class CombatExtractor(BaseFeatureExtractor):
             "h2h_games", "h2h_win_pct", "h2h_avg_margin",
             # Rolling striking stats (from historical games)
             "home_sig_strike_pct", "home_sig_strikes_per_fight",
-            "home_total_strikes_per_fight", "home_strike_differential",
+            "home_total_strikes_per_fight", "home_strike_differential", "home_sig_strikes_absorbed",
             "away_sig_strike_pct", "away_sig_strikes_per_fight",
-            "away_total_strikes_per_fight", "away_strike_differential",
+            "away_total_strikes_per_fight", "away_strike_differential", "away_sig_strikes_absorbed",
             # Rolling grappling stats
             "home_takedown_pct", "home_submission_attempts",
             "home_knockdowns_per_fight", "home_control_time_avg",
@@ -324,7 +330,7 @@ class CombatExtractor(BaseFeatureExtractor):
             "sig_strike_pct_diff", "sig_strikes_per_fight_diff",
             "strike_differential_diff", "knockdowns_diff",
             "control_time_diff", "takedown_pct_diff", "elo_diff",
-            "early_finish_rate_diff",
+            "early_finish_rate_diff", "submission_attempts_diff", "sig_absorbed_diff", "momentum_diff",
             # ELO & momentum
             "home_elo", "home_elo_diff", "home_elo_expected_win",
             "away_elo", "away_elo_diff", "away_elo_expected_win",

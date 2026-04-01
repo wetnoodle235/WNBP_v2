@@ -15,6 +15,8 @@ from uuid import uuid4
 import aiosqlite
 import bcrypt
 
+import asyncio
+
 logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "users.db"
@@ -132,14 +134,91 @@ async def init_db() -> None:
             logger.info("Dev account already exists, skipping seed.")
 
     logger.info("Auth database initialised at %s", DB_PATH)
+    # Warm the connection pool immediately so the first request isn't slowed
+    # by pool initialisation.
+    await _get_pool()
+
+
+# ── Connection Pool ───────────────────────────────────────
+
+_DB_POOL_SIZE = 5
+_pool: asyncio.Queue | None = None
+_pool_event: asyncio.Event | None = None
+
+
+async def _make_connection() -> aiosqlite.Connection:
+    """Open and configure a single SQLite connection."""
+    conn = await aiosqlite.connect(str(DB_PATH))
+    conn.row_factory = aiosqlite.Row
+    # WAL mode allows concurrent reads while a write is in progress.
+    await conn.execute("PRAGMA journal_mode=WAL")
+    # NORMAL sync is safe with WAL and much faster than FULL.
+    await conn.execute("PRAGMA synchronous=NORMAL")
+    # 8 MB in-process page cache per connection.
+    await conn.execute("PRAGMA cache_size=-8000")
+    return conn
+
+
+async def _get_pool() -> asyncio.Queue:
+    """Lazily initialise the connection pool (thread-safe for asyncio)."""
+    global _pool, _pool_event
+
+    if _pool is not None:
+        return _pool
+
+    # Exactly one coroutine creates the pool; others wait on the event.
+    if _pool_event is None:
+        _pool_event = asyncio.Event()
+        q: asyncio.Queue = asyncio.Queue(maxsize=_DB_POOL_SIZE)
+        for _ in range(_DB_POOL_SIZE):
+            conn = await _make_connection()
+            await q.put(conn)
+        _pool = q
+        _pool_event.set()
+    else:
+        await _pool_event.wait()
+
+    return _pool  # type: ignore[return-value]
+
+
+async def close_pool() -> None:
+    """Drain and close all pooled connections (called at shutdown)."""
+    global _pool, _pool_event
+    if _pool is None:
+        return
+    while not _pool.empty():
+        try:
+            conn = _pool.get_nowait()
+            await conn.close()
+        except Exception:
+            pass
+    _pool = None
+    _pool_event = None
 
 
 @asynccontextmanager
 async def get_db():
-    """Yield an aiosqlite connection with row_factory enabled."""
-    db = await aiosqlite.connect(str(DB_PATH))
-    db.row_factory = aiosqlite.Row
+    """Yield a pooled aiosqlite connection.
+
+    Connections are reused across requests.  On unhandled exceptions the
+    connection is discarded and a fresh one is placed back in the pool.
+    """
+    pool = await _get_pool()
+    db = await pool.get()
     try:
         yield db
-    finally:
-        await db.close()
+    except Exception:
+        # Replace the potentially-dirty connection with a fresh one.
+        try:
+            await db.close()
+        except Exception:
+            pass
+        try:
+            db = await _make_connection()
+        except Exception:
+            db = None  # type: ignore[assignment]
+        if db is not None:
+            await pool.put(db)
+        raise
+    else:
+        await pool.put(db)

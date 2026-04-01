@@ -27,6 +27,26 @@ class SoccerExtractor(BaseFeatureExtractor):
     def __init__(self, sport: str, data_dir: Path) -> None:
         super().__init__(data_dir)
         self.sport = sport
+        self._all_games_cache: pd.DataFrame | None = None
+
+    def _load_all_games(self) -> pd.DataFrame:
+        """Load and cache all seasons' game data for cross-season form calculations."""
+        if self._all_games_cache is not None:
+            return self._all_games_cache
+        sport_dir = self.data_dir / "normalized" / self.sport
+        frames = []
+        for p in sorted(sport_dir.glob("games_*.parquet")):
+            try:
+                df = pd.read_parquet(p)
+                frames.append(df)
+            except Exception:
+                pass
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if not combined.empty and "date" in combined.columns:
+            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+            combined.sort_values("date", inplace=True, ignore_index=True)
+        self._all_games_cache = combined
+        return combined
 
     # ── Helpers ────────────────────────────────────────────
 
@@ -495,11 +515,12 @@ class SoccerExtractor(BaseFeatureExtractor):
 
     def extract_game_features(self, game: dict[str, Any]) -> dict[str, Any]:
         season = game.get("season", 0)
-        games_df = self.load_games(season)
+        games_df = self._load_all_games()
+        current_season_games = self.load_games(season)
         standings = self.load_team_stats(season)
         odds_df = self.load_odds(season)
 
-        h_id, a_id = self._resolve_game_team_ids(game, games_df)
+        h_id, a_id = self._resolve_game_team_ids(game, current_season_games)
         date = str(game.get("date", ""))
         game_id = str(game.get("id", ""))
         home_team = str(game.get("home_team", ""))
@@ -531,6 +552,7 @@ class SoccerExtractor(BaseFeatureExtractor):
         features.update(h2h)
         features["home_momentum"] = self.momentum(h_id, date, games_df)
         features["away_momentum"] = self.momentum(a_id, date, games_df)
+        features["momentum_diff"] = features["home_momentum"] - features["away_momentum"]
 
         # Rest
         features["home_rest_days"] = float(self.rest_days(h_id, date, games_df))
@@ -599,6 +621,8 @@ class SoccerExtractor(BaseFeatureExtractor):
         a_disc = self._player_discipline_features(a_id, date, season, games=games_df)
         features.update({f"away_{k}": v for k, v in a_disc.items()})
         features["card_rate_diff"] = h_disc["yellow_cards_pg"] - a_disc["yellow_cards_pg"]
+        features["attacking_depth_diff"] = h_disc.get("attacking_depth", 0.0) - a_disc.get("attacking_depth", 0.0)
+        features["top_scorer_form_diff"] = h_disc.get("top_scorer_form", 0.0) - a_disc.get("top_scorer_form", 0.0)
 
         # ELO ratings
         h_elo = self.elo_features(h_id, a_id, date, games_df)
@@ -612,8 +636,12 @@ class SoccerExtractor(BaseFeatureExtractor):
         a_half = self._period_rolling_stats(a_id, date, games_df, period_scheme="halves")
         features.update({f"away_{k}": v for k, v in a_half.items()})
         features["period_first_ppg_diff"] = h_half["period_first_ppg"] - a_half["period_first_ppg"]
+        features["period_first_opp_ppg_diff"] = h_half["period_first_opp_ppg"] - a_half["period_first_opp_ppg"]
         features["period_first_win_pct_diff"] = h_half["period_first_win_pct"] - a_half["period_first_win_pct"]
+        features["period_first_half_win_pct_diff"] = h_half["period_first_half_win_pct"] - a_half["period_first_half_win_pct"]
+        features["period_second_half_ppg_diff"] = h_half["period_second_half_ppg"] - a_half["period_second_half_ppg"]
         features["period_comeback_diff"] = h_half["period_comeback_rate"] - a_half["period_comeback_rate"]
+        features["period_ot_rate_diff"] = h_half["period_ot_rate"] - a_half["period_ot_rate"]
 
         # Odds — with team-name fallback
         odds = self._odds_features(game_id, odds_df, home_team=home_team, away_team=away_team, date=date)
@@ -630,6 +658,30 @@ class SoccerExtractor(BaseFeatureExtractor):
         features.update({f"away_{k}": v for k, v in a_fat.items()})
         features["fatigue_score_diff"] = h_fat["fatigue_score"] - a_fat["fatigue_score"]
 
+        # ── Key differentials ─────────────────────────────
+        features["xg_diff_adv"] = features.get("home_xg", 0.0) - features.get("away_xg", 0.0)
+        features["xg_over_perf_diff"] = features.get("home_xg_overperformance", 0.0) - features.get("away_xg_overperformance", 0.0)
+        features["possession_diff"] = features.get("home_possession_pct", 50.0) - features.get("away_possession_pct", 50.0)
+        features["shot_accuracy_diff"] = features.get("home_shot_accuracy", 0.0) - features.get("away_shot_accuracy", 0.0)
+        features["shot_conversion_diff"] = features.get("home_shot_conversion", 0.0) - features.get("away_shot_conversion", 0.0)
+        features["shots_on_target_diff"] = features.get("home_shots_on_target_pg", 0.0) - features.get("away_shots_on_target_pg", 0.0)
+        features["corners_diff"] = features.get("home_corners_pg", 0.0) - features.get("away_corners_pg", 0.0)
+        features["saves_diff"] = features.get("home_saves_pg", 0.0) - features.get("away_saves_pg", 0.0)
+        features["pass_completion_diff"] = features.get("home_pass_completion_pct", 0.0) - features.get("away_pass_completion_pct", 0.0)
+        features["league_pts_diff"] = features.get("home_league_pts", 0.0) - features.get("away_league_pts", 0.0)
+        # Additional defensive/physical differentials
+        features["tackles_diff"] = features.get("home_tackle_pct", 0.0) - features.get("away_tackle_pct", 0.0)
+        features["clearances_diff"] = features.get("home_clearances_pg", 0.0) - features.get("away_clearances_pg", 0.0)
+        features["interceptions_diff"] = features.get("home_interceptions_pg", 0.0) - features.get("away_interceptions_pg", 0.0)
+        features["yellow_cards_diff"] = (
+            features.get("away_yellow_cards_pg", 0.0) - features.get("home_yellow_cards_pg", 0.0)
+        )
+        features["goals_conceded_diff"] = (
+            features.get("away_goals_conceded_pg", 0.0) - features.get("home_goals_conceded_pg", 0.0)
+        )
+        # Play style differential: positive = home plays more direct (long ball), negative = away more direct
+        features["long_ball_style_diff"] = features.get("home_longball_pct", 0.0) - features.get("away_longball_pct", 0.0)
+
         return features
 
     def get_feature_names(self) -> list[str]:
@@ -642,7 +694,7 @@ class SoccerExtractor(BaseFeatureExtractor):
             # H2H
             "h2h_games", "h2h_win_pct", "h2h_avg_margin",
             # Momentum & rest
-            "home_momentum", "away_momentum",
+            "home_momentum", "away_momentum", "momentum_diff",
             "home_rest_days", "away_rest_days",
             # xG and scoring patterns
             "home_xg", "home_xga", "home_xg_diff", "home_xg_overperformance",
@@ -680,7 +732,7 @@ class SoccerExtractor(BaseFeatureExtractor):
             # Player discipline & attacking depth (from player_stats)
             "home_attacking_depth", "home_top_scorer_form",
             "away_attacking_depth", "away_top_scorer_form",
-            "card_rate_diff",
+            "card_rate_diff", "attacking_depth_diff", "top_scorer_form_diff",
             # Short-window goals & draw tendency (last 5)
             "home_gf_l5", "home_ga_l5", "home_draw_rate_l5",
             "away_gf_l5", "away_ga_l5", "away_draw_rate_l5",
@@ -700,4 +752,23 @@ class SoccerExtractor(BaseFeatureExtractor):
             "home_fatigue_games_last_14d", "home_fatigue_score",
             "away_fatigue_rest_days", "away_fatigue_is_back_to_back", "away_fatigue_games_last_7d",
             "away_fatigue_games_last_14d", "away_fatigue_score", "fatigue_score_diff",
+            # Key differentials
+            "xg_diff_adv", "xg_over_perf_diff", "possession_diff",
+            "shot_accuracy_diff", "shot_conversion_diff", "shots_on_target_diff",
+            "corners_diff", "saves_diff", "pass_completion_diff", "league_pts_diff",
+            "tackles_diff", "clearances_diff", "interceptions_diff",
+            "yellow_cards_diff", "goals_conceded_diff", "long_ball_style_diff",
+            # Half-time rolling stats
+            "home_period_first_ppg", "away_period_first_ppg",
+            "home_period_first_opp_ppg", "away_period_first_opp_ppg",
+            "home_period_first_win_pct", "away_period_first_win_pct",
+            "home_period_first_half_ppg", "away_period_first_half_ppg",
+            "home_period_first_half_opp_ppg", "away_period_first_half_opp_ppg",
+            "home_period_first_half_win_pct", "away_period_first_half_win_pct",
+            "home_period_second_half_ppg", "away_period_second_half_ppg",
+            "home_period_comeback_rate", "away_period_comeback_rate",
+            "home_period_ot_rate", "away_period_ot_rate",
+            "period_first_ppg_diff", "period_first_opp_ppg_diff",
+            "period_first_win_pct_diff", "period_first_half_win_pct_diff",
+            "period_second_half_ppg_diff", "period_comeback_diff", "period_ot_rate_diff",
         ]

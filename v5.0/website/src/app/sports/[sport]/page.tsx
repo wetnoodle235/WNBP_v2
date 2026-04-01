@@ -36,6 +36,7 @@ const SPORT_THEME: Partial<Record<SportKey, HubTheme>> = {
   ucl: { tone: "pitch", headline: "Knockout Model", subline: "Second-leg leverage and matchup volatility." },
   nwsl: { tone: "pitch", headline: "Transition Watch", subline: "Identify pace shifts and tactical edges." },
   f1: { tone: "track", headline: "Race Wall", subline: "Grid context, weather angle, and long-run form." },
+  indycar: { tone: "track", headline: "Oval Edge", subline: "Oval vs. road course pace and pit strategy." },
   atp: { tone: "court", headline: "Baseline Read", subline: "Surface, serve profile, and fatigue windows." },
   wta: { tone: "court", headline: "Breakpoint Lens", subline: "Form volatility and return pressure spots." },
   ufc: { tone: "octagon", headline: "Fight Matrix", subline: "Style clashes, pace, and finish probability." },
@@ -44,6 +45,7 @@ const SPORT_THEME: Partial<Record<SportKey, HubTheme>> = {
   dota2: { tone: "server", headline: "Lane Priority", subline: "Tempo spikes and objective conversion." },
   valorant: { tone: "server", headline: "Utility Flow", subline: "Map tendencies and comp exploitation." },
   golf: { tone: "track", headline: "Course Signal", subline: "Field strength, weather, and profile fit." },
+  lpga: { tone: "track", headline: "Tour Form", subline: "Course history, strokes gained, and field depth." },
 };
 
 function fallbackTheme(sport: SportKey): HubTheme {

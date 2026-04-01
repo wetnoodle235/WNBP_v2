@@ -77,9 +77,9 @@ async def get_current_user(
 def require_tier(minimum: str = "free"):
     """Return a dependency that enforces a minimum access tier.
 
-    Tier hierarchy: free < premium < admin
+    Tier hierarchy: free < starter < pro < enterprise
     """
-    tier_levels = {"free": 0, "premium": 1, "admin": 2}
+    tier_levels = {"free": 0, "starter": 1, "pro": 2, "enterprise": 3}
     min_level = tier_levels.get(minimum, 0)
 
     async def _check(

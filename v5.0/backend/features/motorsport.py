@@ -27,6 +27,26 @@ class MotorsportExtractor(BaseFeatureExtractor):
     def __init__(self, sport: str, data_dir: Path) -> None:
         super().__init__(data_dir)
         self.sport = sport
+        self._all_games_cache: pd.DataFrame | None = None
+
+    def _load_all_games(self) -> pd.DataFrame:
+        """Load and cache all seasons' game data for cross-season history."""
+        if self._all_games_cache is not None:
+            return self._all_games_cache
+        sport_dir = self.data_dir / "normalized" / self.sport
+        frames = []
+        for p in sorted(sport_dir.glob("games_*.parquet")):
+            try:
+                df = pd.read_parquet(p)
+                frames.append(df)
+            except Exception:
+                pass
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if not combined.empty and "date" in combined.columns:
+            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+            combined.sort_values("date", inplace=True, ignore_index=True)
+        self._all_games_cache = combined
+        return combined
 
     # ── Helpers ────────────────────────────────────────────
 
@@ -208,6 +228,8 @@ class MotorsportExtractor(BaseFeatureExtractor):
             "dnf_rate": float(sum(dnf_list) / n),
             "avg_points": float(np.mean(points_list)) if points_list else 0.0,
             "win_rate": float(sum(1 for f in finishes if f == 1) / n),
+            # positive = improving (lower finish number = better)
+            "form_trend": float(np.polyfit(range(len(finishes)), finishes, 1)[0]) * -1.0 if len(finishes) >= 3 else 0.0,
         }
 
     def _driver_track_history(
@@ -497,30 +519,27 @@ class MotorsportExtractor(BaseFeatureExtractor):
         return pd.DataFrame(features) if features else pd.DataFrame()
 
     def get_feature_names(self) -> list[str]:
+        # NOTE: current-race outcome columns (podium, points_finish, dnf, fastest_lap,
+        # laps_completed, laps_completion_pct, avg_speed_kph, pit_stops, avg_pit_time_s,
+        # safety_car_count, dnf_count, red_flag_count, race_pit_stops_total) are excluded
+        # from features — they are targets or unknown before the race.
         return [
-            # Qualifying/Grid
+            # Qualifying/Grid (available before race)
             "grid_position", "q_time_ms", "gap_to_pole_ms", "q_position",
-            # Race pace history
-            "avg_finish", "finish_std", "podium_rate", "dnf_rate", "avg_points", "win_rate",
-            # Pit stops + speed
-            "avg_pit_time_s", "pit_stops", "avg_speed_kph",
-            # Laps
-            "laps_completed", "laps_completion_pct",
-            # Constructor
+            # Historical race pace
+            "avg_finish", "finish_std", "podium_rate", "dnf_rate", "avg_points", "win_rate", "form_trend",
+            # Constructor standings (before race)
             "constructor_points", "constructor_position",
             # Track history
             "track_avg_finish", "track_races",
-            # Championship
+            # Championship points before race
             "driver_points",
-            # Race events
-            "dnf", "fastest_lap", "podium", "points_finish",
-            # Weather
+            # Weather (available before race or at start)
             "temperature", "is_wet", "track_temperature",
-            # Strategy
+            # Tire strategy (announced pre-race for opening stint)
             "tire_compound",
-            # Race-level context
-            "safety_car_count", "dnf_count", "round_number", "total_laps",
-            "red_flag_count", "race_pit_stops_total",
+            # Race calendar context (known pre-race)
+            "round_number", "total_laps",
             # Odds
             "home_moneyline", "away_moneyline", "spread", "total", "home_implied_prob",
         ]
