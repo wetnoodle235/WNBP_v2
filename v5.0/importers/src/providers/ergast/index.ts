@@ -21,6 +21,7 @@ const RATE_LIMIT: RateLimitConfig = { requests: 4, perMs: 1_000 };
 const SUPPORTED_SPORTS: Sport[] = ["f1"];
 
 const ALL_ENDPOINTS = [
+  "races",
   "results",
   "qualifying",
   "sprint",
@@ -85,6 +86,8 @@ interface EndpointResult {
 
 function seasonEndpointUrl(season: number, endpoint: string, limit = 1000): string {
   switch (endpoint) {
+    case "races":
+      return `${BASE_URL}/${season}/races.json?limit=${limit}`;
     case "results":
       return `${BASE_URL}/${season}/results.json?limit=${limit}`;
     case "qualifying":
@@ -109,11 +112,55 @@ function seasonEndpointUrl(season: number, endpoint: string, limit = 1000): stri
 function roundEndpointUrl(season: number, round: number, endpoint: string): string {
   switch (endpoint) {
     case "laps":
-      return `${BASE_URL}/${season}/${round}/laps.json?limit=2000`;
+      return `${BASE_URL}/${season}/${round}/laps.json?limit=100&offset=0`;
     case "pitstops":
-      return `${BASE_URL}/${season}/${round}/pitstops.json`;
+      return `${BASE_URL}/${season}/${round}/pitstops.json?limit=100&offset=0`;
     default:
       throw new Error(`Unknown round endpoint: ${endpoint}`);
+  }
+}
+
+function roundEndpointPageUrl(
+  season: number,
+  round: number,
+  endpoint: string,
+  limit: number,
+  offset: number,
+): string {
+  switch (endpoint) {
+    case "laps":
+      return `${BASE_URL}/${season}/${round}/laps.json?limit=${limit}&offset=${offset}`;
+    case "pitstops":
+      return `${BASE_URL}/${season}/${round}/pitstops.json?limit=${limit}&offset=${offset}`;
+    default:
+      throw new Error(`Unknown round endpoint: ${endpoint}`);
+  }
+}
+
+function mergeRoundPage(target: ErgastResponse, page: ErgastResponse, endpoint: Endpoint): void {
+  const targetRace = target?.MRData?.RaceTable?.Races?.[0];
+  const pageRace = page?.MRData?.RaceTable?.Races?.[0];
+  if (!targetRace || !pageRace) return;
+
+  if (endpoint === "laps") {
+    const targetLaps = Array.isArray((targetRace as Record<string, unknown>).Laps)
+      ? ((targetRace as Record<string, unknown>).Laps as unknown[])
+      : [];
+    const pageLaps = Array.isArray((pageRace as Record<string, unknown>).Laps)
+      ? ((pageRace as Record<string, unknown>).Laps as unknown[])
+      : [];
+    (targetRace as Record<string, unknown>).Laps = [...targetLaps, ...pageLaps];
+    return;
+  }
+
+  if (endpoint === "pitstops") {
+    const targetStops = Array.isArray((targetRace as Record<string, unknown>).PitStops)
+      ? ((targetRace as Record<string, unknown>).PitStops as unknown[])
+      : [];
+    const pageStops = Array.isArray((pageRace as Record<string, unknown>).PitStops)
+      ? ((pageRace as Record<string, unknown>).PitStops as unknown[])
+      : [];
+    (targetRace as Record<string, unknown>).PitStops = [...targetStops, ...pageStops];
   }
 }
 
@@ -193,11 +240,31 @@ async function importRoundEndpoint(
 
   if (dryRun) return { filesWritten: 0, errors: [] };
 
-  const url = roundEndpointUrl(season, round, endpoint);
-
   try {
-    const data = await fetchJSON<ErgastResponse>(url, NAME, RATE_LIMIT);
-    writeJSON(outFile, data);
+    const LIMIT = 100;
+    let offset = 0;
+    let merged: ErgastResponse | null = null;
+
+    for (;;) {
+      const url = roundEndpointPageUrl(season, round, endpoint, LIMIT, offset);
+      const page = await fetchJSON<ErgastResponse>(url, NAME, RATE_LIMIT);
+      const total = parseInt(page?.MRData?.total ?? "0", 10);
+
+      if (!merged) {
+        merged = page;
+      } else {
+        mergeRoundPage(merged, page, endpoint);
+      }
+
+      offset += LIMIT;
+      if (offset >= total || total === 0) break;
+    }
+
+    if (!merged) {
+      return { filesWritten, errors };
+    }
+
+    writeJSON(outFile, merged);
     filesWritten++;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

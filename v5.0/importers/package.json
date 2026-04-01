@@ -14,6 +14,8 @@
     "import:nflfastr": "tsx src/cli.ts --provider=nflfastr",
     "import:apisports": "tsx src/cli.ts --provider=apisports",
     "import:cfbdata": "tsx src/cli.ts --provider=cfbdata",
+    "import:cfbdata:2020-2026": "tsx src/cli.ts --provider=cfbdata --sports=ncaaf --seasons=2020,2021,2022,2023,2024,2025,2026",
+    "import:cfbdata:2020-2026:dry": "tsx src/cli.ts --provider=cfbdata --sports=ncaaf --seasons=2020,2021,2022,2023,2024,2025,2026 --dry-run",
     "import:statsbomb": "tsx src/cli.ts --provider=statsbomb",
     "import:understat": "tsx src/cli.ts --provider=understat",
     "import:openf1": "tsx src/cli.ts --provider=openf1",

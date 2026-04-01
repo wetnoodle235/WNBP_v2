@@ -3919,6 +3919,35 @@ def _ergast_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
         _load_json(base / "results.json") or _load_json(base / "races.json")
     )
     records: list[dict[str, Any]] = []
+
+    qualifying_pole_by_round: dict[int, str] = {}
+    q_data = _ergast_unwrap(_load_json(base / "qualifying.json"))
+    for race in q_data.get("RaceTable", {}).get("Races", []):
+        round_num = _safe_int(race.get("round"))
+        if round_num is None:
+            continue
+        for q in race.get("QualifyingResults", []):
+            if str(q.get("position", "")) == "1":
+                drv = q.get("Driver", {})
+                qualifying_pole_by_round[round_num] = f"{drv.get('givenName', '')} {drv.get('familyName', '')}".strip()
+                break
+
+    sprint_winner_by_round: dict[int, tuple[str, str]] = {}
+    sprint_data = _ergast_unwrap(_load_json(base / "sprint.json"))
+    for race in sprint_data.get("RaceTable", {}).get("Races", []):
+        round_num = _safe_int(race.get("round"))
+        if round_num is None:
+            continue
+        for s in race.get("SprintResults", []):
+            if str(s.get("position", "")) == "1":
+                drv = s.get("Driver", {})
+                cons = s.get("Constructor", {})
+                sprint_winner_by_round[round_num] = (
+                    f"{drv.get('givenName', '')} {drv.get('familyName', '')}".strip(),
+                    _safe_str(cons.get("name")) or "",
+                )
+                break
+
     for r in data.get("RaceTable", {}).get("Races", []):
         circuit = r.get("Circuit", {})
         loc = circuit.get("Location", {})
@@ -3931,7 +3960,7 @@ def _ergast_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
         winner_name = winner_team = winner_time = None
         fastest_lap_driver = fastest_lap_time = None
         fastest_lap_num = None
-        pole_driver = None
+        pole_driver = qualifying_pole_by_round.get(round_num or -1)
         dnf_count = 0
         total_laps = 0
         if results:
@@ -3972,6 +4001,20 @@ def _ergast_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
         pit_data = _ergast_unwrap(_load_json(pit_file))
         pit_total = len(pit_data.get("RaceTable", {}).get("Races", [{}])[0].get("PitStops", []))
 
+        if not total_laps and round_num is not None:
+            lap_file = base / "laps" / f"round_{round_num}.json"
+            lap_data = _ergast_unwrap(_load_json(lap_file))
+            laps_arr = lap_data.get("RaceTable", {}).get("Races", [{}])[0].get("Laps", [])
+            lap_numbers = [_safe_int(l.get("number")) for l in laps_arr if isinstance(l, dict)]
+            lap_numbers = [n for n in lap_numbers if n is not None]
+            if lap_numbers:
+                total_laps = max(lap_numbers)
+
+        sprint_winner_name = None
+        sprint_winner_team = None
+        if round_num is not None and round_num in sprint_winner_by_round:
+            sprint_winner_name, sprint_winner_team = sprint_winner_by_round[round_num]
+
         locality = loc.get("locality") if isinstance(loc, dict) else None
         country = loc.get("country") if isinstance(loc, dict) else None
         _race_date = r.get("date", "")
@@ -4003,6 +4046,8 @@ def _ergast_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
             "fastest_lap_time": fastest_lap_time,
             "fastest_lap_number": fastest_lap_num,
             "pole_position_driver": pole_driver,
+            "sprint_winner_name": sprint_winner_name,
+            "sprint_winner_team": sprint_winner_team,
             "dnf_count": dnf_count or None,
             "pit_stops_total": pit_total or None,
         })
@@ -4055,6 +4100,55 @@ def _ergast_player_stats(base: Path, sport: str, season: str) -> list[dict[str, 
         _load_json(base / "results.json") or _load_json(base / "races.json")
     )
     records: list[dict[str, Any]] = []
+
+    qualifying_pos: dict[tuple[str, str], int] = {}
+    q_data = _ergast_unwrap(_load_json(base / "qualifying.json"))
+    for race in q_data.get("RaceTable", {}).get("Races", []):
+        round_num = _safe_str(race.get("round"))
+        if not round_num:
+            continue
+        for q in race.get("QualifyingResults", []):
+            drv = q.get("Driver", {})
+            driver_id = _safe_str(drv.get("driverId"))
+            pos = _safe_int(q.get("position"))
+            if driver_id and pos is not None:
+                qualifying_pos[(round_num, driver_id)] = pos
+
+    sprint_pos: dict[tuple[str, str], int] = {}
+    sprint_pts: dict[tuple[str, str], float] = {}
+    sprint_data = _ergast_unwrap(_load_json(base / "sprint.json"))
+    for race in sprint_data.get("RaceTable", {}).get("Races", []):
+        round_num = _safe_str(race.get("round"))
+        if not round_num:
+            continue
+        for s in race.get("SprintResults", []):
+            drv = s.get("Driver", {})
+            driver_id = _safe_str(drv.get("driverId"))
+            if not driver_id:
+                continue
+            pos = _safe_int(s.get("position"))
+            pts = _safe_float(s.get("points"))
+            if pos is not None:
+                sprint_pos[(round_num, driver_id)] = pos
+            if pts is not None:
+                sprint_pts[(round_num, driver_id)] = pts
+
+    pit_stops_by_driver_round: dict[tuple[str, str], int] = {}
+    pit_dir = base / "pitstops"
+    if pit_dir.is_dir():
+        for pit_file in pit_dir.glob("round_*.json"):
+            pit_data = _ergast_unwrap(_load_json(pit_file))
+            race = pit_data.get("RaceTable", {}).get("Races", [{}])[0]
+            round_num = _safe_str(race.get("round"))
+            if not round_num:
+                continue
+            for stop in race.get("PitStops", []):
+                driver_id = _safe_str(stop.get("driverId"))
+                if not driver_id:
+                    continue
+                key = (round_num, driver_id)
+                pit_stops_by_driver_round[key] = pit_stops_by_driver_round.get(key, 0) + 1
+
     for r in data.get("RaceTable", {}).get("Races", []):
         round_num = r.get("round", "")
         game_id = f"{r.get('season', season)}_{round_num}"
@@ -4089,10 +4183,14 @@ def _ergast_player_stats(base: Path, sport: str, season: str) -> list[dict[str, 
                 "season": season,
                 "source": "ergast",
                 "category": "motorsport",
+                "qualifying_position": qualifying_pos.get((str(round_num), drv.get("driverId", ""))),
                 "points": _f1_position_points(finish),
+                "sprint_position": sprint_pos.get((str(round_num), drv.get("driverId", ""))),
+                "sprint_points": sprint_pts.get((str(round_num), drv.get("driverId", ""))),
                 "finish_position": finish,
                 "grid_position": grid,
                 "laps": laps,
+                "pit_stops": pit_stops_by_driver_round.get((str(round_num), drv.get("driverId", ""))),
                 "status": status,
                 "fastest_lap": fl_time,
                 "avg_speed_kph": fl_speed,
@@ -5574,6 +5672,159 @@ def _cfbdata_team_stats(
                         teams[team][f"{prefix}{k}"] = _safe_float(v)
 
     return list(teams.values())
+
+
+def _cfbdata_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_json(base / "teams.json")
+    if not data or not isinstance(data, list):
+        return []
+
+    records: list[dict[str, Any]] = []
+    for t in data:
+        tid = _safe_str(t.get("id"))
+        name = _safe_str(t.get("school")) or _safe_str(t.get("team"))
+        if not tid or not name:
+            continue
+        records.append({
+            "id": tid,
+            "name": name,
+            "abbreviation": _safe_str(t.get("abbreviation")),
+            "city": _safe_str(t.get("location")),
+            "conference": _safe_str(t.get("conference")),
+            "division": _safe_str(t.get("division")),
+            "source": "cfbdata",
+        })
+    return records
+
+
+def _cfbdata_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    players: dict[str, dict[str, Any]] = {}
+
+    roster = _load_json(base / "roster.json")
+    if roster and isinstance(roster, list):
+        for p in roster:
+            pid = _safe_str(p.get("id")) or _safe_str(p.get("playerId"))
+            if not pid:
+                continue
+            full_name = (
+                f"{_safe_str(p.get('firstName'))} {_safe_str(p.get('lastName'))}".strip()
+                if _safe_str(p.get("firstName")) and _safe_str(p.get("lastName"))
+                else _safe_str(p.get("name")) or ""
+            )
+            players.setdefault(pid, {
+                "id": pid,
+                "name": full_name,
+                "team_id": _safe_str(p.get("team")) or _safe_str(p.get("school")),
+                "position": _safe_str(p.get("position")),
+                "height": _safe_str(p.get("height")),
+                "weight": _safe_float(p.get("weight")),
+                "class_year": _safe_str(p.get("year")),
+                "source": "cfbdata",
+            })
+
+    portal = _load_json(base / "player_portal.json")
+    if portal and isinstance(portal, list):
+        for p in portal:
+            pid = _safe_str(p.get("playerId")) or _safe_str(p.get("id"))
+            name = _safe_str(p.get("player")) or _safe_str(p.get("name"))
+            if not pid or not name:
+                continue
+            rec = players.setdefault(pid, {"id": pid, "name": name, "source": "cfbdata"})
+            rec.setdefault("position", _safe_str(p.get("position")))
+            rec.setdefault("team_id", _safe_str(p.get("destination")) or _safe_str(p.get("school")))
+
+    returning = _load_json(base / "player_returning.json")
+    if returning and isinstance(returning, list):
+        for p in returning:
+            pid = _safe_str(p.get("playerId")) or _safe_str(p.get("id"))
+            name = _safe_str(p.get("name"))
+            if not pid or not name:
+                continue
+            rec = players.setdefault(pid, {"id": pid, "name": name, "source": "cfbdata"})
+            rec.setdefault("position", _safe_str(p.get("position")))
+            rec.setdefault("team_id", _safe_str(p.get("team")))
+
+    return [r for r in players.values() if r.get("id") and r.get("name")]
+
+
+def _cfbdata_player_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_json(base / "stats_player_season.json")
+    if not data or not isinstance(data, list):
+        return []
+
+    rows: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in data:
+        pid = _safe_str(entry.get("playerId")) or _safe_str(entry.get("id"))
+        name = _safe_str(entry.get("player")) or _safe_str(entry.get("name"))
+        if not pid or not name:
+            continue
+        team = _safe_str(entry.get("team")) or _safe_str(entry.get("school"))
+        key = (pid, team or "")
+        rec = rows.setdefault(key, {
+            "game_id": f"cfb_season_{season}",
+            "player_id": pid,
+            "player_name": name,
+            "team_id": team,
+            "season": season,
+            "source": "cfbdata",
+        })
+
+        stat_name = _safe_str(entry.get("statName"))
+        stat_val = _safe_float(entry.get("statValue"))
+        if stat_name and stat_val is not None:
+            rec[stat_name] = stat_val
+
+    usage = _load_json(base / "player_usage.json")
+    if usage and isinstance(usage, list):
+        for entry in usage:
+            pid = _safe_str(entry.get("playerId")) or _safe_str(entry.get("id"))
+            if not pid:
+                continue
+            team = _safe_str(entry.get("team")) or ""
+            key = (pid, team)
+            rec = rows.setdefault(key, {
+                "game_id": f"cfb_season_{season}",
+                "player_id": pid,
+                "player_name": _safe_str(entry.get("name")) or _safe_str(entry.get("player")) or pid,
+                "team_id": team or None,
+                "season": season,
+                "source": "cfbdata",
+            })
+            for k, v in entry.items():
+                if isinstance(v, (int, float)):
+                    rec[f"usage_{k}"] = _safe_float(v)
+
+    return list(rows.values())
+
+
+def _cfbdata_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_json(base / "lines.json")
+    if not data or not isinstance(data, list):
+        return []
+
+    records: list[dict[str, Any]] = []
+    for r in data:
+        game_id = _safe_str(r.get("id"))
+        if not game_id:
+            continue
+        records.append({
+            "game_id": game_id,
+            "date": _safe_str(r.get("date"))[:10] if _safe_str(r.get("date")) else None,
+            "commence_time": _safe_datetime(r.get("date")),
+            "home_team": _safe_str(r.get("homeTeam")),
+            "away_team": _safe_str(r.get("awayTeam")),
+            "bookmaker": _safe_str(r.get("provider")) or "cfbdata",
+            "h2h_home": _safe_float(r.get("homeMoneyline")),
+            "h2h_away": _safe_float(r.get("awayMoneyline")),
+            "spread_home": _safe_float(r.get("spread")),
+            "spread_home_line": _safe_float(r.get("homeSpreadOdds")),
+            "spread_away_line": _safe_float(r.get("awaySpreadOdds")),
+            "total_line": _safe_float(r.get("overUnder")),
+            "total_over": _safe_float(r.get("overOdds")),
+            "total_under": _safe_float(r.get("underOdds")),
+            "source": "cfbdata",
+        })
+    return records
 
 
 # ── Football-data.org ─────────────────────────────────────
@@ -7630,8 +7881,12 @@ PROVIDER_LOADERS: dict[tuple[str, str], LoaderFn] = {
     ("opendota", "player_stats"): _opendota_player_stats,
     # CFBData
     ("cfbdata", "games"):      _cfbdata_games,
+    ("cfbdata", "teams"):      _cfbdata_teams,
+    ("cfbdata", "players"):    _cfbdata_players,
     ("cfbdata", "standings"):  _cfbdata_standings,
+    ("cfbdata", "player_stats"): _cfbdata_player_stats,
     ("cfbdata", "team_stats"): _cfbdata_team_stats,
+    ("cfbdata", "odds"):       _cfbdata_odds,
     # Football-data.org
     ("footballdata", "games"):     _footballdata_games,
     ("footballdata", "standings"): _footballdata_standings,

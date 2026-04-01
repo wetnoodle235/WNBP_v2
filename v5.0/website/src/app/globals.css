@@ -7893,3 +7893,68 @@ button[aria-current="page"] {
     margin-top: var(--space-1);
   }
 }
+
+/* ============================================================
+   VENUE VISUAL STYLES
+   ============================================================ */
+
+/* Sport detail venue section */
+.sport-detail-venue {
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin: var(--space-5) var(--space-4);
+  overflow: hidden;
+}
+
+.sport-detail-venue header {
+  display: flex;
+  align-items: center;
+}
+
+/* Venue visual wrapper in game detail page */
+.venue-visual-card {
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--space-5);
+  gap: var(--space-3);
+}
+
+.venue-visual-card svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* F1 circuit container */
+.f1-circuit-wrapper {
+  background: #1a1a2e;
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Responsive venue SVGs */
+@media (max-width: 640px) {
+  .sport-detail-venue {
+    margin: var(--space-4) var(--space-3);
+  }
+  
+  .sport-detail-venue svg {
+    width: 100% !important;
+    height: auto !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .sport-detail-venue {
+    margin: var(--space-3) var(--space-2);
+  }
+}

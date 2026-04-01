@@ -21,6 +21,7 @@ import {
   StatCard,
   StoryCard,
 } from "@/components/ui";
+import { VenueVisual } from "@/components/venue";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -426,6 +427,42 @@ export default async function GameDetailPage({ params }: PageProps) {
           </div>
         </SectionBand>
       )}
+
+      {/* ============================================================ */}
+      {/*  VENUE VISUAL                                                 */}
+      {/* ============================================================ */}
+      {(() => {
+        const sportNorm = sport.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const noVisualSports = ["mma", "ufc", "boxing", "esports", "csgo", "lol", "valorant", "dota2"];
+        if (noVisualSports.includes(sportNorm)) return null;
+        return (
+          <SectionBand title="Venue">
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: "var(--space-3)",
+              }}
+            >
+              <div style={{ overflow: "hidden", borderRadius: "var(--radius-md)", maxWidth: "100%" }}>
+                <VenueVisual
+                  sport={sport}
+                  venueName={game.venue ?? ""}
+                  homeColor={undefined}
+                  awayColor={undefined}
+                  animate={sport.toLowerCase() === "f1" || sport.toLowerCase() === "indycar"}
+                />
+              </div>
+              {game.venue && (
+                <div style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)", textAlign: "center" }}>
+                  📍 {game.venue}
+                </div>
+              )}
+            </div>
+          </SectionBand>
+        );
+      })()}
 
       {/* ============================================================ */}
       {/*  AI PREDICTION                                                */}

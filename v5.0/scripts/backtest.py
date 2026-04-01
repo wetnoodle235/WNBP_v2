@@ -392,6 +392,36 @@ class Backtester:
             )
 
             records: list[dict[str, Any]] = []
+
+            # ── Fast path: use pre-computed features (batch) ──
+            precomp = _load_precomputed_features(sport)
+            if precomp is not None:
+                try:
+                    preds = predictor.predict_batch_precomputed(precomp, games_df)
+                    # Build game dicts for evaluation
+                    id_col = "game_id" if "game_id" in games_df.columns else "id"
+                    game_lookup = {}
+                    for _, row in games_df.iterrows():
+                        g = row.to_dict()
+                        gid = str(g.get("game_id") or g.get("id", ""))
+                        game_lookup[gid] = g
+                    for pred in preds:
+                        gid = str(pred.game_id)
+                        game = game_lookup.get(gid, {})
+                        if not game:
+                            continue
+                        record = self._evaluate(pred, game)
+                        if record:
+                            records.append(record)
+                    logger.info("  %s: %d predictions (pre-computed)", sport, len(records))
+                    return records
+                except Exception:
+                    logger.debug(
+                        "Pre-computed batch failed for %s — falling back to per-game",
+                        sport, exc_info=True,
+                    )
+
+            # ── Slow fallback: per-game feature extraction ──
             for _, row in games_df.iterrows():
                 game = row.to_dict()
                 if "game_id" not in game and "id" in game:

@@ -123,6 +123,8 @@ class CombatExtractor(BaseFeatureExtractor):
             "sig_strikes_absorbed": 0.0,
             "takedown_pct": 0.0, "submission_attempts": 0.0,
             "knockdowns_per_fight": 0.0, "control_time_avg": 0.0,
+            "total_strikes_per_min": 0.0, "sig_strike_defense": 0.5,
+            "volume_vs_accuracy": 0.0,
         }
         if recent.empty:
             return _empty
@@ -151,16 +153,29 @@ class CombatExtractor(BaseFeatureExtractor):
         def _mean(s: pd.Series) -> float:
             return float(s.mean()) if len(s) > 0 else 0.0
 
+        opp_sig_attempted = _col("away_sig_strikes_attempted", "home_sig_strikes_attempted")
+        total_strikes_pm_series = pd.Series(
+            np.where(ctrl_time > 0, total_landed / (ctrl_time / 60.0), 0.0)
+        )
+        opp_sig_att_mean = _mean(opp_sig_attempted)
+        opp_sig_land_mean = _mean(opp_sig_landed)
+        sig_def = float(1.0 - (opp_sig_land_mean / opp_sig_att_mean)) if opp_sig_att_mean > 0 else 0.5
+        sig_pct_mean = _mean(sig_pct)
+        total_str_mean = _mean(total_landed)
+
         return {
-            "sig_strike_pct": _mean(sig_pct),
+            "sig_strike_pct": sig_pct_mean,
             "sig_strikes_per_fight": _mean(sig_landed),
-            "total_strikes_per_fight": _mean(total_landed),
-            "strike_differential": _mean(sig_landed) - _mean(opp_sig_landed),
-            "sig_strikes_absorbed": _mean(opp_sig_landed),
+            "total_strikes_per_fight": total_str_mean,
+            "strike_differential": _mean(sig_landed) - opp_sig_land_mean,
+            "sig_strikes_absorbed": opp_sig_land_mean,
             "takedown_pct": _mean(td_pct),
             "submission_attempts": _mean(sub_att),
             "knockdowns_per_fight": _mean(knockdowns),
             "control_time_avg": _mean(ctrl_time),
+            "total_strikes_per_min": _mean(total_strikes_pm_series),
+            "sig_strike_defense": sig_def,
+            "volume_vs_accuracy": float(total_str_mean * sig_pct_mean / 100.0),
         }
 
     def _physical_features(

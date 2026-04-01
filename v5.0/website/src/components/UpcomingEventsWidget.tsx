@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { getSportIcon, getSportColor } from "@/lib/sports-config";
 import { resolveServerApiBase } from "@/lib/api-base";
+import { F1Circuit, IndyCarTrack } from "@/components/venue";
 
 interface UpcomingEvent {
   id: string;
@@ -197,7 +198,21 @@ export default function UpcomingEventsWidget({
                 style={{ "--sport-color": color } as React.CSSProperties}
               >
                 <div className="upcoming-event-sport-badge" style={{ background: `${color}22`, color }}>
-                  {icon}
+                  {ev.sport === "f1" ? (
+                    <F1Circuit
+                      width={36}
+                      height={28}
+                      circuitKey={ev.circuit_name ?? ev.venue ?? "bahrain"}
+                    />
+                  ) : ev.sport === "indycar" ? (
+                    <IndyCarTrack
+                      width={36}
+                      height={28}
+                      trackName={ev.venue ?? ev.circuit_name ?? ""}
+                    />
+                  ) : (
+                    icon
+                  )}
                 </div>
                 <div className="upcoming-event-info">
                   <span className="upcoming-event-name">{eventName}</span>

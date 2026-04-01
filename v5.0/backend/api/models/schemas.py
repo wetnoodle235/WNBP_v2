@@ -583,6 +583,8 @@ class Game(_Base):
     fastest_lap_time: Optional[str] = None
     fastest_lap_number: Optional[int] = None
     pole_position_driver: Optional[str] = None
+    sprint_winner_name: Optional[str] = None
+    sprint_winner_team: Optional[str] = None
     dnf_count: Optional[int] = None
     safety_car_count: Optional[int] = None
     red_flag_count: Optional[int] = None
@@ -1072,7 +1074,10 @@ class TennisStats(_PlayerGameStatsBase):
 
 class F1Stats(_PlayerGameStatsBase):
     category: Literal["motorsport"] = "motorsport"
+    qualifying_position: Optional[int] = None
     grid_position: Optional[int] = None
+    sprint_position: Optional[int] = None
+    sprint_points: Optional[float] = None
     finish_position: Optional[int] = None
     laps: Optional[int] = None
     points: Optional[float] = None

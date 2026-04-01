@@ -5,6 +5,7 @@ import { buildPageMetadata } from "@/lib/seo";
 import { getGames, getPredictions, getNews } from "@/lib/api";
 import { isSportKey, SPORTS, type SportKey } from "@/lib/sports";
 import { getSportIcon, getSportFullName } from "@/lib/sports-config";
+import { VenueVisual } from "@/components/venue";
 
 export const dynamic = "force-dynamic";
 
@@ -195,6 +196,38 @@ export default async function SportHubDetailPage({ params }: PageProps) {
           )}
         </article>
       </section>
+
+      {/* ── VENUE VISUAL ─────────────────────────────────────────── */}
+      {(() => {
+        const noVisual = ["mma", "ufc", "boxing", "lol", "csgo", "dota2", "valorant", "esports"];
+        if (noVisual.includes(sport.toLowerCase())) return null;
+        // Get upcoming race venue for F1/IndyCar
+        const nextRaceVenue = (sport === "f1" || sport === "indycar")
+          ? games.find((g) => g.status !== "final")?.venue ?? games[0]?.venue ?? ""
+          : "";
+        return (
+          <section className="sport-detail-venue" aria-label="Playing surface">
+            <header style={{ padding: "var(--space-4) var(--space-6) var(--space-2)", borderBottom: "1px solid var(--color-border)" }}>
+              <h2 style={{ margin: 0, fontSize: "var(--text-lg)", fontWeight: 700 }}>
+                {sport === "f1" || sport === "indycar"
+                  ? "🏎️ Race Circuit"
+                  : sport === "golf" || sport === "lpga" || sport === "pga"
+                  ? "⛳ Course Preview"
+                  : sport === "atp" || sport === "wta"
+                  ? "🎾 Court Layout"
+                  : "🏟️ Playing Surface"}
+              </h2>
+            </header>
+            <div style={{ padding: "var(--space-5)", display: "flex", justifyContent: "center" }}>
+              <VenueVisual
+                sport={sport}
+                venueName={nextRaceVenue}
+                animate={sport === "f1" || sport === "indycar"}
+              />
+            </div>
+          </section>
+        );
+      })()}
     </main>
   );
 }

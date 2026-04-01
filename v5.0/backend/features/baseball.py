@@ -142,26 +142,53 @@ class BaseballExtractor(BaseFeatureExtractor):
             vals = vals[np.isfinite(vals)]  # drop inf values
             return float(vals.mean()) if len(vals) > 0 else 0.0
 
-        era = _avg("era")
-        ip = _avg("innings")
+        # Prefer computing ERA from earned_runs/innings (more reliable than raw ERA column)
+        earned_r_series = pd.to_numeric(recent.get("earned_runs", pd.Series(dtype=float)), errors="coerce").dropna()
+        ip_series = pd.to_numeric(recent.get("innings", pd.Series(dtype=float)), errors="coerce").dropna()
+
+        # Align series by index
+        if len(earned_r_series) > 0 and len(ip_series) > 0:
+            common_idx = earned_r_series.index.intersection(ip_series.index)
+            total_er = earned_r_series.loc[common_idx].sum()
+            total_ip = ip_series.loc[common_idx].sum()
+            # Convert fractional innings (e.g. 3.2 = 3 full + 2 outs = 3.667 innings)
+            def _ip_to_decimal(ip_val: float) -> float:
+                whole = int(ip_val)
+                frac = ip_val - whole
+                return whole + (frac / 0.3)  # .1 = 1/3, .2 = 2/3
+            total_ip_dec = sum(_ip_to_decimal(v) for v in ip_series.loc[common_idx] if v >= 0)
+            computed_era = float(total_er / total_ip_dec * 9) if total_ip_dec > 0.1 else 0.0
+            computed_era = min(computed_era, 27.0)  # cap at 27 ERA (pathological games)
+        else:
+            computed_era = 0.0
+            total_ip_dec = 0.0
+
+        era = computed_era if computed_era > 0 else _avg("era")
         ks = _avg("strikeouts")
-        bbs = _avg("walks") or _avg("bb")  # 'bb' is the column in normalized data
+        bbs = _avg("walks") or _avg("bb")
+        ip = total_ip_dec / max(len(recent), 1) if total_ip_dec > 0 else _avg("innings")
         k9 = float(ks / ip * 9) if ip > 0 else 0.0
         bb9 = float(bbs / ip * 9) if ip > 0 else 0.0
-        # K/BB ratio: strikeout dominance vs walk tendency (key pitcher control metric)
         k_bb_ratio = float(ks / bbs) if bbs > 0 else (ks if ks > 0 else 0.0)
         # ERA+ proxy: 4.5 is roughly league-average ERA; ERA+ = 100 * (league_avg / ERA)
         era_plus = float(min(200.0, 100.0 * 4.5 / era)) if era > 0 else 100.0
-        wins = recent.get("win", pd.Series(dtype=float))
-        losses = recent.get("loss", pd.Series(dtype=float))
-        w = pd.to_numeric(wins, errors="coerce").fillna(0).sum()
-        l = pd.to_numeric(losses, errors="coerce").fillna(0).sum()
-        # WHIP: use direct column if available, else compute from hits+(walks or bb)/innings
-        whip = _avg("whip")
-        if whip == 0.0 and ip > 0:
-            hits = _avg("hits")
-            walks = _avg("walks") or _avg("bb")
-            whip = float((hits + walks) / ip) if ip > 0 else 0.0
+        # WHIP: compute from hits+walks/innings (win/loss/whip columns are null)
+        hits_avg = _avg("hits")
+        walks_avg = _avg("walks") or _avg("bb")
+        whip = float((hits_avg + walks_avg) / ip) if ip > 0 else 0.0
+        # Quality starts proxy: fraction of outings where ERA < 4.5 (computed per appearance)
+        if not ip_series.empty and not earned_r_series.empty:
+            common_idx = earned_r_series.index.intersection(ip_series.index)
+            per_game_era = []
+            for idx_v in common_idx:
+                ip_v = ip_series.loc[idx_v]
+                er_v = earned_r_series.loc[idx_v]
+                ip_dec = _ip_to_decimal(float(ip_v))
+                if ip_dec > 0.1:
+                    per_game_era.append(float(er_v) / ip_dec * 9)
+            qs_rate = float(sum(1 for e in per_game_era if e < 4.5) / len(per_game_era)) if per_game_era else 0.5
+        else:
+            qs_rate = 0.5
         return {
             "sp_era": era,
             "sp_k_per_9": k9,
@@ -169,7 +196,9 @@ class BaseballExtractor(BaseFeatureExtractor):
             "sp_k_bb_ratio": k_bb_ratio,
             "sp_era_plus": era_plus,
             "sp_whip": whip,
-            "sp_win_pct": float(w / (w + l)) if (w + l) > 0 else 0.0,
+            "sp_win_pct": qs_rate,   # repurpose sp_win_pct as quality-start rate (since win/loss null)
+            "sp_qs_rate": qs_rate,   # explicit quality start rate feature
+            "sp_avg_ip": ip,         # average innings per start (stamina / bullpen usage indicator)
         }
 
     def _team_batting_from_stats(
@@ -833,6 +862,9 @@ class BaseballExtractor(BaseFeatureExtractor):
         features["era_diff"] = features.get("away_sp_era", 0.0) - features.get("home_sp_era", 0.0)  # lower ERA is better
         features["whip_diff"] = features.get("away_sp_whip", 0.0) - features.get("home_sp_whip", 0.0)
         features["era_plus_diff"] = features.get("home_sp_era_plus", 100.0) - features.get("away_sp_era_plus", 100.0)
+        features["qs_rate_diff"] = features.get("home_sp_qs_rate", 0.5) - features.get("away_sp_qs_rate", 0.5)
+        features["k9_diff"] = features.get("home_sp_k_per_9", 0.0) - features.get("away_sp_k_per_9", 0.0)
+        features["bb9_diff"] = features.get("away_sp_bb_per_9", 0.0) - features.get("home_sp_bb_per_9", 0.0)  # lower walks is better
         features["woba_diff"] = features.get("home_woba", 0.0) - features.get("away_woba", 0.0)
         features["wrc_plus_diff"] = features.get("home_wrc_plus", 100.0) - features.get("away_wrc_plus", 100.0)
         features["iso_diff"] = features.get("home_iso", 0.0) - features.get("away_iso", 0.0)
@@ -869,10 +901,10 @@ class BaseballExtractor(BaseFeatureExtractor):
             # Pitcher matchup (k_per_9/bb_per_9/era_plus from rolling player_stats)
             "home_sp_era", "home_sp_k_per_9", "home_sp_bb_per_9",
             "home_sp_k_bb_ratio", "home_sp_era_plus",
-            "home_sp_whip", "home_sp_win_pct",
+            "home_sp_whip", "home_sp_win_pct", "home_sp_qs_rate", "home_sp_avg_ip",
             "away_sp_era", "away_sp_k_per_9", "away_sp_bb_per_9",
             "away_sp_k_bb_ratio", "away_sp_era_plus",
-            "away_sp_whip", "away_sp_win_pct",
+            "away_sp_whip", "away_sp_win_pct", "away_sp_qs_rate", "away_sp_avg_ip",
             # Bullpen
             "home_bullpen_era", "home_bullpen_ip_avg", "home_bullpen_usage",
             "away_bullpen_era", "away_bullpen_ip_avg", "away_bullpen_usage",
@@ -908,7 +940,8 @@ class BaseballExtractor(BaseFeatureExtractor):
             "away_fatigue_rest_days", "away_fatigue_is_back_to_back", "away_fatigue_games_last_7d",
             "away_fatigue_games_last_14d", "away_fatigue_score", "fatigue_score_diff",
             # Key differentials
-            "era_diff", "whip_diff", "era_plus_diff", "woba_diff", "wrc_plus_diff",
+            "era_diff", "whip_diff", "era_plus_diff", "qs_rate_diff", "k9_diff", "bb9_diff",
+            "woba_diff", "wrc_plus_diff",
             "iso_diff", "k_rate_diff", "bb_rate_diff", "bullpen_era_diff",
             "pythag_diff", "ops_diff", "runs_pg_diff",
             # Advanced batting (from advanced_batting.parquet)
