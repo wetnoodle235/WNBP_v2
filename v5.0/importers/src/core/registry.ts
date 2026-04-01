@@ -20,7 +20,6 @@ export const PROVIDER_MODULES = [
   "sgo",
   "nbastats",
   "nflfastr",
-  "apisports",
   "cfbdata",
   "statsbomb",
   "understat",

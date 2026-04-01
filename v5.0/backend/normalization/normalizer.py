@@ -55,17 +55,17 @@ SPORT_PROVIDER_DIR: dict[str, dict[str, str]] = {
     "wnba":       {"espn": "wnba",       "nbastats": "wnba",       "odds": "wnba"},
     "ncaab":      {"espn": "ncaab",                                 "odds": "ncaab"},
     "ncaaw":      {"espn": "ncaaw"},
-    "nfl":        {"espn": "nfl",        "nflfastr": "nfl",        "odds": "nfl",  "oddsapi": "nfl",  "apisports": "nfl",  "fivethirtyeight": "nfl"},
+    "nfl":        {"espn": "nfl",        "nflfastr": "nfl",        "odds": "nfl",  "oddsapi": "nfl",  "fivethirtyeight": "nfl"},
     "ncaaf":      {"espn": "ncaaf",      "cfbdata": "ncaaf",        "odds": "ncaaf"},
-    "mlb":        {"espn": "mlb",        "lahman": "mlb",          "odds": "mlb",  "oddsapi": "mlb",  "apisports": "mlb",  "mlbstats": "mlb"},
-    "nhl":        {"espn": "nhl",        "nhl": "nhl",             "odds": "nhl",  "oddsapi": "nhl",  "apisports": "nhl"},
-    "epl":        {"espn": "epl",        "statsbomb": "epl",       "odds": "epl",  "oddsapi": "epl",  "footballdata": "epl",  "apisports": "epl",  "fivethirtyeight": "epl"},
-    "laliga":     {"espn": "laliga",     "statsbomb": "laliga",    "odds": "laliga",  "oddsapi": "laliga",  "footballdata": "laliga",  "apisports": "laliga",  "fivethirtyeight": "laliga"},
-    "bundesliga": {"espn": "bundesliga", "statsbomb": "bundesliga","odds": "bundesliga",  "oddsapi": "bundesliga",  "footballdata": "bundesliga",  "apisports": "bundesliga",  "fivethirtyeight": "bundesliga"},
-    "seriea":     {"espn": "seriea",     "statsbomb": "seriea",    "odds": "seriea",  "oddsapi": "seriea",  "footballdata": "seriea",  "apisports": "seriea",  "fivethirtyeight": "seriea"},
-    "ligue1":     {"espn": "ligue1",     "statsbomb": "ligue1",    "odds": "ligue1",  "oddsapi": "ligue1",  "footballdata": "ligue1",  "apisports": "ligue1",  "fivethirtyeight": "ligue1"},
-    "mls":        {"espn": "mls",        "statsbomb": "mls",       "odds": "mls",  "oddsapi": "mls",  "footballdata": "mls",  "apisports": "mls",  "fivethirtyeight": "mls"},
-    "ucl":        {"espn": "ucl",        "statsbomb": "ucl",       "odds": "ucl",  "oddsapi": "ucl",  "footballdata": "ucl",  "apisports": "ucl",  "fivethirtyeight": "ucl"},
+    "mlb":        {"espn": "mlb",        "lahman": "mlb",          "odds": "mlb",  "oddsapi": "mlb",  "mlbstats": "mlb"},
+    "nhl":        {"espn": "nhl",        "nhl": "nhl",             "odds": "nhl",  "oddsapi": "nhl"},
+    "epl":        {"espn": "epl",        "statsbomb": "epl",       "odds": "epl",  "oddsapi": "epl",  "footballdata": "epl",  "fivethirtyeight": "epl"},
+    "laliga":     {"espn": "laliga",     "statsbomb": "laliga",    "odds": "laliga",  "oddsapi": "laliga",  "footballdata": "laliga",  "fivethirtyeight": "laliga"},
+    "bundesliga": {"espn": "bundesliga", "statsbomb": "bundesliga","odds": "bundesliga",  "oddsapi": "bundesliga",  "footballdata": "bundesliga",  "fivethirtyeight": "bundesliga"},
+    "seriea":     {"espn": "seriea",     "statsbomb": "seriea",    "odds": "seriea",  "oddsapi": "seriea",  "footballdata": "seriea",  "fivethirtyeight": "seriea"},
+    "ligue1":     {"espn": "ligue1",     "statsbomb": "ligue1",    "odds": "ligue1",  "oddsapi": "ligue1",  "footballdata": "ligue1",  "fivethirtyeight": "ligue1"},
+    "mls":        {"espn": "mls",        "statsbomb": "mls",       "odds": "mls",  "oddsapi": "mls",  "footballdata": "mls",  "fivethirtyeight": "mls"},
+    "ucl":        {"espn": "ucl",        "statsbomb": "ucl",       "odds": "ucl",  "oddsapi": "ucl",  "footballdata": "ucl",  "fivethirtyeight": "ucl"},
     "nwsl":       {"espn": "nwsl",       "statsbomb": "nwsl"},
     "ligamx":     {"espn": "ligamx"},
     "europa":     {"espn": "europa"},
@@ -6679,195 +6679,6 @@ def _espn_tennis_player_stats(
 
 # ── API-Sports ────────────────────────────────────────────
 
-def _apisports_standings(
-    base: Path, sport: str, season: str,
-) -> list[dict[str, Any]]:
-    data = _load_json(base / "standings.json")
-    if not data or not isinstance(data, list):
-        return []
-    # Flatten nested lists (NHL/MLB use list-of-lists, NFL uses flat list)
-    entries: list[dict[str, Any]] = []
-    for item in data:
-        if isinstance(item, list):
-            entries.extend(e for e in item if isinstance(e, dict))
-        elif isinstance(item, dict):
-            entries.append(item)
-    records: list[dict[str, Any]] = []
-    for entry in entries:
-        team = entry.get("team", {})
-        tid = str(team.get("id", ""))
-        if not tid:
-            continue
-        # NFL-style fields
-        wins = _safe_int(entry.get("won"))
-        losses = _safe_int(entry.get("lost"))
-        ties = _safe_int(entry.get("ties"))
-        pts = entry.get("points", {})
-        # NHL/MLB-style nested fields
-        games = entry.get("games", {})
-        if wins is None and isinstance(games, dict):
-            win_obj = games.get("win", {})
-            lose_obj = games.get("lose", {})
-            wins = _safe_int(win_obj.get("total") if isinstance(win_obj, dict) else None)
-            losses = _safe_int(lose_obj.get("total") if isinstance(lose_obj, dict) else None)
-        group = entry.get("group", {})
-        records.append({
-            "team_id": tid,
-            "team_name": team.get("name", ""),
-            "rank": _safe_int(entry.get("position")),
-            "wins": wins,
-            "losses": losses,
-            "ties": ties,
-            "points_for": _safe_int(pts.get("for") if isinstance(pts, dict) else None),
-            "points_against": _safe_int(pts.get("against") if isinstance(pts, dict) else None),
-            "conference": entry.get("conference") or (
-                group.get("name", "") if isinstance(group, dict) else ""
-            ),
-            "division": entry.get("division", ""),
-            "season": season,
-        })
-    return records
-
-
-def _apisports_games(
-    base: Path, sport: str, season: str,
-) -> list[dict[str, Any]]:
-    """Normalize API-Sports /fixtures responses into standard game schema."""
-    data = _load_json(base / "fixtures.json")
-    if not data or not isinstance(data, list):
-        return []
-
-    _STATUS_MAP = {
-        "FT": "final", "AET": "final", "PEN": "final",
-        "NS": "scheduled", "TBD": "scheduled",
-        "1H": "in_progress", "2H": "in_progress", "HT": "in_progress",
-        "ET": "in_progress", "BT": "in_progress", "P": "in_progress",
-        "SUSP": "postponed", "INT": "postponed",
-        "PST": "postponed", "CANC": "cancelled",
-        "ABD": "cancelled", "AWD": "final", "WO": "final",
-        "LIVE": "in_progress",
-    }
-
-    records: list[dict[str, Any]] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        fixture = item.get("fixture", {})
-        teams = item.get("teams", {})
-        goals = item.get("goals", {})
-        score = item.get("score", {})
-        league = item.get("league", {})
-
-        home = teams.get("home", {})
-        away = teams.get("away", {})
-        status_short = (fixture.get("status", {}) or {}).get("short", "")
-
-        # Halftime scores
-        ht = score.get("halftime", {}) or {}
-        ft = score.get("fulltime", {}) or {}
-        et = score.get("extratime", {}) or {}
-
-        date_str = (fixture.get("date") or "")[:10]
-        raw_dt = fixture.get("date") or ""
-        start_time = raw_dt if len(raw_dt) >= 16 else None
-        venue_info = fixture.get("venue", {}) or {}
-
-        records.append({
-            "source": "apisports",
-            "id": str(fixture.get("id", "")),
-            "sport": sport,
-            "season": season,
-            "date": date_str,
-            "status": _STATUS_MAP.get(status_short, "unknown"),
-            "home_team": home.get("name", ""),
-            "away_team": away.get("name", ""),
-            "home_score": _safe_int(goals.get("home")),
-            "away_score": _safe_int(goals.get("away")),
-            "home_team_id": str(home.get("id", "")),
-            "away_team_id": str(away.get("id", "")),
-            "venue": venue_info.get("name", ""),
-            "attendance": None,
-            "weather": None,
-            "broadcast": None,
-            "broadcast_url": None,
-            "start_time": start_time,
-            "period": str(fixture.get("status", {}).get("elapsed", "")) if status_short not in ("FT", "NS") else None,
-            "is_neutral_site": False,
-        })
-
-        # Map halftime/fulltime scores to sport-appropriate period fields
-        home_ht = _safe_int(ht.get("home"))
-        away_ht = _safe_int(ht.get("away"))
-        home_ft = _safe_int(ft.get("home"))
-        away_ft = _safe_int(ft.get("away"))
-        home_et = _safe_int(et.get("home"))
-        away_et = _safe_int(et.get("away"))
-        home_2h = (home_ft - home_ht) if home_ft is not None and home_ht is not None else None
-        away_2h = (away_ft - away_ht) if away_ft is not None and away_ht is not None else None
-
-        if sport == "nhl":
-            # Hockey: API-Sports only has halftime/fulltime, not per-period.
-            # Don't map to q1/q2 as it conflicts with ESPN p1/p2/p3.
-            records[-1]["home_ot"] = home_et
-            records[-1]["away_ot"] = away_et
-        else:
-            # Soccer and other sports: halftime = Q1, 2nd half = Q2
-            records[-1].update({
-                "home_q1": home_ht,
-                "home_q2": home_2h,
-                "home_ot": home_et,
-                "away_q1": away_ht,
-                "away_q2": away_2h,
-                "away_ot": away_et,
-            })
-    return records
-
-
-def _apisports_player_stats(
-    base: Path, sport: str, season: str,
-) -> list[dict[str, Any]]:
-    """Normalize API-Sports /players/topscorers into player_stats."""
-    data = _load_json(base / "players_topscorers.json")
-    if not data or not isinstance(data, list):
-        return []
-    records: list[dict[str, Any]] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        player = item.get("player", {}) or {}
-        stats_list = item.get("statistics", []) or []
-        for st in stats_list:
-            if not isinstance(st, dict):
-                continue
-            games = st.get("games", {}) or {}
-            goals_info = st.get("goals", {}) or {}
-            passes = st.get("passes", {}) or {}
-            shots = st.get("shots", {}) or {}
-            cards = st.get("cards", {}) or {}
-            records.append({
-                "source": "apisports",
-                "player_id": str(player.get("id", "")),
-                "player_name": player.get("name", ""),
-                "team_name": (st.get("team", {}) or {}).get("name", ""),
-                "team_id": str((st.get("team", {}) or {}).get("id", "")),
-                "sport": sport,
-                "season": season,
-                "games_played": _safe_int(games.get("appearences")),
-                "minutes": _safe_int(games.get("minutes")),
-                "goals": _safe_int(goals_info.get("total")),
-                "assists": _safe_int(goals_info.get("assists")),
-                "shots_total": _safe_int(shots.get("total")),
-                "shots_on": _safe_int(shots.get("on")),
-                "passes_total": _safe_int(passes.get("total")),
-                "pass_accuracy": _safe_int(passes.get("accuracy")),
-                "yellow_cards": _safe_int(cards.get("yellow")),
-                "red_cards": _safe_int(cards.get("red")),
-                "rating": st.get("games", {}).get("rating"),
-                "position": games.get("position", ""),
-            })
-    return records
-
-
 # ── PandaScore (esports) ──────────────────────────────────
 
 _PANDASCORE_STATUS_MAP: dict[str, str] = {
@@ -7825,10 +7636,6 @@ PROVIDER_LOADERS: dict[tuple[str, str], LoaderFn] = {
     ("footballdata", "games"):     _footballdata_games,
     ("footballdata", "standings"): _footballdata_standings,
     ("footballdata", "players"):   _footballdata_players,
-    # API-Sports
-    ("apisports", "standings"): _apisports_standings,
-    ("apisports", "games"):     _apisports_games,
-    ("apisports", "player_stats"): _apisports_player_stats,
     # PandaScore (esports)
     ("pandascore", "games"):         _pandascore_games,
     ("pandascore", "players"):       _pandascore_players,

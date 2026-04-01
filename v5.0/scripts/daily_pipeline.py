@@ -238,7 +238,6 @@ _DISABLED_PROVIDERS = {
     "clearsports",      # API down (all fetches fail)
     "footballdata",     # Endpoint returning 404
     "oddsapi",          # API key deactivated
-    "apisports",        # Free plan can't access current season data
 }
 
 
