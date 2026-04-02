@@ -8,7 +8,13 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { fetchAPI } from "./api";
+
+type AuthProxyShape = {
+  success?: boolean;
+  data?: Record<string, unknown>;
+  error?: string;
+  detail?: string;
+};
 
 /* ── Types ──────────────────────────────────────────────────────── */
 
@@ -83,14 +89,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [apiKey, setApiKeyState] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const callAuthProxy = useCallback(async (
+    path: string,
+    init?: RequestInit,
+  ): Promise<{ ok: boolean; status: number; body: AuthProxyShape | null }> => {
+    try {
+      const res = await fetch(path, {
+        ...init,
+        headers: {
+          "Content-Type": "application/json",
+          ...(init?.headers ?? {}),
+        },
+      });
+      const ct = res.headers.get("content-type") ?? "";
+      const body = ct.includes("application/json")
+        ? (await res.json() as AuthProxyShape)
+        : null;
+      return { ok: res.ok, status: res.status, body };
+    } catch {
+      return { ok: false, status: 502, body: { error: "network_error" } };
+    }
+  }, []);
+
   const fetchMe = useCallback(async (t: string) => {
-    const res = await fetchAPI<{ user: AuthUser; api_key?: string }>("/auth/me", {
+    const res = await callAuthProxy("/api/auth/me", {
+      method: "GET",
       headers: { Authorization: `Bearer ${t}` },
+      cache: "no-store",
     });
-    if (res.ok && res.data) {
+    if (res.ok && res.body) {
       // The API may return data in different shapes:
       // { user: {...} } | { data: { user: {...} } } | { data: {...} }
-      const d = res.data as unknown as Record<string, unknown>;
+      const d = res.body as unknown as Record<string, unknown>;
       const nested = (d.data as Record<string, unknown>) ?? d;
       const raw: Record<string, unknown> =
         (nested.user as Record<string, unknown>)
@@ -119,7 +149,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setToken(null);
       saveToken(null);
     }
-  }, []);
+  }, [callAuthProxy]);
 
   // Auto-refresh on mount
   useEffect(() => {
@@ -136,14 +166,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (email: string, password: string) => {
-      const res = await fetchAPI<Record<string, unknown>>("/auth/login", {
+      const res = await callAuthProxy("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
       });
-      if (!res.ok) {
-        return { ok: false, error: res.error === "http_401" ? "Invalid credentials" : "Login failed" };
+      if (!res.ok || !res.body) {
+        const detail = (res.body?.detail ?? res.body?.error ?? "").toString().toLowerCase();
+        if (res.status === 401 || detail.includes("invalid")) {
+          return { ok: false, error: "Invalid credentials" };
+        }
+        return { ok: false, error: "Login failed" };
       }
-      const resBody = res.data as Record<string, unknown>;
+      const resBody = res.body as Record<string, unknown>;
       const payload = (resBody.data as Record<string, unknown>) ?? resBody;
       const t = (payload.token ?? payload.access_token ?? "") as string;
       if (!t) return { ok: false, error: "No token received" };
@@ -153,27 +187,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await fetchMe(t);
       return { ok: true };
     },
-    [fetchMe],
+    [callAuthProxy, fetchMe],
   );
 
   const register = useCallback(
     async (name: string, email: string, password: string, referralCode?: string) => {
       const reqBody: Record<string, string> = { display_name: name, email, password };
       if (referralCode) reqBody.referral_code = referralCode;
-      const res = await fetchAPI<Record<string, unknown>>("/auth/register", {
+      const res = await callAuthProxy("/api/auth/register", {
         method: "POST",
         body: JSON.stringify(reqBody),
       });
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
+        const detail = (res.body?.detail ?? res.body?.error ?? "").toString().toLowerCase();
         const msg =
-          res.error === "http_409"
+          res.status === 409
             ? "Account already exists"
-            : res.error === "http_422"
+            : res.status === 422 || detail.includes("invalid")
               ? "Invalid input"
               : "Registration failed";
         return { ok: false, error: msg };
       }
-      const resBody = res.data as Record<string, unknown>;
+      const resBody = res.body as Record<string, unknown>;
       const payload = (resBody.data as Record<string, unknown>) ?? resBody;
       const t = (payload.token ?? payload.access_token ?? "") as string;
       const key = (payload.api_key ?? "") as string;
@@ -189,7 +224,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       return { ok: true, apiKey: key || undefined };
     },
-    [fetchMe],
+    [callAuthProxy, fetchMe],
   );
 
   const logout = useCallback(() => {

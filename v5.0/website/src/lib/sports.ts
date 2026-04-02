@@ -9,6 +9,8 @@ export type SportKey =
   | "mlb"
   | "nhl"
   | "epl" | "laliga" | "bundesliga" | "seriea" | "ligue1" | "mls" | "ucl" | "nwsl"
+  | "ligamx" | "europa" | "eredivisie" | "primeiraliga" | "championship"
+  | "bundesliga2" | "serieb" | "ligue2" | "worldcup" | "euros"
   | "f1" | "indycar"
   | "atp" | "wta"
   | "ufc"
@@ -54,6 +56,16 @@ export const SPORTS: Record<SportKey, SportDef> = {
   mls:        { label: "MLS",        color: "var(--color-mls)",        href: "/mls",        category: "soccer",     country: "US" },
   ucl:        { label: "UCL",        color: "var(--color-ucl)",        href: "/ucl",        category: "soccer",     country: "EU" },
   nwsl:       { label: "NWSL",       color: "var(--color-nwsl)",       href: "/nwsl",       category: "soccer",     country: "US" },
+  ligamx:     { label: "Liga MX",    color: "var(--color-ligamx, #0f7a3d)", href: "/ligamx", category: "soccer", country: "MX" },
+  europa:     { label: "Europa",     color: "var(--color-europa, #b07a00)", href: "/europa", category: "soccer", country: "EU" },
+  eredivisie: { label: "Eredivisie", color: "var(--color-eredivisie, #e67e00)", href: "/eredivisie", category: "soccer", country: "NL" },
+  primeiraliga: { label: "Primeira Liga", color: "var(--color-primeiraliga, #00723f)", href: "/primeiraliga", category: "soccer", country: "PT" },
+  championship: { label: "Championship", color: "var(--color-championship, #003a70)", href: "/championship", category: "soccer", country: "GB" },
+  bundesliga2: { label: "Bundesliga 2", color: "var(--color-bundesliga2, #b00020)", href: "/bundesliga2", category: "soccer", country: "DE" },
+  serieb:      { label: "Serie B", color: "var(--color-serieb, #2f5fa8)", href: "/serieb", category: "soccer", country: "IT" },
+  ligue2:      { label: "Ligue 2", color: "var(--color-ligue2, #0b3b75)", href: "/ligue2", category: "soccer", country: "FR" },
+  worldcup:    { label: "World Cup", color: "var(--color-worldcup, #822433)", href: "/worldcup", category: "soccer", country: "INT" },
+  euros:       { label: "Euros", color: "var(--color-euros, #004f9f)", href: "/euros", category: "soccer", country: "EU" },
 
   // Motorsport
   f1:         { label: "F1",         color: "var(--color-f1)",         href: "/f1",         category: "motorsport", country: "INT" },
@@ -96,6 +108,9 @@ const SPORT_HEX_COLORS: Record<string, string> = {
   nhl: "#000000",
   epl: "#38003c", laliga: "#0066cc", bundesliga: "#d00000", seriea: "#1f4e8c",
   ligue1: "#0052cc", mls: "#0a2d4a", ucl: "#001f5b", nwsl: "#c72c48",
+  ligamx: "#0f7a3d", europa: "#b07a00", eredivisie: "#e67e00", primeiraliga: "#00723f",
+  championship: "#003a70", bundesliga2: "#b00020", serieb: "#2f5fa8", ligue2: "#0b3b75",
+  worldcup: "#822433", euros: "#004f9f",
   f1: "#e10600",
   atp: "#0066cc", wta: "#a0006e",
   ufc: "#8b0000",
@@ -113,7 +128,14 @@ export const NAV_CATEGORIES = [
   { label: "Football",   sports: ["nfl", "ncaaf"] as SportKey[] },
   { label: "Baseball",   sports: ["mlb"] as SportKey[] },
   { label: "Hockey",     sports: ["nhl"] as SportKey[] },
-  { label: "Soccer",     sports: ["epl", "laliga", "bundesliga", "seriea", "ligue1", "mls", "ucl", "nwsl"] as SportKey[] },
+  {
+    label: "Soccer",
+    sports: [
+      "epl", "laliga", "bundesliga", "seriea", "ligue1", "mls", "ucl", "nwsl",
+      "ligamx", "europa", "eredivisie", "primeiraliga", "championship",
+      "bundesliga2", "serieb", "ligue2", "worldcup", "euros",
+    ] as SportKey[],
+  },
   { label: "Tennis",     sports: ["atp", "wta"] as SportKey[] },
   { label: "Racing",     sports: ["f1", "indycar"] as SportKey[] },
   { label: "MMA",        sports: ["ufc"] as SportKey[] },

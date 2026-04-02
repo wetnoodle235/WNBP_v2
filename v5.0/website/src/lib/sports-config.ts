@@ -34,6 +34,16 @@ const SPORT_DISPLAY_CONFIG: Record<string, SportDisplayInfo> = {
   seriea: { name: "Serie A", fullName: "Serie A (Italy)", icon: "⚽", color: "#024494", category: "Soccer", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/ita.1.png" },
   ucl: { name: "UCL", fullName: "UEFA Champions League", icon: "⚽", color: "#081c3b", category: "Soccer", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/uefa.champions.png" },
   nwsl: { name: "NWSL", fullName: "National Women's Soccer League", icon: "⚽", color: "#003087", category: "Soccer", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/usa.nwsl.png" },
+  ligamx: { name: "Liga MX", fullName: "Liga MX (Mexico)", icon: "⚽", color: "#0f7a3d", category: "Soccer" },
+  europa: { name: "Europa", fullName: "UEFA Europa League", icon: "⚽", color: "#b07a00", category: "Soccer" },
+  eredivisie: { name: "Eredivisie", fullName: "Eredivisie (Netherlands)", icon: "⚽", color: "#e67e00", category: "Soccer" },
+  primeiraliga: { name: "Primeira Liga", fullName: "Primeira Liga (Portugal)", icon: "⚽", color: "#00723f", category: "Soccer" },
+  championship: { name: "Championship", fullName: "EFL Championship (England)", icon: "⚽", color: "#003a70", category: "Soccer" },
+  bundesliga2: { name: "Bundesliga 2", fullName: "2. Bundesliga (Germany)", icon: "⚽", color: "#b00020", category: "Soccer" },
+  serieb: { name: "Serie B", fullName: "Serie B (Italy)", icon: "⚽", color: "#2f5fa8", category: "Soccer" },
+  ligue2: { name: "Ligue 2", fullName: "Ligue 2 (France)", icon: "⚽", color: "#0b3b75", category: "Soccer" },
+  worldcup: { name: "World Cup", fullName: "FIFA World Cup", icon: "⚽", color: "#822433", category: "Soccer" },
+  euros: { name: "Euros", fullName: "UEFA European Championship", icon: "⚽", color: "#004f9f", category: "Soccer" },
 
   // Individual Sports
   atp: { name: "ATP", fullName: "ATP Tour (Men's Tennis)", icon: "🎾", color: "#00a651", category: "Individual Sports", leagueLogoUrl: "https://a.espncdn.com/i/teamlogos/leagues/500/atp.png" },
@@ -57,7 +67,15 @@ const SPORT_DISPLAY_CONFIG: Record<string, SportDisplayInfo> = {
 export const SPORT_CATEGORIES = [
   { label: "Major US Sports", icon: "🇺🇸", sports: ["nba", "nfl", "mlb", "nhl", "wnba"] },
   { label: "College Sports", icon: "🎓", sports: ["ncaab", "ncaaw", "ncaaf"] },
-  { label: "Soccer", icon: "⚽", sports: ["epl", "laliga", "bundesliga", "seriea", "ligue1", "mls", "ucl", "nwsl"] },
+  {
+    label: "Soccer",
+    icon: "⚽",
+    sports: [
+      "epl", "laliga", "bundesliga", "seriea", "ligue1", "mls", "ucl", "nwsl",
+      "ligamx", "europa", "eredivisie", "primeiraliga", "championship",
+      "bundesliga2", "serieb", "ligue2", "worldcup", "euros",
+    ],
+  },
   { label: "Individual Sports", icon: "🏆", sports: ["atp", "wta", "ufc", "mma"] },
   { label: "Racing", icon: "🏎️", sports: ["f1", "indycar"] },
   { label: "Golf", icon: "⛳", sports: ["golf", "lpga", "pga"] },

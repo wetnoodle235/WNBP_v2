@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS users (
     api_key             TEXT UNIQUE NOT NULL,
     referral_code       TEXT UNIQUE NOT NULL,
     referred_by         TEXT,
+    referral_reward_tier TEXT NOT NULL DEFAULT 'starter',
     stripe_customer_id  TEXT,
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
@@ -112,6 +113,15 @@ async def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(str(DB_PATH)) as db:
         await db.executescript(_SCHEMA)
+
+        # Forward-only migration for pre-existing DBs that predate referral tiers.
+        cols_cur = await db.execute("PRAGMA table_info(users)")
+        cols = await cols_cur.fetchall()
+        col_names = {str(c[1]) for c in cols}
+        if "referral_reward_tier" not in col_names:
+            await db.execute("ALTER TABLE users ADD COLUMN referral_reward_tier TEXT NOT NULL DEFAULT 'starter'")
+            await db.execute("UPDATE users SET referral_reward_tier = 'starter' WHERE referral_reward_tier IS NULL OR referral_reward_tier = ''")
+
         await db.commit()
 
         # Seed dev account

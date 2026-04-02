@@ -12,6 +12,23 @@ const FREE_TIER_ENDPOINTS = new Set(["games", "standings", "news"]);
 // Result limit for free tier
 const FREE_TIER_LIMIT = 10;
 
+function resolveBackendPath(sport: string, endpointHint: string, params: URLSearchParams): string {
+  const hint = endpointHint.toLowerCase();
+  if (hint === "games") return `/v1/${sport}/games`;
+  if (hint === "standings") return `/v1/${sport}/standings`;
+  if (hint === "news") return `/v1/${sport}/news`;
+  if (hint === "injuries") return `/v1/${sport}/injuries`;
+
+  // Use aggregated per-player season output for faster hub/data widgets.
+  if (hint === "player-stats" || hint === "stats" || hint === "leaders") {
+    params.set("aggregate", "true");
+    return `/v1/${sport}/player-stats`;
+  }
+
+  // Fallback preserves current behavior.
+  return `/v1/${sport}/games`;
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ sport: string }> },
@@ -53,7 +70,11 @@ export async function GET(
     );
   }
 
-  const backendUrl = `${API_BASE}/v1/${sport}/games${url.search}`;
+  const queryParams = new URLSearchParams(url.searchParams);
+  const backendPath = resolveBackendPath(sport, endpointHint, queryParams);
+  queryParams.delete("_endpoint");
+  const query = queryParams.toString();
+  const backendUrl = `${API_BASE}${backendPath}${query ? `?${query}` : ""}`;
 
   try {
     const res = await fetch(backendUrl, {

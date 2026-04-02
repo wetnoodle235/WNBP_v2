@@ -154,6 +154,46 @@ class DataServiceDuckDB(DataService):
         
         return self._query_view(base_view, season=season, columns=columns)
 
+    def get_player_stats(
+        self,
+        sport: str,
+        season: str | None = None,
+        player_id: str | None = None,
+        aggregate: bool = False,
+    ) -> list[dict]:
+        # Non-aggregate path stays exactly as before.
+        if not aggregate:
+            return super().get_player_stats(sport, season=season, player_id=player_id, aggregate=aggregate)
+
+        key = f"player_stats_agg_duckdb:{sport}:{season}:{player_id}"
+        ttl = self._settings.cache_ttl_stats
+
+        def loader() -> list[dict]:
+            if not self._duckdb_enabled_for_sport(sport):
+                return super(DataServiceDuckDB, self).get_player_stats(sport, season=season, player_id=player_id, aggregate=aggregate)
+
+            # Prefer already-aggregated curated views to avoid pandas groupby overhead.
+            candidate_views: list[tuple[str, str | None]] = [
+                (f"{sport}_player_season_averages", None),
+                (f"{sport}_season_averages_player", None),
+                (f"{sport}_all_season_averages", "avg_scope = 'player'"),
+                (f"{sport}_season_averages", "avg_scope = 'player'"),
+            ]
+
+            for view_name, extra_where in candidate_views:
+                if not self._view_exists(view_name):
+                    continue
+                df = self._query_view(view_name, season=season, columns=None, extra_where=extra_where)
+                if df.empty:
+                    continue
+                if player_id and "player_id" in df.columns:
+                    df = df[df["player_id"].astype(str) == player_id]
+                return self._df_to_records(df)
+
+            return super(DataServiceDuckDB, self).get_player_stats(sport, season=season, player_id=player_id, aggregate=aggregate)
+
+        return self._get_cached(key, ttl, loader)
+
     @staticmethod
     def _view_for_kind(sport: str, kind: str) -> str | None:
         kind_to_view = {

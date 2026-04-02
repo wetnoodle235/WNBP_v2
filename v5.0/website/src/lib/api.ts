@@ -19,6 +19,8 @@ const isServer = typeof window === "undefined";
 function resolveServerApiBase(): string {
   return (
     process.env.PLATFORM_BACKEND_URL
+    ?? process.env.BACKEND_URL
+    ?? process.env.API_URL
     ?? process.env.NEXT_PUBLIC_API_URL
     ?? "http://127.0.0.1:8000"
   ).replace(/\/$/, "");
@@ -36,6 +38,15 @@ export interface ApiResult<T> {
   status: number | null;
   data: T | null;
   error: string | null;
+}
+
+const warnedFetchFailures = new Set<string>();
+
+function warnFetchDegradation(path: string, reason: string): void {
+  const key = `${path}|${reason}`;
+  if (warnedFetchFailures.has(key)) return;
+  warnedFetchFailures.add(key);
+  console.warn(`[api] degraded data for ${path}: ${reason}`);
 }
 
 async function delay(ms: number): Promise<void> {
@@ -164,9 +175,15 @@ export function friendlyError(code: string | null): string {
  *  Backend wraps responses in {success, data, meta} — unwrap automatically. */
 async function getData<T>(path: string, params?: Record<string, string>): Promise<T | null> {
   const res = await fetchAPI<Record<string, unknown>>(path, { params });
-  if (!res.ok || !res.data) return null;
+  if (!res.ok || !res.data) {
+    warnFetchDegradation(path, res.error ?? "no_data");
+    return null;
+  }
   // Backend v5 returns { success, data, meta } wrapper
   if ("data" in res.data && "success" in res.data) {
+    if ((res.data.success as boolean) === false) {
+      warnFetchDegradation(path, "wrapped_unsuccessful_response");
+    }
     return res.data.data as T;
   }
   return res.data as unknown as T;

@@ -46,6 +46,8 @@ export function hasEnterpriseDocsAccess(tier: string): boolean {
 function resolveServerApiBase(): string {
   return (
     process.env.PLATFORM_BACKEND_URL
+      ?? process.env.BACKEND_URL
+      ?? process.env.API_URL
     ?? process.env.NEXT_PUBLIC_API_URL
     ?? "http://127.0.0.1:8000"
   ).replace(/\/$/, "");
