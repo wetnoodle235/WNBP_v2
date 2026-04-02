@@ -205,23 +205,53 @@ def _worker_import_provider(
             elapsed = round(time.monotonic() - t0, 2)
             if proc.returncode == 0:
                 logger.info("  [import] %s ✓ (%.1fs)", label, elapsed)
-                return {"provider": label, "status": "ok", "duration_s": elapsed}
+                return {
+                    "provider": label,
+                    "provider_base": provider,
+                    "status": "ok",
+                    "duration_s": elapsed,
+                }
             err = proc.stderr.strip()[-500:] if proc.stderr else "unknown error"
             logger.warning(
                 "  [import] %s failed (exit %d, %.1fs): %s",
                 label, proc.returncode, elapsed, err,
             )
             if attempt == max_retries:
-                return {"provider": label, "status": "error", "error": err, "duration_s": elapsed}
+                return {
+                    "provider": label,
+                    "provider_base": provider,
+                    "status": "error",
+                    "error": err,
+                    "quota_capped": _is_quota_cap_error(err),
+                    "duration_s": elapsed,
+                }
         except subprocess.TimeoutExpired:
             elapsed = round(time.monotonic() - t0, 2)
             logger.warning("  [import] %s timed out (%ds) — not retrying", label, timeout)
             # Don't retry timeouts — they'd just timeout again
-            return {"provider": label, "status": "error", "error": f"timeout ({timeout}s)", "duration_s": elapsed}
+            return {
+                "provider": label,
+                "provider_base": provider,
+                "status": "error",
+                "error": f"timeout ({timeout}s)",
+                "duration_s": elapsed,
+            }
         except FileNotFoundError:
-            return {"provider": label, "status": "error", "error": "npx/tsx not found", "duration_s": 0.0}
+            return {
+                "provider": label,
+                "provider_base": provider,
+                "status": "error",
+                "error": "npx/tsx not found",
+                "duration_s": 0.0,
+            }
 
-    return {"provider": label, "status": "error", "error": "max retries exceeded", "duration_s": 0.0}
+    return {
+        "provider": label,
+        "provider_base": provider,
+        "status": "error",
+        "error": "max retries exceeded",
+        "duration_s": 0.0,
+    }
 
 # ESPN sports — one per import process for proper per-sport season detection
 # and to avoid one slow sport blocking others in the same group.
@@ -232,13 +262,161 @@ _ESPN_SPORTS = [
     "mls", "nwsl", "ligamx", "europa",
     "eredivisie", "primeiraliga", "championship", "bundesliga2", "serieb", "ligue2",
     "worldcup", "euros",
-    "wnba", "golf", "lpga", "f1", "nascar", "atp", "wta",
+    "wnba", "golf", "lpga", "f1", "indycar", "nascar", "atp", "wta",
 ]
 
 # Providers known to be dead/unreachable — skip automatically
 _DISABLED_PROVIDERS = {
     "oddsapi",          # API key deactivated
 }
+
+_QUOTA_ERROR_HINTS = (
+    "http 429",
+    "too many requests",
+    "quota exceeded",
+    "monthly call quota exceeded",
+    "daily limit",
+    "call limit",
+    "rate limit exceeded",
+)
+
+
+def _is_quota_cap_error(message: str | None) -> bool:
+    if not message:
+        return False
+    lowered = message.lower()
+    return any(hint in lowered for hint in _QUOTA_ERROR_HINTS)
+
+
+def _next_quota_reset(now_utc: datetime, provider: str) -> datetime:
+    """Estimate next provider quota reset time in UTC.
+
+    Defaults to next UTC midnight. Optional overrides:
+      QUOTA_RESET_HOUR_UTC_<PROVIDER>=0..23
+      QUOTA_RESET_HOUR_UTC=0..23
+    """
+    provider_key = provider.upper().replace("-", "_")
+    reset_hour = os.getenv(f"QUOTA_RESET_HOUR_UTC_{provider_key}")
+    if reset_hour is None:
+        reset_hour = os.getenv("QUOTA_RESET_HOUR_UTC", "0")
+    try:
+        hour = max(0, min(23, int(reset_hour)))
+    except ValueError:
+        hour = 0
+
+    candidate = now_utc.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if candidate <= now_utc:
+        candidate = candidate + timedelta(days=1)
+    return candidate
+
+
+@dataclass
+class ProviderQuotaState:
+    provider: str
+    capped: bool = False
+    capped_at: str | None = None
+    reset_at: str | None = None
+    last_error: str | None = None
+    skipped_runs: int = 0
+    backfill_pending: bool = False
+    last_backfill_days: int = 0
+
+
+class QuotaStateStore:
+    """Persist quota-cap state so capped vendors are skipped until reset."""
+
+    def __init__(self, file_path: Path) -> None:
+        self.file_path = file_path
+        self._states: dict[str, ProviderQuotaState] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if not self.file_path.exists():
+            return
+        try:
+            payload = json.loads(self.file_path.read_text(encoding="utf-8"))
+            providers = payload.get("providers", {}) if isinstance(payload, dict) else {}
+            for provider, state in providers.items():
+                if not isinstance(state, dict):
+                    continue
+                self._states[provider] = ProviderQuotaState(
+                    provider=provider,
+                    capped=bool(state.get("capped", False)),
+                    capped_at=state.get("capped_at"),
+                    reset_at=state.get("reset_at"),
+                    last_error=state.get("last_error"),
+                    skipped_runs=int(state.get("skipped_runs", 0) or 0),
+                    backfill_pending=bool(state.get("backfill_pending", False)),
+                    last_backfill_days=int(state.get("last_backfill_days", 0) or 0),
+                )
+        except Exception as exc:
+            logger.warning("  [quota] Failed to load state file: %s", exc)
+
+    def save(self) -> None:
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+            "providers": {k: asdict(v) for k, v in sorted(self._states.items())},
+        }
+        self.file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def _state(self, provider: str) -> ProviderQuotaState:
+        state = self._states.get(provider)
+        if state is None:
+            state = ProviderQuotaState(provider=provider)
+            self._states[provider] = state
+        return state
+
+    def should_skip(self, provider: str, now_utc: datetime) -> tuple[bool, str | None]:
+        state = self._state(provider)
+        if not state.capped:
+            return False, None
+        if not state.reset_at:
+            return True, None
+        try:
+            reset_at = datetime.fromisoformat(state.reset_at)
+            if reset_at.tzinfo is None:
+                reset_at = reset_at.replace(tzinfo=timezone.utc)
+            if now_utc < reset_at:
+                return True, state.reset_at
+        except ValueError:
+            return True, state.reset_at
+        # Reset time reached; allow a probe import attempt.
+        return False, state.reset_at
+
+    def mark_skipped(self, provider: str) -> None:
+        state = self._state(provider)
+        state.skipped_runs += 1
+        state.backfill_pending = True
+
+    def mark_quota_hit(self, provider: str, now_utc: datetime, error: str | None) -> None:
+        state = self._state(provider)
+        if not state.capped:
+            state.capped_at = now_utc.isoformat()
+        state.capped = True
+        state.reset_at = _next_quota_reset(now_utc, provider).isoformat()
+        state.last_error = (error or "quota cap hit")[:300]
+        state.backfill_pending = True
+
+    def mark_success(self, provider: str, recent_days: int) -> int:
+        state = self._state(provider)
+        if not state.backfill_pending:
+            state.capped = False
+            state.capped_at = None
+            state.reset_at = None
+            state.last_error = None
+            state.skipped_runs = 0
+            return 0
+
+        backfill_days = max(recent_days, 1 + state.skipped_runs)
+        state.last_backfill_days = backfill_days
+        state.backfill_pending = False
+        state.capped = False
+        state.capped_at = None
+        state.reset_at = None
+        state.last_error = None
+        state.skipped_runs = 0
+        return backfill_days
 
 
 def _worker_normalize_sport(
@@ -609,6 +787,7 @@ _EVENT_SPORTS = frozenset({
     "ufc",                               # fight cards every 1-2 weeks
     "golf", "lpga",                      # weekly tournaments
     "ncaaf", "nfl",                      # weekly games (Thu/Sat/Sun/Mon)
+    "lol", "csgo", "dota2", "valorant",  # tournament/event schedules
     "worldcup", "euros",                 # tournament phases
 })
 
@@ -767,14 +946,38 @@ class Pipeline:
         providers = _get_enabled_providers()
         # Filter out known-dead providers
         providers = [p for p in providers if p not in _DISABLED_PROVIDERS]
-        results: dict[str, Any] = {"providers_attempted": len(providers), "errors": []}
+        results: dict[str, Any] = {
+            "providers_attempted": len(providers),
+            "errors": [],
+            "quota_skipped": [],
+            "quota_capped": [],
+            "backfill_runs": [],
+        }
 
-        # Pre-compute in-season sports once for filtering
-        active_sports = set(get_active_sports(_ESPN_SPORTS, self.target_date)) if self.smart_seasons else set(_ESPN_SPORTS)
+        quota_store = QuotaStateStore(DATA_DIR / "reports" / "vendor_quota_state.json")
+        now_utc = datetime.now(tz=timezone.utc)
+
+        # Pre-compute in-season sports once for filtering.
+        # Use ALL_SPORTS so non-ESPN providers (esports, indycar, etc.) are included.
+        from config import ALL_SPORTS
+
+        all_candidate_sports = set(ALL_SPORTS)
+        active_sports = (
+            set(get_active_sports(all_candidate_sports, self.target_date))
+            if self.smart_seasons
+            else all_candidate_sports
+        )
 
         import_args: list[tuple] = []
         active_sports_csv = ",".join(sorted(active_sports)) if self.smart_seasons else None
         for provider in providers:
+            should_skip, reset_at = quota_store.should_skip(provider, now_utc)
+            if should_skip:
+                quota_store.mark_skipped(provider)
+                results["quota_skipped"].append({"provider": provider, "reset_at": reset_at})
+                logger.info("  [import] Skipping %s — quota capped until %s", provider, reset_at)
+                continue
+
             if provider == "espn" and not self.sport_filter:
                 # One ESPN process per in-season sport with correct per-sport season
                 for sport in _ESPN_SPORTS:
@@ -803,11 +1006,49 @@ class Pipeline:
             "import", _worker_import_provider, import_args,
         )
 
+        provider_had_success: dict[str, bool] = {}
+        provider_had_error: dict[str, bool] = {}
+
         for r in worker_results:
             if r.get("status") != "ok":
                 results["errors"].append(
                     {"provider": r.get("provider"), "error": r.get("error")}
                 )
+                base_provider = str(r.get("provider_base") or "")
+                if base_provider:
+                    provider_had_error[base_provider] = True
+                if r.get("quota_capped") and base_provider:
+                    quota_store.mark_quota_hit(base_provider, now_utc, r.get("error"))
+                    results["quota_capped"].append(base_provider)
+            else:
+                base_provider = str(r.get("provider_base") or "")
+                if base_provider:
+                    provider_had_success[base_provider] = True
+
+        # Back-collect for providers that recovered from a quota cap.
+        backfill_args: list[tuple] = []
+        for provider, had_success in provider_had_success.items():
+            if not had_success or provider_had_error.get(provider):
+                continue
+            backlog_days = quota_store.mark_success(provider, self.recent_days)
+            if backlog_days <= self.recent_days:
+                continue
+            sports_arg = self.sport_filter or active_sports_csv
+            backfill_args.append(
+                (provider, sports_arg, self.season, str(IMPORTERS_DIR), self.import_timeout, 0, backlog_days)
+            )
+            results["backfill_runs"].append({"provider": provider, "days": backlog_days})
+
+        if backfill_args:
+            logger.info("  [import] Running %d quota-recovery backfill task(s)", len(backfill_args))
+            backfill_results = self._run_parallel("import_backfill", _worker_import_provider, backfill_args)
+            for r in backfill_results:
+                if r.get("status") != "ok":
+                    results["errors"].append(
+                        {"provider": r.get("provider"), "error": r.get("error")}
+                    )
+
+        quota_store.save()
 
         results["providers_succeeded"] = results["providers_attempted"] - len(results["errors"])
         return results
@@ -2164,17 +2405,37 @@ class Pipeline:
 
 
 def _get_enabled_providers() -> list[str]:
-    """Discover enabled providers by scanning the providers directory.
+    """Discover providers declared in importer registry.ts.
 
-    Uses direct directory listing instead of launching a subprocess, saving
-    ~5 seconds of startup overhead per pipeline run.
+    This keeps pipeline behavior aligned with the CLI's actual loadable
+    providers and avoids attempting placeholder provider folders.
     """
+    registry_ts = IMPORTERS_DIR / "src" / "core" / "registry.ts"
+    if registry_ts.exists():
+        try:
+            import re
+
+            text = registry_ts.read_text(encoding="utf-8")
+            m = re.search(r"PROVIDER_MODULES\s*=\s*\[(.*?)\]\s*as const", text, flags=re.S)
+            if m:
+                names = re.findall(r'"([a-z0-9_\-]+)"', m.group(1))
+                if names:
+                    return sorted(dict.fromkeys(names))
+        except Exception as exc:
+            logger.warning("  [import] Could not parse provider registry: %s", exc)
+
     providers_dir = IMPORTERS_DIR / "src" / "providers"
     if providers_dir.is_dir():
-        return sorted(
-            d.name for d in providers_dir.iterdir()
-            if d.is_dir() and not d.name.startswith(".")
-        )
+        # Fallback: only include provider folders with non-empty index.ts
+        providers: list[str] = []
+        for d in providers_dir.iterdir():
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            idx = d / "index.ts"
+            if idx.exists() and idx.stat().st_size > 0:
+                providers.append(d.name)
+        if providers:
+            return sorted(providers)
     return ["espn"]
 
 

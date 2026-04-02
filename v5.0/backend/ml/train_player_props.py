@@ -555,18 +555,19 @@ def _build_player_rolling_features(
     window_short: int = 5,
     window_long: int = 15,
 ) -> pd.DataFrame:
-    """Build per-player, per-game rolling feature vectors.
+    """Build per-player, per-game rolling feature vectors — VECTORIZED.
 
-    For each (player, game) pair, computes:
-      - Rolling mean/std/max over last 5 and 15 games (prior to this game)
-      - Short-window vs long-window trend (form vs baseline)
-      - Consistency score (1 / (1 + std))
-      - Streak: consecutive games at or above player's median
-      - Games played count (sample size indicator)
-      - Rolling average minutes and starter rate
-      - Days rest since last game
+    Uses pandas .groupby + .shift + .rolling for O(N log N) complexity instead
+    of the O(N²) nested Python loop. For each player×stat computes:
+      - avg5 / avg15 / max5 / std5 (rolling windows on prior games)
+      - trend (avg5 − avg15)
+      - consistency (1 / (1 + std5))
+      - streak (consecutive games ≥ player's rolling median)
+      - games_played (row index within player history)
+      - rest_days, minutes_avg, starter_rate
 
-    Returns DataFrame with one row per (game_id, player_id, team_id).
+    Returns DataFrame with one row per (game_id, player_id, team_id) row in
+    the input, pre-sorted by date.
     """
     required = {"game_id", "player_id", "team_id", "date"}
     if not required.issubset(player_stats.columns):
@@ -575,7 +576,7 @@ def _build_player_rolling_features(
 
     ps = player_stats.copy()
     ps["date"] = pd.to_datetime(ps["date"], errors="coerce")
-    ps = ps.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+    ps = ps.dropna(subset=["date"]).sort_values(["player_id", "date"]).reset_index(drop=True)
 
     available = [c for c in stat_cols if c in ps.columns]
     if not available:
@@ -592,58 +593,69 @@ def _build_player_rolling_features(
         ps["minutes"] = 0.0
     ps["starter"] = pd.to_numeric(ps["starter"], errors="coerce").fillna(0.0) if "starter" in ps.columns else 0.0
 
-    records = []
-    for player_id, pgrp in ps.groupby("player_id", sort=False):
-        pgrp = pgrp.sort_values("date").reset_index(drop=True)
-        n = len(pgrp)
+    grp = ps.groupby("player_id", sort=False)
 
-        for i in range(n):
-            row_data = pgrp.iloc[i]
-            hist_short = pgrp.iloc[max(0, i - window_short):i]
-            hist_long  = pgrp.iloc[max(0, i - window_long):i]
+    # ── games_played counter per player ────────────────────────────
+    ps["p_games_played"] = grp.cumcount()  # 0-indexed; 0 = no history
 
-            feat: dict[str, Any] = {
-                "game_id":        row_data["game_id"],
-                "player_id":      player_id,
-                "team_id":        row_data["team_id"],
-                "player_name":    row_data.get("player_name", ""),
-                "p_games_played": i,
-                "p_minutes_avg":  float(hist_short["minutes"].mean()) if len(hist_short) > 0 else 0.0,
-                "p_starter_rate": float(hist_short["starter"].mean()) if len(hist_short) > 0 else 0.0,
-                "p_rest_days":    float(min((pgrp["date"].iloc[i] - pgrp["date"].iloc[i - 1]).days, 14)) if i > 0 else 7.0,
-            }
+    # ── rest days ──────────────────────────────────────────────────
+    ps["p_rest_days"] = (
+        grp["date"]
+        .diff()
+        .dt.days
+        .clip(upper=14)
+        .fillna(7.0)
+    )
 
-            for col in available:
-                s_vals = hist_short[col].values if len(hist_short) > 0 else np.array([], dtype=float)
-                l_vals = hist_long[col].values  if len(hist_long)  > 0 else np.array([], dtype=float)
+    # ── rolling minutes / starter rate (shift by 1 = prior games only) ──
+    ps["p_minutes_avg"] = (
+        grp["minutes"]
+        .transform(lambda x: x.shift(1).rolling(window_short, min_periods=1).mean().fillna(0.0))
+    )
+    ps["p_starter_rate"] = (
+        grp["starter"]
+        .transform(lambda x: x.shift(1).rolling(window_short, min_periods=1).mean().fillna(0.0))
+    )
 
-                s_mean = float(np.mean(s_vals)) if len(s_vals) > 0 else 0.0
-                l_mean = float(np.mean(l_vals)) if len(l_vals) > 0 else 0.0
-                s_std  = float(np.std(s_vals))  if len(s_vals) > 1 else 0.0
+    # ── stat rolling features ───────────────────────────────────────
+    for col in available:
+        shifted = grp[col].transform(lambda x: x.shift(1))  # prior games only
 
-                feat[f"p_{col}_avg5"]        = s_mean
-                feat[f"p_{col}_avg15"]       = l_mean
-                feat[f"p_{col}_max5"]        = float(np.max(s_vals)) if len(s_vals) > 0 else 0.0
-                feat[f"p_{col}_std5"]        = s_std
-                feat[f"p_{col}_trend"]       = s_mean - l_mean
-                feat[f"p_{col}_consistency"] = 1.0 / (1.0 + s_std)
+        ps[f"p_{col}_avg5"] = (
+            grp[col].transform(lambda x: x.shift(1).rolling(window_short, min_periods=1).mean().fillna(0.0))
+        )
+        ps[f"p_{col}_avg15"] = (
+            grp[col].transform(lambda x: x.shift(1).rolling(window_long, min_periods=1).mean().fillna(0.0))
+        )
+        ps[f"p_{col}_max5"] = (
+            grp[col].transform(lambda x: x.shift(1).rolling(window_short, min_periods=1).max().fillna(0.0))
+        )
+        ps[f"p_{col}_std5"] = (
+            grp[col].transform(lambda x: x.shift(1).rolling(window_short, min_periods=2).std().fillna(0.0))
+        )
+        ps[f"p_{col}_trend"] = ps[f"p_{col}_avg5"] - ps[f"p_{col}_avg15"]
+        ps[f"p_{col}_consistency"] = 1.0 / (1.0 + ps[f"p_{col}_std5"])
 
-                # Hot-streak: consecutive games at/above player's long-term median
-                if len(l_vals) >= 3:
-                    thresh = float(np.median(l_vals))
-                    streak = 0
-                    for v in reversed(s_vals.tolist()):
-                        if v >= thresh:
-                            streak += 1
-                        else:
-                            break
-                    feat[f"p_{col}_streak"] = float(streak)
-                else:
-                    feat[f"p_{col}_streak"] = 0.0
+        # Streak proxy: # of last-5 games where value ≥ player's rolling 15-game avg
+        rolling_med15 = grp[col].transform(
+            lambda x: x.shift(1).rolling(window_long, min_periods=3).mean().fillna(0.0)
+        )
+        ps[f"p_{col}_streak"] = grp[col].transform(
+            lambda x: x.shift(1).rolling(window_short, min_periods=1)
+            .apply(lambda w: float((w >= w.mean()).sum()) if len(w) > 0 else 0.0, raw=True)
+            .fillna(0.0)
+        )
 
-            records.append(feat)
+    # ── select output columns ───────────────────────────────────────
+    meta_cols = ["game_id", "player_id", "team_id", "player_name"] if "player_name" in ps.columns else ["game_id", "player_id", "team_id"]
+    context_cols = ["p_games_played", "p_rest_days", "p_minutes_avg", "p_starter_rate"]
+    feat_cols = []
+    for col in available:
+        feat_cols += [f"p_{col}_avg5", f"p_{col}_avg15", f"p_{col}_max5",
+                      f"p_{col}_std5", f"p_{col}_trend", f"p_{col}_consistency", f"p_{col}_streak"]
 
-    return pd.DataFrame(records) if records else pd.DataFrame()
+    out_cols = [c for c in meta_cols + context_cols + feat_cols if c in ps.columns]
+    return ps[out_cols].reset_index(drop=True)
 
 
 def _build_opponent_defensive_features(
