@@ -158,18 +158,35 @@ SPORT_SEASON_START = {
 def get_available_seasons(sport: str) -> list[str]:
     """Return seasons that actually exist in the normalized data.
 
-    Scans ``games_<year>.parquet`` filenames on disk.
+    Scans two locations:
+    1. Flat ``games_<year>.parquet`` files in ``normalized_dir/<sport>/``
+    2. Hive-partitioned ``season=YYYY`` sub-dirs in
+       ``normalized_curated_dir/<sport>/games/`` (and ``standings/`` as fallback)
     """
     settings = get_settings()
-    sport_dir = settings.normalized_dir / sport
-    if not sport_dir.is_dir():
-        return []
-
     seasons: set[str] = set()
-    for f in sport_dir.glob("games_*.parquet"):
-        s = f.stem.replace("games_", "")
-        if s.isdigit():
-            seasons.add(s)
+
+    # 1. Flat parquet layout (legacy)
+    sport_dir = settings.normalized_dir / sport
+    if sport_dir.is_dir():
+        for f in sport_dir.glob("games_*.parquet"):
+            s = f.stem.replace("games_", "")
+            if s.isdigit():
+                seasons.add(s)
+
+    # 2. Curated Hive-partitioned layout: sport/category/season=YYYY/
+    if hasattr(settings, "normalized_curated_dir"):
+        for category in ("games", "standings"):
+            cat_dir = settings.normalized_curated_dir / sport / category
+            if cat_dir.is_dir():
+                for d in cat_dir.iterdir():
+                    if d.is_dir() and d.name.startswith("season="):
+                        s = d.name[len("season="):]
+                        if s.isdigit():
+                            seasons.add(s)
+                if seasons:
+                    break  # found seasons from first existing category
+
     return sorted(seasons)
 
 
@@ -264,6 +281,12 @@ def _season_has_completed_games(sport: str, season: str) -> bool:
             )
         except Exception:
             result = True  # assume valid if we can't check
+    elif hasattr(s, "normalized_curated_dir"):
+        # Check curated Hive-partitioned layout: sport/games/season=YYYY/
+        curated_season_dir = s.normalized_curated_dir / sport / "games" / f"season={season}"
+        if curated_season_dir.is_dir():
+            # Presence of the directory implies data exists; assume completed.
+            result = True
     _completed_games_cache[cache_key] = (now, result)
     return result
 

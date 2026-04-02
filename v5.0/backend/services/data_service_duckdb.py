@@ -151,15 +151,18 @@ class DataServiceDuckDB(DataService):
 
         if not self._view_exists(base_view):
             return super()._load_kind(sport, kind, season=season, columns=columns)
-
+        
         return self._query_view(base_view, season=season, columns=columns)
 
     @staticmethod
     def _view_for_kind(sport: str, kind: str) -> str | None:
         kind_to_view = {
             "games": f"{sport}_games",
+            "game_stats": f"{sport}_game_stats",
+            "player_game_stats": f"{sport}_player_game_stats",
             "teams": f"{sport}_teams",
             "players": f"{sport}_players",
+            "lineups": f"{sport}_lineups",
             "racers": f"{sport}_players",
             "drivers": f"{sport}_players",
             "fighters": f"{sport}_players",
@@ -185,6 +188,8 @@ class DataServiceDuckDB(DataService):
             "advanced_batting": f"{sport}_advanced_batting",
             "match_events": f"{sport}_match_events",
             "ratings": f"{sport}_ratings",
+            "season_averages_all": f"{sport}_all_season_averages",
+            "all_season_averages": f"{sport}_all_season_averages",
             "odds": f"{sport}_odds",
             "odds_history": f"{sport}_odds_history",
             "injuries": f"{sport}_injuries",
@@ -255,13 +260,14 @@ class DataServiceDuckDB(DataService):
             logger.exception("Failed to derive seasons from view %s", view_name)
             return super().get_seasons(sport, kind=kind)
 
-    def _view_exists(self, view_name: str) -> bool:
+    def _view_exists(self, name: str) -> bool:
+        """Return True if *name* is a SQL view or base table in the DuckDB catalog."""
         if not self._duckdb_ready or self._conn is None:
             return False
         try:
             row = self._conn.execute(
-                "SELECT COUNT(*) FROM information_schema.views WHERE table_name = ?",
-                [view_name],
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ? AND table_schema = 'main'",
+                [name],
             ).fetchone()
             return bool(row and row[0] > 0)
         except Exception:

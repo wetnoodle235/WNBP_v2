@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 
 const PREMIUM_TIERS = new Set(["trial", "monthly", "yearly", "premium", "dev", "starter", "pro", "enterprise"]);
 const ENTERPRISE_DOC_TIERS = new Set(["enterprise", "dev"]);
@@ -51,7 +51,21 @@ function resolveServerApiBase(): string {
   ).replace(/\/$/, "");
 }
 
+/** Detect if SSR is handling a loopback/localhost request (dev bypass). */
+async function isLocalhostRequest(): Promise<boolean> {
+  try {
+    const h = await headers();
+    const host = h.get("host") ?? "";
+    return host.startsWith("localhost") || host.startsWith("127.0.0.1") || host.startsWith("::1");
+  } catch {
+    return false;
+  }
+}
+
 export async function getViewerTier(): Promise<string> {
+  // Localhost dev bypass — grant full enterprise access for local development
+  if (await isLocalhostRequest()) return "dev";
+
   const cookieStore = await cookies();
   const token = cookieStore.get("wnbp_token")?.value;
   if (!token) return "free";
