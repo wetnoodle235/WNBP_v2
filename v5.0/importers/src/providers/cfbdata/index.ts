@@ -26,6 +26,19 @@ const SEASON_TYPES_TO_COLLECT = ["regular", "postseason", "allstar", "spring_reg
 type SeasonType = (typeof SEASON_TYPES_TO_COLLECT)[number];
 const SEASON_TYPE_WEEK_PLAN_CACHE = new Map<string, Array<{ seasonType: string; weeks: number[] }>>();
 
+class CfbQuotaExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CfbQuotaExceededError";
+  }
+}
+
+function isCfbQuotaExceededError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return msg.includes("monthly call quota exceeded");
+}
+
 const ALL_ENDPOINTS = [
   "games",
   "games_teams",
@@ -101,9 +114,16 @@ async function cfbFetch<T = unknown>(path: string, params: Record<string, string
     url.searchParams.set(k, String(v));
   }
 
-  return fetchJSON<T>(url.toString(), NAME, RATE_LIMIT, {
-    headers: { Authorization: `Bearer ${API_KEY}` },
-  });
+  try {
+    return await fetchJSON<T>(url.toString(), NAME, RATE_LIMIT, {
+      headers: { Authorization: `Bearer ${API_KEY}` },
+    });
+  } catch (err) {
+    if (isCfbQuotaExceededError(err)) {
+      throw new CfbQuotaExceededError("CFBData monthly call quota exceeded");
+    }
+    throw err;
+  }
 }
 
 // ── Helper functions ────────────────────────────────────────
@@ -204,15 +224,15 @@ function buildGameMetaIndex(dataDir: string, sport: Sport, season: number): Map<
 }
 
 async function fetchSeasonTypeChunks<T>(endpoint: string, season: number): Promise<T[]> {
-  const chunks = await Promise.all(
-    SEASON_TYPES_TO_COLLECT.map(async (seasonType) => {
-      try {
-        return await cfbFetch<T[]>(endpoint, { year: season, seasonType });
-      } catch {
-        return [];
-      }
-    }),
-  );
+  const chunks: T[][] = [];
+  for (const seasonType of SEASON_TYPES_TO_COLLECT) {
+    try {
+      chunks.push(await cfbFetch<T[]>(endpoint, { year: season, seasonType }));
+    } catch (err) {
+      if (err instanceof CfbQuotaExceededError) throw err;
+      chunks.push([]);
+    }
+  }
   return chunks.flat();
 }
 
@@ -1447,6 +1467,18 @@ const cfbdata: Provider = {
             const msg = err instanceof Error ? err.message : String(err);
             logger.error(`${sport}/${season}/${ep}: ${msg}`, NAME);
             allErrors.push(`${sport}/${season}/${ep}: ${msg}`);
+            if (err instanceof CfbQuotaExceededError) {
+              logger.warn("CFBData quota exhausted; stopping remaining endpoint imports early", NAME);
+              const durationMs = Date.now() - start;
+              logger.summary(NAME, totalFiles, allErrors.length, durationMs);
+              return {
+                provider: NAME,
+                sport: sports.length === 1 ? sports[0] : "multi",
+                filesWritten: totalFiles,
+                errors: allErrors,
+                durationMs,
+              };
+            }
           }
         }
       }

@@ -904,31 +904,45 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(
         prog="train_player_props",
-        description="V5.0 Player Props ML Training",
+        description="V5.0 Player Props ML Training (per-player feature engine)",
     )
     parser.add_argument(
         "--sport",
-        required=True,
         choices=sorted(_PROP_SPECS.keys()),
-        help="Sport key (nba, nfl, mlb, nhl)",
+        help="Sport key (nba, nfl, mlb, nhl, …). Required unless --all is used.",
     )
     parser.add_argument(
         "--seasons",
-        required=True,
+        default="2020,2021,2022,2023,2024,2025",
         help="Comma-separated seasons, e.g. 2022,2023,2024",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_sports",
+        help="Train all sports with defined prop specs.",
     )
     args = parser.parse_args(argv)
 
-    sport = args.sport.lower()
-    seasons = _parse_seasons(args.seasons)
+    if not args.sport and not args.all_sports:
+        parser.error("Specify --sport or --all")
 
-    bundle = train_player_props(sport, seasons)
-    save_models(bundle, sport)
-    logger.info(
-        "Done — trained %d player prop models for %s",
-        len(bundle["models"]),
-        sport,
-    )
+    seasons = _parse_seasons(args.seasons)
+    sports = sorted(_PROP_SPECS.keys()) if args.all_sports else [args.sport.lower()]
+
+    for sport in sports:
+        try:
+            bundle = train_player_props(sport, seasons)
+            save_models(bundle, sport)
+            logger.info(
+                "Done — trained %d player prop models for %s",
+                len(bundle["models"]),
+                sport,
+            )
+        except Exception as exc:
+            logger.error("Failed to train %s: %s", sport, exc)
+            if not args.all_sports:
+                raise
 
 
 if __name__ == "__main__":
