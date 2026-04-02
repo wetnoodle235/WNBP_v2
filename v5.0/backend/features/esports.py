@@ -454,6 +454,112 @@ class EsportsExtractor(BaseFeatureExtractor):
 
     # ── Main Extraction ───────────────────────────────────
 
+    # Major/prestigious tournament name patterns → tier score (1=regional, 5=world championship)
+    _TIER_PATTERNS: list[tuple[int, list[str]]] = [
+        (5, ["world championship", "worlds", "the international", "pgl major", "iem katowice",
+             "iem cologne", "blast premier world", "iem world championship"]),
+        (4, ["esl pro league", "blast premier", "iem", "esl one", "dreamhack masters",
+             "pro league", "lcs championship", "lcq", "msl"]),
+        (3, ["esl challenger", "faceit league", "cct", "european pro league", "regional major",
+             "regional qualifier", "lfl", "nbl", "united21", "dream league"]),
+        (2, ["esea", "national", "open qualifier", "open cup", "community cup"]),
+    ]
+
+    def _tournament_tier(self, venue: str) -> float:
+        """Return 1-5 prestige score based on tournament/venue name."""
+        v = (venue or "").lower()
+        for tier, patterns in self._TIER_PATTERNS:
+            if any(p in v for p in patterns):
+                return float(tier)
+        return 1.0  # default regional/unknown
+
+    def _load_schedule_fatigue(self, season: int) -> pd.DataFrame:
+        """Load schedule fatigue file for a season (team-level rows)."""
+        sport_dir = self.data_dir / "normalized" / self.sport
+        p = sport_dir / f"schedule_fatigue_{season}.parquet"
+        if p.exists():
+            try:
+                return pd.read_parquet(p)
+            except Exception:
+                pass
+        # Also try without season suffix
+        p2 = sport_dir / "schedule_fatigue.parquet"
+        if p2.exists():
+            try:
+                return pd.read_parquet(p2)
+            except Exception:
+                pass
+        return pd.DataFrame()
+
+    def _fatigue_features(self, team_id: str, game_id: str, season: int) -> dict[str, float]:
+        """Return rest/fatigue metrics for a team from schedule_fatigue parquet."""
+        df = self._load_schedule_fatigue(season)
+        if df.empty:
+            return {
+                "rest_days": 7.0, "is_back_to_back": 0.0,
+                "games_last_7d": 0.0, "games_last_14d": 0.0, "fatigue_score": 0.0,
+            }
+        row = df[(df["team_id"].astype(str) == str(team_id)) &
+                 (df["game_id"].astype(str) == str(game_id))]
+        if row.empty:
+            # Fall back to team last entry in df sorted by date
+            team_rows = df[df["team_id"].astype(str) == str(team_id)]
+            if team_rows.empty:
+                return {
+                    "rest_days": 7.0, "is_back_to_back": 0.0,
+                    "games_last_7d": 0.0, "games_last_14d": 0.0, "fatigue_score": 0.0,
+                }
+            row = team_rows.sort_values("date").iloc[[-1]]
+        r = row.iloc[0]
+        return {
+            "rest_days": float(r.get("rest_days") or 7.0),
+            "is_back_to_back": float(bool(r.get("is_back_to_back", 0))),
+            "games_last_7d": float(r.get("games_last_7d") or 0.0),
+            "games_last_14d": float(r.get("games_last_14d") or 0.0),
+            "fatigue_score": float(r.get("fatigue_score") or 0.0),
+        }
+
+    def _quality_weighted_form(
+        self,
+        team_id: str,
+        date: str,
+        games: pd.DataFrame,
+        window: int = 15,
+    ) -> dict[str, float]:
+        """Win rate weighted by opponent recent form quality.
+
+        Wins vs strong opponents (high win%) are weighted more.
+        Returns ``quality_form`` in [-1, 1] and ``quality_win_rate`` in [0, 1].
+        """
+        defaults = {"quality_form": 0.0, "quality_win_rate": 0.5}
+        recent = self._team_games_before(games, team_id, date, limit=window)
+        if recent.empty:
+            return defaults
+
+        is_home = recent["home_team_id"].astype(str) == str(team_id)
+        h_sc = pd.to_numeric(recent["home_score"], errors="coerce").fillna(0)
+        a_sc = pd.to_numeric(recent["away_score"], errors="coerce").fillna(0)
+        wins = np.where(is_home, h_sc > a_sc, a_sc > h_sc).astype(float)
+        opp_ids = np.where(is_home, recent["away_team_id"].astype(str), recent["home_team_id"].astype(str))
+
+        opp_qual: dict[str, float] = {}
+        for opp_id in set(opp_ids):
+            opp_hist = self._team_games_before(games, str(opp_id), date, limit=20)
+            if opp_hist.empty:
+                opp_qual[str(opp_id)] = 0.5
+            else:
+                oh = opp_hist["home_team_id"].astype(str) == str(opp_id)
+                ohs = pd.to_numeric(opp_hist["home_score"], errors="coerce").fillna(0)
+                oas = pd.to_numeric(opp_hist["away_score"], errors="coerce").fillna(0)
+                ow = np.where(oh, ohs > oas, oas > ohs).astype(float)
+                opp_qual[str(opp_id)] = float(ow.mean()) if len(ow) else 0.5
+
+        opp_arr = np.array([opp_qual.get(str(o), 0.5) for o in opp_ids])
+        n = max(len(recent), 1)
+        quality_form = float(np.dot(wins * 2.0 - 1.0, opp_arr) / n)
+        quality_win_rate = float(np.dot(wins, opp_arr) / n)
+        return {"quality_form": quality_form, "quality_win_rate": quality_win_rate}
+
     def extract_game_features(self, game: dict[str, Any]) -> dict[str, Any]:
         season = game.get("season", 0)
         # Use full cross-season history for form/H2H so early-season games have signal
@@ -483,9 +589,14 @@ class EsportsExtractor(BaseFeatureExtractor):
         a_form = self.team_form(a_id, date, all_games_df)
         features.update({f"away_{k}": v for k, v in a_form.items()})
 
-        # H2H
+        # H2H (overall + home-site advantage)
         h2h = self.head_to_head(h_id, a_id, all_games_df, date=date)
         features.update(h2h)
+        h2h_home = self.head_to_head_at_home(h_id, a_id, all_games_df, date=date)
+        features.update(h2h_home)
+
+        # Tournament tier (1=regional, 5=world championship)
+        features["tournament_tier"] = self._tournament_tier(str(game.get("venue", "")))
 
         features["home_momentum"] = self.momentum(h_id, date, all_games_df)
         features["away_momentum"] = self.momentum(a_id, date, all_games_df)
@@ -558,6 +669,34 @@ class EsportsExtractor(BaseFeatureExtractor):
             draft = self._hero_draft_features(game, games_df)
             features.update(draft)
 
+        # Home/Away (blue/red side) split form — blue side historically wins more
+        h_home_form = self.home_away_form(h_id, date, all_games_df, is_home=True)
+        features.update({f"home_home_{k}": v for k, v in h_home_form.items()})
+        a_away_form = self.home_away_form(a_id, date, all_games_df, is_home=False)
+        features.update({f"away_away_{k}": v for k, v in a_away_form.items()})
+        features["ha_win_pct_diff"] = (
+            features.get("home_home_ha_win_pct", 0.5) - features.get("away_away_ha_win_pct", 0.5)
+        )
+        features["ha_ppg_diff"] = (
+            features.get("home_home_ha_ppg", 0.0) - features.get("away_away_ha_ppg", 0.0)
+        )
+
+        # Schedule fatigue (rest days, back-to-back, games density)
+        h_fat = self._fatigue_features(h_id, game_id, season)
+        features.update({f"home_{k}": v for k, v in h_fat.items()})
+        a_fat = self._fatigue_features(a_id, game_id, season)
+        features.update({f"away_{k}": v for k, v in a_fat.items()})
+        features["rest_days_diff"] = features["home_rest_days"] - features["away_rest_days"]
+        features["fatigue_score_diff"] = features["away_fatigue_score"] - features["home_fatigue_score"]
+
+        # Quality-weighted form (wins vs strong opponents count more)
+        h_qf = self._quality_weighted_form(h_id, date, all_games_df)
+        features.update({f"home_{k}": v for k, v in h_qf.items()})
+        a_qf = self._quality_weighted_form(a_id, date, all_games_df)
+        features.update({f"away_{k}": v for k, v in a_qf.items()})
+        features["quality_form_diff"] = h_qf["quality_form"] - a_qf["quality_form"]
+        features["quality_win_rate_diff"] = h_qf["quality_win_rate"] - a_qf["quality_win_rate"]
+
         # Odds
         odds = self._odds_features(game_id, odds_df)
         features.update(odds)
@@ -573,6 +712,9 @@ class EsportsExtractor(BaseFeatureExtractor):
             "away_form_avg_margin", "away_form_games_played",
             # H2H
             "h2h_games", "h2h_win_pct", "h2h_avg_margin",
+            "h2h_home_games", "h2h_home_win_pct", "h2h_home_avg_margin",
+            # Tournament context
+            "tournament_tier",
             # Momentum
             "home_momentum", "away_momentum", "momentum_diff",
             # K/D/A
@@ -612,4 +754,16 @@ class EsportsExtractor(BaseFeatureExtractor):
             "home_min_hero_wr", "away_min_hero_wr",
             # Odds
             "home_moneyline", "away_moneyline", "spread", "total", "home_implied_prob",
+            # Home/Away split form (blue/red side advantage in eSports)
+            "home_home_ha_win_pct", "home_home_ha_ppg", "home_home_ha_opp_ppg",
+            "home_home_ha_avg_margin", "home_home_ha_games_played",
+            "away_away_ha_win_pct", "away_away_ha_ppg", "away_away_ha_opp_ppg",
+            "away_away_ha_avg_margin", "away_away_ha_games_played",
+            "ha_win_pct_diff", "ha_ppg_diff",
+            # Schedule fatigue
+            "home_rest_days", "home_is_back_to_back", "home_games_last_7d",
+            "home_games_last_14d", "home_fatigue_score",
+            "away_rest_days", "away_is_back_to_back", "away_games_last_7d",
+            "away_games_last_14d", "away_fatigue_score",
+            "rest_days_diff", "fatigue_score_diff",
         ]

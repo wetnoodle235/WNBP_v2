@@ -22,6 +22,108 @@ logger = logging.getLogger(__name__)
 
 _SURFACES = ("hard", "clay", "grass", "carpet")
 
+# Venue → surface mapping for tournaments without explicit surface data
+# Based on well-known tournament venues (city, country)
+# Tournament prestige levels (4=Grand Slam, 3=Masters 1000, 2=ATP 500, 1=ATP 250/other)
+_TOURNAMENT_PRESTIGE: dict[str, int] = {
+    "australian open": 4, "roland garros": 4, "french open": 4,
+    "wimbledon": 4, "us open": 4,
+    "indian wells masters": 3, "miami masters": 3, "monte carlo masters": 3,
+    "madrid masters": 3, "rome masters": 3, "canada masters": 3,
+    "cincinnati masters": 3, "shanghai masters": 3, "paris masters": 3,
+    "paris bercy": 3, "rolex paris masters": 3,
+    "halle": 2, "queen's club": 2, "queens club": 2, "dubai": 2,
+    "doha": 2, "rotterdam": 2, "barcelona": 2, "washington": 2,
+    "tokyo": 2, "vienna": 2, "basel": 2, "beijing": 2,
+    "astana": 2, "stockholm": 2, "atp finals": 4, "nitto atp finals": 4,
+    "united cup": 2, "davis cup": 3, "laver cup": 3,
+}
+
+_VENUE_SURFACE: dict[str, str] = {
+    # Grand Slams
+    "melbourne": "hard",         # Australian Open
+    "roland garros": "clay",     # French Open
+    "paris, france": "clay",     # Roland Garros city match
+    "london": "grass",           # Wimbledon
+    "new york": "hard",          # US Open
+    "flushing": "hard",          # US Open (Flushing Meadows)
+    # Masters 1000 — Hard
+    "indian wells": "hard",
+    "miami": "hard",
+    "montreal": "hard",
+    "toronto": "hard",
+    "cincinnati": "hard",
+    "shanghai": "hard",
+    "beijing": "hard",
+    "vienna": "hard",
+    # Masters 1000 — Clay
+    "monte-carlo": "clay",
+    "monte carlo": "clay",
+    "madrid": "clay",
+    "rome": "clay",
+    # Masters 1000 — Grass / Indoor
+    "halle": "grass",
+    "queen's club": "grass",
+    "queens club": "grass",
+    "eastbourne": "grass",
+    # ATP 500 / 250 common venues
+    "dubai": "hard",
+    "doha": "hard",
+    "abu dhabi": "hard",
+    "acapulco": "hard",
+    "rotterdam": "hard",
+    "barcelona": "clay",
+    "bucharest": "clay",
+    "estoril": "clay",
+    "geneva": "clay",
+    "lyon": "clay",
+    "hamburg": "clay",
+    "gstaad": "clay",
+    "kitzbuhel": "clay",
+    "bastad": "clay",
+    "umag": "clay",
+    "metz": "hard",
+    "st. petersburg": "hard",
+    "astana": "hard",
+    "stockholm": "hard",
+    "sofia": "hard",
+    "pune": "hard",
+    "hong kong": "hard",
+    "moscow": "hard",
+    "antwerp": "hard",
+    "tokyo": "hard",
+    "osaka": "hard",
+    "zhuhai": "hard",
+}
+
+
+def _infer_surface(game: dict) -> str:
+    """Infer court surface from game data — check explicit field first, then venue mapping."""
+    import math as _math
+    surface = game.get("surface") or game.get("court_type") or ""
+    # Treat float NaN as missing
+    try:
+        if _math.isnan(surface):
+            surface = ""
+    except (TypeError, ValueError):
+        pass
+    if surface and str(surface).lower() not in ("", "unknown", "none", "nan"):
+        return str(surface).lower()
+    venue = str(game.get("venue", "") or "").lower()
+    for key, surf in _VENUE_SURFACE.items():
+        if key in venue:
+            return surf
+    return "hard"  # default: most common surface
+
+
+def _infer_tournament_prestige(game: dict) -> int:
+    """Return tournament prestige level (4=Grand Slam, 3=Masters, 2=500, 1=250/other)."""
+    venue = str(game.get("venue", "") or "").lower()
+    for key, level in _TOURNAMENT_PRESTIGE.items():
+        if key in venue:
+            return level
+    return 1  # default: ATP 250 / small event
+
 
 class TennisExtractor(BaseFeatureExtractor):
     """Feature extractor for tennis (ATP, WTA)."""
@@ -30,6 +132,9 @@ class TennisExtractor(BaseFeatureExtractor):
         super().__init__(data_dir)
         self.sport = sport
         self._all_games_cache: pd.DataFrame | None = None
+        # Bridge: player_name_lower → numeric ESPN player_id
+        # Populated in _load_all_player_stats() from games with numeric IDs
+        self._name_to_player_id: dict[str, str] = {}
 
     def _load_all_games(self) -> pd.DataFrame:
         """Load and cache all seasons' game data for cross-season form calculations."""
@@ -47,6 +152,16 @@ class TennisExtractor(BaseFeatureExtractor):
         if not combined.empty and "date" in combined.columns:
             combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
             combined.sort_values("date", inplace=True, ignore_index=True)
+        # Infer surface from venue for rows missing surface data
+        if not combined.empty and "venue" in combined.columns:
+            missing_surf = combined.get("surface", pd.Series(dtype=str)).isna() | \
+                           combined.get("surface", pd.Series(dtype=str)).eq("")
+            if "surface" not in combined.columns:
+                combined["surface"] = ""
+                missing_surf = pd.Series(True, index=combined.index)
+            combined.loc[missing_surf, "surface"] = combined.loc[missing_surf].apply(
+                lambda row: _infer_surface(row.to_dict()), axis=1
+            )
         self._all_games_cache = combined
         return combined
 
@@ -132,11 +247,23 @@ class TennisExtractor(BaseFeatureExtractor):
         
         This is the cached version called from extract_all to avoid redundant loads.
         """
-        h_id = str(game.get("home_team_id", game.get("player_a_id", "")))
-        a_id = str(game.get("away_team_id", game.get("player_b_id", "")))
+        h_id_raw = str(game.get("home_team_id", game.get("player_a_id", "")))
+        a_id_raw = str(game.get("away_team_id", game.get("player_b_id", "")))
+        h_name = str(game.get("home_team", ""))
+        a_name = str(game.get("away_team", ""))
         date = str(game.get("date", ""))
         game_id = str(game.get("id", ""))
-        surface = str(game.get("surface", "hard")).lower()
+        surface = _infer_surface(game)
+
+        # Ensure player_stats index is built (populates _name_to_player_id bridge)
+        self._load_all_player_stats()
+
+        # Resolve UUID-based IDs (2025+) to numeric IDs for player_stats lookups
+        h_id_resolved = self._resolve_player_id(h_id_raw, h_name)
+        a_id_resolved = self._resolve_player_id(a_id_raw, a_name)
+        # Use raw IDs for game-history lookups (game records use raw IDs)
+        h_id = h_id_raw
+        a_id = a_id_raw
 
         features: dict[str, Any] = {
             "game_id": game_id,
@@ -155,7 +282,13 @@ class TennisExtractor(BaseFeatureExtractor):
         best_of = int(game.get("best_of", 3) or 3)
         features["is_best_of_5"] = 1.0 if best_of >= 5 else 0.0
 
-        # Overall form
+        # Tournament prestige level (1-4)
+        prestige = _infer_tournament_prestige(game)
+        features["tournament_prestige"] = float(prestige)
+        features["is_grand_slam"] = 1.0 if prestige == 4 else 0.0
+        features["is_masters"] = 1.0 if prestige == 3 else 0.0
+
+        # Overall form (use raw ID for game-history lookups)
         h_form = self.team_form(h_id, date, games_df, window=10)
         features.update({f"home_{k}": v for k, v in h_form.items()})
         a_form = self.team_form(a_id, date, games_df, window=10)
@@ -173,10 +306,10 @@ class TennisExtractor(BaseFeatureExtractor):
         h2h = self.head_to_head(h_id, a_id, games_df, date=date)
         features.update(h2h)
 
-        # Serve — use rolling player stats (player_stats files) + game history
-        h_serve = self._player_serve_stats(h_id, date, games_df=games_df)
+        # Serve — use resolved numeric ID for player_stats lookups; raw ID for game history
+        h_serve = self._player_serve_stats(h_id_resolved, date, games_df=games_df)
         features.update({f"home_{k}": v for k, v in h_serve.items()})
-        a_serve = self._player_serve_stats(a_id, date, games_df=games_df)
+        a_serve = self._player_serve_stats(a_id_resolved, date, games_df=games_df)
         features.update({f"away_{k}": v for k, v in a_serve.items()})
 
         # Return
@@ -202,9 +335,22 @@ class TennisExtractor(BaseFeatureExtractor):
         a_fat = self._fatigue_features(a_id, date, games_df)
         features.update({f"away_{k}": v for k, v in a_fat.items()})
 
-        # Set win rate
+        # Win streak and days since last match
+        features["home_win_streak"] = self._win_streak(h_id, date, games_df)
+        features["away_win_streak"] = self._win_streak(a_id, date, games_df)
+        features["win_streak_diff"] = features["home_win_streak"] - features["away_win_streak"]
+        features["home_days_since_last"] = self._days_since_last_match(h_id, date, games_df)
+        features["away_days_since_last"] = self._days_since_last_match(a_id, date, games_df)
+        features["rest_advantage"] = features["home_days_since_last"] - features["away_days_since_last"]
+
+        # Set win rate + tiebreak win pct (pressure/clutch metric)
         features["home_set_win_rate"] = self._set_win_rate(h_id, date, games_df)
         features["away_set_win_rate"] = self._set_win_rate(a_id, date, games_df)
+        features["home_tiebreak_win_pct"] = self._tiebreak_win_pct(h_id, date, games_df)
+        features["away_tiebreak_win_pct"] = self._tiebreak_win_pct(a_id, date, games_df)
+        features["tiebreak_win_pct_diff"] = (
+            features["home_tiebreak_win_pct"] - features["away_tiebreak_win_pct"]
+        )
 
         # ELO ratings (computed from match history)
         h_elo = self.elo_features(h_id, a_id, date, games_df)
@@ -266,6 +412,40 @@ class TennisExtractor(BaseFeatureExtractor):
         features["h2h_surface_win_pct"] = h2h_surface
         features["h2h_surface_win_pct_diff"] = h2h_surface - 0.5  # centred signal
 
+        # Tournament prestige-level form (e.g. Grand Slam performance history)
+        prestige = int(game.get("tournament_prestige", 2) or 2)
+        h_pf = self._prestige_form(h_id, date, games_df, prestige)
+        a_pf = self._prestige_form(a_id, date, games_df, prestige)
+        features["home_prestige_win_pct"] = h_pf["prestige_win_pct"]
+        features["away_prestige_win_pct"] = a_pf["prestige_win_pct"]
+        features["prestige_win_pct_diff"] = h_pf["prestige_win_pct"] - a_pf["prestige_win_pct"]
+
+        # Strength of schedule proxy: average ranking of recent opponents
+        features["home_avg_opp_ranking"] = self._avg_opponent_ranking(h_id, date, games_df)
+        features["away_avg_opp_ranking"] = self._avg_opponent_ranking(a_id, date, games_df)
+        # Lower avg_opp_ranking = harder schedule (lower rank = better player)
+        features["schedule_difficulty_diff"] = features["away_avg_opp_ranking"] - features["home_avg_opp_ranking"]
+
+        # Momentum: rolling net-set differential over last 5 matches
+        features["home_momentum"] = self.momentum(h_id, date, games_df, window=5)
+        features["away_momentum"] = self.momentum(a_id, date, games_df, window=5)
+        features["momentum_diff"] = features["home_momentum"] - features["away_momentum"]
+
+        # Quality-weighted form (win rate weighted by opponent ranking quality)
+        h_qf = self._ranking_quality_form(h_id, date, games_df, standings_df)
+        features["home_ranking_quality_form"] = h_qf
+        a_qf = self._ranking_quality_form(a_id, date, games_df, standings_df)
+        features["away_ranking_quality_form"] = a_qf
+        features["ranking_quality_form_diff"] = h_qf - a_qf
+
+        # Quality metric differentials
+        for _qk in ("tiebreaks_won_pm", "winners_per_match", "unforced_errors_per_match",
+                    "winner_ue_ratio", "net_points_won_pm"):
+            _sign = -1.0 if _qk == "unforced_errors_per_match" else 1.0
+            features[f"{_qk}_diff"] = _sign * (
+                features.get(f"home_{_qk}", 0.0) - features.get(f"away_{_qk}", 0.0)
+            )
+
         # Odds
         odds = self._odds_features(game_id, odds_df)
         features.update(odds)
@@ -273,6 +453,32 @@ class TennisExtractor(BaseFeatureExtractor):
         return features
 
     # ── Helpers ────────────────────────────────────────────
+
+    def _avg_opponent_ranking(
+        self,
+        player_id: str,
+        date: str,
+        games: pd.DataFrame,
+        window: int = 10,
+    ) -> float:
+        """Average ranking of recent opponents (proxy for schedule difficulty).
+
+        Lower return value = harder schedule (lower rank number = better player).
+        Returns 200.0 (mid-tier) if no ranking data is available.
+        """
+        recent = self._team_games_before(games, player_id, date, limit=window)
+        if recent.empty:
+            return 200.0
+        is_home = recent["home_team_id"] == player_id
+        opp_rank = is_home.map(lambda h: "away_ranking" if h else "home_ranking")
+        # Vectorized opponent ranking lookup
+        rankings = []
+        for idx, row in recent.iterrows():
+            col = "away_ranking" if row.get("home_team_id") == player_id else "home_ranking"
+            rank = pd.to_numeric(row.get(col), errors="coerce")
+            if pd.notna(rank) and rank > 0:
+                rankings.append(float(rank))
+        return float(sum(rankings) / len(rankings)) if rankings else 200.0
 
     def _surface_form(
         self,
@@ -317,8 +523,23 @@ class TennisExtractor(BaseFeatureExtractor):
                 pass
         if not frames:
             self._all_pstats_cache = pd.DataFrame()
+            # Still build name-to-ID bridge from games even if no player_stats files
+            self._build_name_id_bridge(sport_dir)
             return self._all_pstats_cache
         combined = pd.concat(frames, ignore_index=True)
+
+        # Merge extra quality columns from player_stats.parquet (non-year-specific)
+        # Note: these columns (tiebreaks_won, winners, etc.) are already present via
+        # year-specific parquets when available. The full parquet currently has them all null,
+        # so we skip the merge to avoid overhead.
+        _extra_cols = [
+            "tiebreaks_won", "winners", "unforced_errors", "net_points_won",
+            "second_serve_pct", "break_points_won", "break_points_faced",
+        ]
+        # Ensure extra columns exist in combined (filled with NaN if not already present)
+        for col in _extra_cols:
+            if col not in combined.columns:
+                combined[col] = np.nan
 
         # date is typically null — enrich from games files via game_id → id join
         if "game_id" in combined.columns:
@@ -350,8 +571,51 @@ class TennisExtractor(BaseFeatureExtractor):
             }
         else:
             self._player_stats_index = {}
+
+        # Build name → numeric ID bridge from all games
+        self._build_name_id_bridge(sport_dir)
+
         self._all_pstats_cache = combined
         return combined
+
+    def _build_name_id_bridge(self, sport_dir: Path) -> None:
+        """Build player_name → numeric_player_id bridge from games with numeric IDs.
+        
+        2025/2026 games use UUID-based home_team_id but player_stats use numeric ESPN IDs.
+        This bridge enables UUID → numeric ID resolution via player name.
+        """
+        if self._name_to_player_id:
+            return  # Already built
+        for p in sorted(sport_dir.glob("games_*.parquet")):
+            try:
+                gdf = pd.read_parquet(p, columns=["home_team", "home_team_id", "away_team", "away_team_id"])
+                # Only use rows where IDs look numeric (not UUID)
+                for name_col, id_col in [("home_team", "home_team_id"), ("away_team", "away_team_id")]:
+                    if name_col in gdf.columns and id_col in gdf.columns:
+                        pairs = gdf[[name_col, id_col]].dropna()
+                        numeric_mask = pairs[id_col].astype(str).str.match(r"^\d+$")
+                        for _, row in pairs[numeric_mask].iterrows():
+                            name_key = str(row[name_col]).strip().lower()
+                            if name_key and name_key not in self._name_to_player_id:
+                                self._name_to_player_id[name_key] = str(row[id_col])
+            except Exception:
+                pass
+
+    def _resolve_player_id(self, player_id: str, player_name: str = "") -> str:
+        """Resolve UUID-based player IDs to numeric IDs using name bridge.
+        
+        2025+ games use UUID team_ids while player_stats use numeric ESPN IDs.
+        If player_id looks like a UUID and we have a name, look up by name.
+        """
+        if not player_id or player_id.isdigit():
+            return player_id
+        # Looks like UUID (contains dashes, not purely numeric)
+        if "-" in player_id and player_name:
+            name_key = player_name.strip().lower()
+            resolved = self._name_to_player_id.get(name_key)
+            if resolved:
+                return resolved
+        return player_id
 
     def _player_serve_stats(
         self,
@@ -367,6 +631,9 @@ class TennisExtractor(BaseFeatureExtractor):
             "double_faults_per_match": 0.0, "service_games_won_pct": 0.0,
             "break_point_conversion": 0.0, "break_points_saved_pct": 0.0,
             "return_points_won_pct": 0.0, "ace_df_ratio": 0.0,
+            "tiebreaks_won_pm": 0.0, "winners_per_match": 0.0,
+            "unforced_errors_per_match": 0.0, "winner_ue_ratio": 0.0,
+            "net_points_won_pm": 0.0,
         }
         pstats = self._load_all_player_stats()
         result = dict(defaults)
@@ -398,6 +665,18 @@ class TennisExtractor(BaseFeatureExtractor):
                         "double_faults_per_match": dfs,
                         "break_point_conversion": bp_conv,
                         "ace_df_ratio": float(aces / dfs) if dfs > 0 else float(aces * 2),
+                    })
+                    # Quality metrics from enriched player_stats.parquet
+                    tb = _avg("tiebreaks_won")
+                    winners = _avg("winners")
+                    ue = _avg("unforced_errors")
+                    np_won = _avg("net_points_won")
+                    result.update({
+                        "tiebreaks_won_pm": tb,
+                        "winners_per_match": winners,
+                        "unforced_errors_per_match": ue,
+                        "winner_ue_ratio": float(winners / ue) if ue > 0 else float(winners * 0.1),
+                        "net_points_won_pm": np_won,
                     })
 
         # Supplement with rolling stats from game history (has first_serve_won_pct etc.)
@@ -538,6 +817,46 @@ class TennisExtractor(BaseFeatureExtractor):
             "avg_sets_recent": avg_sets,
         }
 
+    def _win_streak(
+        self,
+        player_id: str,
+        date: str,
+        games: pd.DataFrame,
+        max_streak: int = 20,
+    ) -> float:
+        """Current consecutive win streak (capped at max_streak)."""
+        recent = self._team_games_before(games, player_id, date, limit=max_streak)
+        if recent.empty:
+            return 0.0
+        is_home = (recent["home_team_id"] == player_id).values
+        streak = 0
+        for i in range(len(recent)):
+            result = str(recent.iloc[i].get("result", ""))
+            won = (is_home[i] and result == "home_win") or (not is_home[i] and result == "away_win")
+            if won:
+                streak += 1
+            else:
+                break
+        return float(streak)
+
+    def _days_since_last_match(
+        self,
+        player_id: str,
+        date: str,
+        games: pd.DataFrame,
+    ) -> float:
+        """Days since the player's last match (rest days proxy). Returns 14 if no history."""
+        recent = self._team_games_before(games, player_id, date, limit=1)
+        if recent.empty:
+            return 14.0
+        try:
+            last_date = pd.Timestamp(recent.iloc[0]["date"])
+            today = pd.Timestamp(date)
+            diff = (today - last_date).days
+            return float(max(0, min(diff, 30)))
+        except Exception:
+            return 14.0
+
     def _set_win_rate(
         self,
         player_id: str,
@@ -591,6 +910,99 @@ class TennisExtractor(BaseFeatureExtractor):
         wins_a = self._vec_win_flags(h2h, player_a)
         return float(wins_a.mean())
 
+    def _tiebreak_win_pct(
+        self,
+        player_id: str,
+        date: str,
+        games: pd.DataFrame,
+        window: int = 20,
+    ) -> float:
+        """Fraction of tiebreak sets (score=7) won in last `window` matches."""
+        recent = self._team_games_before(games, player_id, date, limit=window)
+        if recent.empty:
+            return 0.0
+
+        is_home = recent["home_team_id"] == player_id
+        tiebreak_won, tiebreak_total = 0, 0
+
+        for prefix_p, prefix_o in (("home_", "away_"), ("away_", "home_")):
+            mask = is_home if prefix_p == "home_" else ~is_home
+            subset = recent[mask]
+            for q in ("q1", "q2", "q3", "q4", "q5"):
+                p_col = f"{prefix_p}{q}"
+                o_col = f"{prefix_o}{q}"
+                if p_col not in subset.columns or o_col not in subset.columns:
+                    continue
+                p_scores = pd.to_numeric(subset[p_col], errors="coerce").fillna(-1)
+                o_scores = pd.to_numeric(subset[o_col], errors="coerce").fillna(-1)
+                # A tiebreak set has score 7 on one side
+                tb_mask = (p_scores == 7) | (o_scores == 7)
+                tiebreak_total += int(tb_mask.sum())
+                tiebreak_won += int(((p_scores == 7) & tb_mask).sum())
+
+        return float(tiebreak_won / tiebreak_total) if tiebreak_total > 0 else 0.0
+
+    def _ranking_quality_form(
+        self,
+        player_id: str,
+        date: str,
+        games: pd.DataFrame,
+        standings_df: pd.DataFrame | None = None,
+        window: int = 15,
+    ) -> float:
+        """Win rate weighted by opponent ranking quality (rank 1 > rank 100).
+
+        Returns quality-weighted form score in [-1, 1] range.
+        """
+        recent = self._team_games_before(games, player_id, date, limit=window)
+        if recent.empty:
+            return 0.0
+        wins = self._vec_win_flags(recent, player_id)
+        is_home = recent["home_team_id"].astype(str) == str(player_id)
+        opp_ids = np.where(is_home, recent["away_team_id"].astype(str), recent["home_team_id"].astype(str))
+
+        opp_weights: list[float] = []
+        for opp_id in opp_ids:
+            # Try to get opponent ranking from standings; fallback to game columns
+            opp_rank = 200.0  # default = mediocre
+            if standings_df is not None and not standings_df.empty:
+                omatch = standings_df[standings_df["team_id"].astype(str) == str(opp_id)]
+                if not omatch.empty and "ranking" in omatch.columns:
+                    r = pd.to_numeric(omatch["ranking"].iloc[0], errors="coerce")
+                    if pd.notna(r) and r > 0:
+                        opp_rank = float(r)
+            # Convert rank to quality weight: rank 1 = weight 1.0, rank 200 = weight ~0.0
+            quality_weight = max(0.0, 1.0 - (opp_rank - 1.0) / 200.0)
+            opp_weights.append(quality_weight)
+
+        weights = np.array(opp_weights, dtype=float)
+        n = max(len(wins), 1)
+        return float(np.dot(wins * 2.0 - 1.0, weights) / n)
+
+    def _prestige_form(
+        self,
+        player_id: str,
+        date: str,
+        games: pd.DataFrame,
+        prestige: int,
+        window: int = 20,
+    ) -> dict[str, float]:
+        """Win rate at tournaments of similar prestige level (GS=4, Masters=3, etc.)."""
+        defaults = {"prestige_win_pct": 0.0, "prestige_matches": 0}
+        recent = self._team_games_before(games, player_id, date, limit=100)
+        if recent.empty or "tournament_prestige" not in recent.columns:
+            return defaults
+        prestige_games = recent.loc[
+            pd.to_numeric(recent["tournament_prestige"], errors="coerce") == prestige
+        ].head(window)
+        if prestige_games.empty:
+            return defaults
+        wins = self._vec_win_flags(prestige_games, player_id)
+        return {
+            "prestige_win_pct": float(wins.mean()),
+            "prestige_matches": len(prestige_games),
+        }
+
     # ── Main Extraction ───────────────────────────────────
 
     def extract_game_features(self, game: dict[str, Any]) -> dict[str, Any]:
@@ -608,8 +1020,8 @@ class TennisExtractor(BaseFeatureExtractor):
         return [
             # Surface
             "surface_hard", "surface_clay", "surface_grass", "surface_carpet",
-            # Match format
-            "is_best_of_5",
+            # Match format and tournament prestige
+            "is_best_of_5", "tournament_prestige", "is_grand_slam", "is_masters",
             # Form
             "home_form_win_pct", "home_form_ppg", "home_form_opp_ppg",
             "home_form_avg_margin", "home_form_games_played",
@@ -628,13 +1040,19 @@ class TennisExtractor(BaseFeatureExtractor):
             # Return
             "home_break_point_conversion", "home_break_points_saved_pct", "home_return_points_won_pct",
             "away_break_point_conversion", "away_break_points_saved_pct", "away_return_points_won_pct",
+            # Match quality metrics (winners, UE, tiebreaks, net play)
+            "home_tiebreaks_won_pm", "home_winners_per_match", "home_unforced_errors_per_match",
+            "home_winner_ue_ratio", "home_net_points_won_pm",
+            "away_tiebreaks_won_pm", "away_winners_per_match", "away_unforced_errors_per_match",
+            "away_winner_ue_ratio", "away_net_points_won_pm",
             # Ranking
             "home_ranking", "home_ranking_points", "away_ranking", "away_ranking_points", "ranking_diff",
             # Fatigue
             "home_matches_7d", "home_matches_14d", "home_matches_30d", "home_avg_sets_recent",
             "away_matches_7d", "away_matches_14d", "away_matches_30d", "away_avg_sets_recent",
-            # Set win rate
+            # Set win rate + tiebreak clutch
             "home_set_win_rate", "away_set_win_rate",
+            "home_tiebreak_win_pct", "away_tiebreak_win_pct", "tiebreak_win_pct_diff",
             # ELO
             "home_elo", "home_elo_diff", "home_elo_expected_win",
             "away_elo", "away_elo_diff", "away_elo_expected_win",
@@ -646,6 +1064,16 @@ class TennisExtractor(BaseFeatureExtractor):
             "form_win_pct_diff", "form_ppg_diff", "form_margin_diff",
             "ranking_points_diff",
             "h2h_surface_win_pct", "h2h_surface_win_pct_diff",
+            "home_prestige_win_pct", "away_prestige_win_pct", "prestige_win_pct_diff",
+            # Quality metric differentials
+            "tiebreaks_won_pm_diff", "winners_per_match_diff", "unforced_errors_per_match_diff",
+            "winner_ue_ratio_diff", "net_points_won_pm_diff",
+            # Schedule difficulty and momentum
+            "home_avg_opp_ranking", "away_avg_opp_ranking", "schedule_difficulty_diff",
+            "home_momentum", "away_momentum", "momentum_diff",
+            # Win streak and rest
+            "home_win_streak", "away_win_streak", "win_streak_diff",
+            "home_days_since_last", "away_days_since_last", "rest_advantage",
             # Odds
             "home_moneyline", "away_moneyline", "spread", "total", "home_implied_prob",
         ]
