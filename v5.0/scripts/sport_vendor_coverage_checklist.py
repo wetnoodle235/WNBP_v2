@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ import pyarrow.parquet as pq
 
 
 PROVIDER_COL_HINTS = ("provider", "vendor", "source")
-YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
 SEASON_TYPE_VALUES = {
     "regular",
     "preseason",
@@ -145,10 +146,15 @@ def provider_columns_for_file(file_path: Path) -> list[str]:
 
 def _extract_years_from_text(text: str) -> set[int]:
     years: set[int] = set()
-    for token in YEAR_RE.findall(text):
+    # Only accept stand-alone 4-digit year tokens from path-like text.
+    tokens = re.split(r"[^0-9]+", text)
+    for token in tokens:
+        if not token:
+            continue
+        if not YEAR_RE.match(token):
+            continue
         year = int(token)
-        if 1800 <= year <= 2200:
-            years.add(year)
+        years.add(year)
     return years
 
 
@@ -301,6 +307,11 @@ def parse_args() -> argparse.Namespace:
         "--output",
         default="data/reports/sport_vendor_raw_vs_curated_checklist.md",
         help="Markdown output path relative to --root",
+    )
+    parser.add_argument(
+        "--csv-output",
+        default="data/reports/sport_vendor_raw_vs_curated_checklist.csv",
+        help="CSV output path relative to --root",
     )
     parser.add_argument(
         "--season-type-scan-limit",
@@ -481,6 +492,16 @@ def main() -> int:
         )
 
     lines.append("")
+    lines.append("## Ignored Raw Volume")
+    lines.append("")
+    lines.append("| Sport | Vendor | Raw files | Reason |")
+    lines.append("|---|---|---:|---|")
+    for sport in sorted(by_sport.keys()):
+        ignored_rows = [r for r in by_sport[sport] if r.status == "[ ] ignored" and r.raw_files > 0]
+        for row in sorted(ignored_rows, key=lambda r: r.raw_files, reverse=True):
+            lines.append(f"| {sport} | {row.vendor} | {row.raw_files} | {row.notes} |")
+    lines.append("")
+
     lines.append("## Vendor Checklist")
     lines.append("")
 
@@ -512,7 +533,45 @@ def main() -> int:
         lines.append(f"| {vendor} | {unknown_raw_files_by_vendor.get(vendor, 0)} |")
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"wrote {out_path} sports={len(by_sport)} rows={len(rows)}")
+
+    csv_path = root / args.csv_output
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "sport",
+                "vendor",
+                "status",
+                "raw_files",
+                "raw_years",
+                "raw_season_types",
+                "normalized_files",
+                "curated_files",
+                "curated_categories",
+                "normalized_vendor_hits",
+                "curated_vendor_hits",
+                "notes",
+            ]
+        )
+        for row in sorted(rows, key=lambda r: (r.sport, r.vendor)):
+            writer.writerow(
+                [
+                    row.sport,
+                    row.vendor,
+                    row.status,
+                    row.raw_files,
+                    format_years(row.raw_years),
+                    format_types(row.raw_season_types),
+                    row.normalized_files,
+                    row.curated_files,
+                    row.curated_categories,
+                    row.normalized_vendor_hits,
+                    row.curated_vendor_hits,
+                    row.notes,
+                ]
+            )
+    print(f"wrote {out_path} and {csv_path} sports={len(by_sport)} rows={len(rows)}")
     return 0
 
 

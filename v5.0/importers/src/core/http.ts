@@ -80,6 +80,15 @@ export async function fetchJSON<T = unknown>(
 
       if (res.status === 429) {
         const retryAfter = parseInt(res.headers.get("retry-after") ?? "5", 10);
+        const remaining = res.headers.get("x-calllimit-remaining");
+        const text = await res.text().catch(() => "");
+        const lowered = text.toLowerCase();
+        const quotaExhausted = remaining === "0" || lowered.includes("monthly call quota exceeded");
+
+        if (quotaExhausted || attempt >= retries) {
+          throw new Error(`HTTP 429: ${text.slice(0, 200) || "Too Many Requests"}`);
+        }
+
         logger.warn(`429 — retry after ${retryAfter}s (attempt ${attempt}/${retries})`, provider);
         await sleep(retryAfter * 1000);
         continue;
@@ -94,6 +103,10 @@ export async function fetchJSON<T = unknown>(
     } catch (err: unknown) {
       clearTimeout(timer);
       const msg = err instanceof Error ? err.message : String(err);
+
+      if (msg.toLowerCase().includes("http 429") || msg.toLowerCase().includes("monthly call quota exceeded")) {
+        throw err instanceof Error ? err : new Error(msg);
+      }
 
       if (attempt < retries) {
         const delay = retryDelayMs * attempt;

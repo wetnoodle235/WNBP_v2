@@ -36,7 +36,11 @@ class CfbQuotaExceededError extends Error {
 function isCfbQuotaExceededError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
-  return msg.includes("monthly call quota exceeded");
+  return (
+    msg.includes("monthly call quota exceeded")
+    || msg.includes("429")
+    || msg.includes("too many requests")
+  );
 }
 
 const ALL_ENDPOINTS = [
