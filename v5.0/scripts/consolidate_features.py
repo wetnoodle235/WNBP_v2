@@ -18,25 +18,30 @@ import pandas as pd
 
 def consolidate_sport(sport: str, features_dir: Path, verbose: bool = False) -> dict[str, Any]:
     """
-    Consolidate all seasonal feature parquets for a sport into {sport}_all.parquet.
-    
+    Consolidate seasonal feature parquets for a sport into {sport}_all.parquet.
+
+    Merges new seasonal data INTO the existing _all.parquet rather than
+    rebuilding from scratch.  This prevents the daily pipeline (which only
+    extracts the current season) from wiping out historical seasons stored in
+    _all.parquet.
+
     Args:
         sport: Sport name (e.g., 'mlb', 'nba')
         features_dir: Path to features directory
         verbose: Enable debug logging
-    
+
     Returns:
         Dict with consolidation status and metrics
     """
-    # Find all seasonal parquets for this sport
+    # Find all seasonal parquets for this sport (exclude _all itself)
     seasonal_files = sorted(features_dir.glob(f"{sport}_*.parquet"))
-    # Exclude the _all.parquet itself
     seasonal_files = [f for f in seasonal_files if not f.stem.endswith("_all")]
     if not seasonal_files:
         return {"sport": sport, "status": "no_seasonal_files", "files": 0}
-    
-    # mtime-based skip: if _all.parquet is newer than ALL seasonal files, skip
+
     combined_path = features_dir / f"{sport}_all.parquet"
+
+    # mtime-based skip: if _all.parquet is newer than ALL seasonal files, nothing new to add
     if combined_path.exists():
         all_mtime = combined_path.stat().st_mtime
         newest_seasonal = max(f.stat().st_mtime for f in seasonal_files)
@@ -44,38 +49,69 @@ def consolidate_sport(sport: str, features_dir: Path, verbose: bool = False) -> 
             if verbose:
                 print(f"  {sport}: _all.parquet is up-to-date, skipping", flush=True)
             return {"sport": sport, "status": "up_to_date", "files": len(seasonal_files)}
-    
-    # Load and concatenate seasonal dataframes
-    dfs = []
+
+    # Load seasonal files
+    new_dfs = []
     for fpath in seasonal_files:
         try:
             df = pd.read_parquet(fpath)
             if not df.empty:
-                dfs.append((str(fpath.stem), df))
+                new_dfs.append(df)
                 if verbose:
                     print(f"  Loaded {fpath.stem}: {len(df)} rows × {len(df.columns)} cols", flush=True)
         except Exception as e:
             if verbose:
                 print(f"  Warning: Failed to load {fpath.stem}: {e}", flush=True)
-            continue
-    
-    if not dfs:
+
+    if not new_dfs:
         return {"sport": sport, "status": "no_valid_files", "files": len(seasonal_files)}
-    
-    # Combine all dataframes
-    combined = pd.concat([df for _, df in dfs], ignore_index=True)
-    combined = combined.drop_duplicates(subset=['game_id', 'player_id'] if 'player_id' in combined.columns else ['game_id'], keep='last')
-    
-    # Save consolidated file
+
+    new_data = pd.concat(new_dfs, ignore_index=True)
+
+    # CRITICAL: merge into existing _all.parquet to preserve historical seasons.
+    # Without this, running the daily pipeline (which only extracts the current
+    # season) would overwrite years of training data with a single season.
+    id_cols = ["game_id", "player_id"] if "player_id" in new_data.columns else ["game_id"]
+    if combined_path.exists():
+        try:
+            existing = pd.read_parquet(combined_path)
+            existing_seasons = set(existing["season"].unique()) if "season" in existing.columns else set()
+            new_seasons = set(new_data["season"].unique()) if "season" in new_data.columns else set()
+            if existing_seasons - new_seasons:
+                # Existing _all.parquet has seasons not covered by seasonal files →
+                # merge to preserve historical data
+                combined = pd.concat([existing, new_data], ignore_index=True)
+                if verbose:
+                    print(
+                        f"  {sport}: merging {len(existing)} existing + {len(new_data)} new rows "
+                        f"(seasons {sorted(existing_seasons)} + {sorted(new_seasons)})",
+                        flush=True,
+                    )
+            else:
+                # Seasonal files cover all (or more) seasons → rebuild cleanly
+                combined = new_data
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: Could not read existing _all.parquet ({e}), rebuilding", flush=True)
+            combined = new_data
+    else:
+        combined = new_data
+
+    # Deduplicate — keep last (newest extraction wins)
+    combined = combined.drop_duplicates(subset=id_cols, keep="last").reset_index(drop=True)
+
     combined.to_parquet(combined_path, compression="snappy", index=False)
-    
+
     if verbose:
-        print(f"  Saved to {combined_path.name}: {len(combined)} rows (deduped) × {len(combined.columns)} cols", flush=True)
-    
+        print(
+            f"  Saved to {combined_path.name}: {len(combined)} rows (deduped) × {len(combined.columns)} cols",
+            flush=True,
+        )
+
     return {
         "sport": sport,
         "status": "consolidated",
-        "files_combined": len(dfs),
+        "files_combined": len(new_dfs),
         "rows_output": len(combined),
         "columns": len(combined.columns),
         "output_path": str(combined_path),

@@ -10,6 +10,9 @@ export type Sport =
   | "nhl"
   | "epl" | "laliga" | "bundesliga" | "seriea" | "ligue1" | "mls" | "ucl" | "nwsl"
   | "ligamx" | "europa"
+  | "eredivisie" | "primeiraliga"
+  | "championship" | "bundesliga2" | "serieb" | "ligue2"
+  | "euros" | "worldcup"
   | "f1" | "indycar"
   | "atp" | "wta"
   | "ufc"
@@ -23,6 +26,9 @@ export const ALL_SPORTS: readonly Sport[] = [
   "nhl",
   "epl", "laliga", "bundesliga", "seriea", "ligue1", "mls", "ucl", "nwsl",
   "ligamx", "europa",
+  "eredivisie", "primeiraliga",
+  "championship", "bundesliga2", "serieb", "ligue2",
+  "euros", "worldcup",
   "f1", "indycar",
   "atp", "wta",
   "ufc",

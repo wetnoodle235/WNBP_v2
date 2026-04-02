@@ -159,11 +159,16 @@ All 18 API endpoints tested:
 ✅ **NHL API** — Games, standings, players, player_stats
 ✅ **StatsBomb** — Games, players, player_stats (soccer/mls)
 ✅ **Ergast** — F1 games, players, teams, standings, player_stats
+	Raw layout now uses season partitions of `reference/`, `standings/`, and `rounds/round_XX/`.
+	Normalization reads the round-partitioned structure first and falls back to legacy flat season files for compatibility.
 ✅ **OpenF1** — F1 games, players, player_stats
+	Raw layout now uses `reference/` plus `season_phases/{testing|championship}/meetings/meeting_{key}/sessions/session_{key}/`.
+	OpenF1 remains a complementary F1 source for 2023+ session-level enrichment, not a replacement for Ergast historical standings/results.
 ✅ **Lahman** — MLB games, teams, players, player_stats
 ✅ **MLB Stats** — Games, **player_stats** (NEW)
 ✅ **FiveThirtyEight** — **NBA RAPTOR player_stats** (NEW), **NFL/NBA ELO games** (NEW)
 ✅ **Tennis Abstract** — ATP/WTA games, players, player_stats, standings
+	Endpoint/storage contract documented in `TENNISABSTRACT_STORAGE_NORMALIZATION_DESIGN.md` (sport-specific endpoint support + 2020-2026 coverage behavior).
 ✅ **UFC Stats** — Games, players, player_stats
 ✅ **OpenDota** — Dota2 teams, players, standings, games, player_stats
 ✅ **CFBData** — NCAAF games, standings, team_stats
@@ -174,7 +179,7 @@ All 18 API endpoints tested:
 
 ### Gaps Identified
 - ❌ **FiveThirtyEight Soccer SPI** — Data corrupted (HTML wrapper in JSON files) — requires importer fix
-- ❌ **Understat** — No raw data paths established, no implementations
+- ⚠️ **Understat** — Importer now implemented via AJAX endpoints with structured raw layout; backend normalization handlers are still pending
 - ❌ **Clearsports** — No raw data paths established, no implementations
 
 ### Sports with Comprehensive Provider Support (22 total)
@@ -245,7 +250,7 @@ Priorities are ordered by:
 ## Next Steps (Recommended)
 
 1. **Fix FiveThirtyEight Soccer Data** — Investigate importer issue corrupting soccer-spi JSON files
-2. **Implement Understat Handlers** — Add expected goals (xG) and shot quality metrics if data becomes available
+2. **Implement Understat Normalization Handlers** — Map new Understat raw layout into optional soccer xG enrichments
 3. **Extend Additional Providers** — apisports has games data for soccer; consider adding as tertiary source
 4. **Advanced Metrics** — Consider adding XWOBA (expected weighted on-base average) for baseball if available
 5. **Performance Optimization** — Monitor parquet merge performance as provider count grows

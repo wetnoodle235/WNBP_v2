@@ -230,16 +230,15 @@ _ESPN_SPORTS = [
     "ncaab", "ncaaf", "ncaaw",
     "epl", "laliga", "bundesliga", "seriea", "ligue1", "ucl",
     "mls", "nwsl", "ligamx", "europa",
+    "eredivisie", "primeiraliga", "championship", "bundesliga2", "serieb", "ligue2",
+    "worldcup", "euros",
     "wnba", "golf", "lpga", "f1", "nascar", "atp", "wta",
 ]
 
 # Providers known to be dead/unreachable — skip automatically
 _DISABLED_PROVIDERS = {
-    "clearsports",      # API down (all fetches fail)
-    "footballdata",     # Endpoint returning 404
     "oddsapi",          # API key deactivated
 }
-
 
 
 def _worker_normalize_sport(
@@ -269,7 +268,7 @@ def _worker_normalize_sport(
         )
         proc = _run_subprocess(
             [sys.executable, "-c", script],
-            cwd=backend_dir, timeout=180,
+            cwd=backend_dir, timeout=300,
         )
         elapsed = round(time.monotonic() - t0, 2)
         if proc.returncode != 0:
@@ -280,7 +279,7 @@ def _worker_normalize_sport(
         return {"sport": sport, "status": "ok", "duration_s": elapsed, "output": proc.stdout.strip()}
     except subprocess.TimeoutExpired:
         elapsed = round(time.monotonic() - t0, 2)
-        return {"sport": sport, "status": "error", "error": "timeout (180s)", "duration_s": elapsed}
+        return {"sport": sport, "status": "error", "error": "timeout (300s)", "duration_s": elapsed}
 
 
 _FEATURE_EXTRACT_TIMEOUT = 900  # 15 min — NCAAF has ~3800 games and takes ~560s
@@ -293,22 +292,73 @@ def _worker_extract_features(
     data_dir: str,
     fallback_season: str | None = None,
 ) -> dict[str, Any]:
-    """Extract features for a single sport in a subprocess.
+    """Extract features for a single sport — in-process only when cached.
 
-    If *season* extraction fails (e.g. current season has no completed games
-    yet, as with MLS at the start of the year), retries with *fallback_season*
-    (the prior year) when provided.
+    Uses a quick pre-check to determine if incremental extraction will be
+    near-instant (all games already extracted).  If so, runs in-process to
+    avoid ~4s subprocess overhead.  Otherwise uses a subprocess for true
+    parallelism (avoids GIL serialization of CPU-heavy work).
     """
     t0 = time.monotonic()
     logger.info("  [features] Starting %s …", sport)
 
+    features_dir = Path(data_dir) / "features"
+    features_dir.mkdir(parents=True, exist_ok=True)
+    output_path = features_dir / f"{sport}_{season}.parquet"
+
+    # --- decide: in-process (cached) vs subprocess (real work) -------------
+    use_inprocess = False
+    if output_path.exists():
+        try:
+            import pandas as pd
+            existing_count = len(pd.read_parquet(output_path, columns=["game_id"]))
+            # Check how many completed games exist in normalized data
+            norm_path = Path(data_dir) / "normalized" / sport / f"games_{season}.parquet"
+            if norm_path.exists():
+                games = pd.read_parquet(norm_path, columns=["home_score", "away_score"])
+                has_scores = (
+                    games["home_score"].notna() & games["away_score"].notna()
+                    & ((games["home_score"] > 0) | (games["away_score"] > 0))
+                )
+                completed_count = int(has_scores.sum())
+                # If we already have features for all (or nearly all) completed games,
+                # incremental extraction will be near-instant → use in-process
+                if existing_count >= completed_count - 2:
+                    use_inprocess = True
+        except Exception:
+            pass  # fall through to subprocess
+
+    if use_inprocess:
+        try:
+            if backend_dir not in sys.path:
+                sys.path.insert(0, backend_dir)
+            from ml.feature_extraction import extract as _fe_extract
+            df = _fe_extract(sport, Path(data_dir), seasons=[int(season)],
+                             incremental=True, output_path=output_path)
+
+            if df is not None and len(df) > 0:
+                elapsed = round(time.monotonic() - t0, 2)
+                logger.info("  [features] %s ✓ (%.1fs, in-process)", sport, elapsed)
+                return {"sport": sport, "status": "ok", "duration_s": elapsed,
+                        "output": f"{len(df)} rows"}
+
+            if fallback_season:
+                logger.info("  [features] %s season %s empty — trying fallback %s",
+                            sport, season, fallback_season)
+            else:
+                elapsed = round(time.monotonic() - t0, 2)
+                return {"sport": sport, "status": "error",
+                        "error": "no data (in-process)", "duration_s": elapsed}
+        except Exception as exc:
+            logger.debug("  [features] %s in-process failed (%s) — falling back to subprocess",
+                         sport, exc)
+
+    # --- subprocess path (real work or fallback) ---------------------------
     def _extract(s: str) -> tuple[subprocess.CompletedProcess, float]:
-        features_dir = Path(data_dir) / "features"
-        features_dir.mkdir(parents=True, exist_ok=True)
-        output_path = features_dir / f"{sport}_{s}.parquet"
+        out = features_dir / f"{sport}_{s}.parquet"
         cmd = [
             sys.executable, "-m", "ml.feature_extraction",
-            "--sport", sport, "--seasons", s, "--output", str(output_path),
+            "--sport", sport, "--seasons", s, "--output", str(out),
             "--incremental",
         ]
         proc = _run_subprocess(cmd, cwd=backend_dir, timeout=_FEATURE_EXTRACT_TIMEOUT)
@@ -318,25 +368,26 @@ def _worker_extract_features(
         proc, elapsed = _extract(season)
         if proc.returncode == 0:
             logger.info("  [features] %s ✓ (%.1fs)", sport, elapsed)
-            return {"sport": sport, "status": "ok", "duration_s": elapsed, "output": proc.stdout.strip()}
+            return {"sport": sport, "status": "ok", "duration_s": elapsed,
+                    "output": proc.stdout.strip()}
 
         err = proc.stderr.strip()[-300:] if proc.stderr else "unknown"
-        # Current season failed (e.g. no completed games yet) — try fallback
         if fallback_season:
-            logger.info(
-                "  [features] %s season %s failed (%s) — retrying with fallback %s",
-                sport, season, err[:80], fallback_season,
-            )
+            logger.info("  [features] %s season %s failed (%s) — retrying with fallback %s",
+                        sport, season, err[:80], fallback_season)
             try:
                 proc2, elapsed2 = _extract(fallback_season)
                 if proc2.returncode == 0:
-                    logger.info("  [features] %s (fallback %s) ✓ (%.1fs)", sport, fallback_season, elapsed2)
-                    return {"sport": sport, "status": "ok", "duration_s": elapsed2, "output": proc2.stdout.strip()}
+                    logger.info("  [features] %s (fallback %s) ✓ (%.1fs)",
+                                sport, fallback_season, elapsed2)
+                    return {"sport": sport, "status": "ok", "duration_s": elapsed2,
+                            "output": proc2.stdout.strip()}
                 err = proc2.stderr.strip()[-300:] if proc2.stderr else "unknown"
             except subprocess.TimeoutExpired:
                 elapsed = round(time.monotonic() - t0, 2)
                 return {"sport": sport, "status": "error",
-                        "error": f"timeout ({_FEATURE_EXTRACT_TIMEOUT}s) on fallback", "duration_s": elapsed}
+                        "error": f"timeout ({_FEATURE_EXTRACT_TIMEOUT}s) on fallback",
+                        "duration_s": elapsed}
 
         logger.debug("  [features] %s skipped (%.1fs): %s", sport, elapsed, err)
         return {"sport": sport, "status": "error", "error": err, "duration_s": elapsed}
@@ -587,6 +638,10 @@ class Pipeline:
         return candidates
 
     # ── Helpers ──────────────────────────────────────────
+
+    def _get_target_season(self, sport: str) -> int:
+        """Return the integer season year for *sport* based on target_date."""
+        return int(_season_for_sport(sport, self.target_date))
 
     def _run_step(self, name: str, fn, *args, **kwargs) -> StepResult:
         """Execute a step with timing, error handling, and dry-run support."""
@@ -1123,6 +1178,128 @@ class Pipeline:
             logger.warning("  Consolidation error: %s", str(e))
             return {"status": "error", "error": str(e)}
 
+    def step_pregame_features(self) -> dict[str, Any]:
+        """Pre-extract features for upcoming (unplayed) games.
+
+        After normal feature extraction produces features for completed games,
+        this step extracts features for today's and tomorrow's unplayed games
+        and appends them to the seasonal parquet.  This lets the predict step
+        use the fast batch path instead of expensive inline extraction
+        (~20s → ~0.1s per sport).
+        """
+        import pandas as _pd
+        from datetime import timedelta as _td
+
+        if BACKEND_DIR not in sys.path:
+            sys.path.insert(0, str(BACKEND_DIR))
+        from features.registry import get_extractor, EXTRACTORS
+
+        target_dates = [
+            self.target_date.isoformat(),
+            (self.target_date + _td(days=1)).isoformat(),
+        ]
+
+        sports = self._sports_list(EXTRACTORS.keys())
+        features_dir = DATA_DIR / "features"
+        total_added = 0
+        sports_updated = []
+
+        for sport in sports:
+            try:
+                # Find the seasonal parquet
+                season_str = str(self._get_target_season(sport))
+                output_path = features_dir / f"{sport}_{season_str}.parquet"
+                if not output_path.exists():
+                    continue
+
+                # Load existing game_ids
+                existing_df = _pd.read_parquet(output_path)
+                if "game_id" not in existing_df.columns:
+                    continue
+                existing_ids = set(existing_df["game_id"].astype(str))
+
+                # Find upcoming games not yet in features
+                norm_dir = DATA_DIR / "normalized" / sport
+                upcoming_ids = []
+                upcoming_games = _pd.DataFrame()
+                for s in [int(season_str), int(season_str) + 1, int(season_str) - 1]:
+                    gp = norm_dir / f"games_{s}.parquet"
+                    if gp.exists():
+                        gdf = _pd.read_parquet(gp)
+                        if "date" in gdf.columns:
+                            gdf["date"] = _pd.to_datetime(gdf["date"])
+                            mask = gdf["date"].dt.date.astype(str).isin(target_dates)
+                            upcoming_games = gdf[mask]
+                            break
+
+                if upcoming_games.empty:
+                    continue
+
+                id_col = "game_id" if "game_id" in upcoming_games.columns else "id"
+                missing = upcoming_games[
+                    ~upcoming_games[id_col].astype(str).isin(existing_ids)
+                ]
+                if missing.empty:
+                    continue
+
+                # Extract features for missing upcoming games
+                extractor = get_extractor(sport, DATA_DIR)
+                new_rows = []
+                for _, game in missing.iterrows():
+                    gid = str(game[id_col])
+                    try:
+                        row = extractor.extract_game_features(game.to_dict())
+                        if row is not None:
+                            if isinstance(row, dict) and row:
+                                new_rows.append(row)
+                            elif isinstance(row, _pd.DataFrame) and not row.empty:
+                                new_rows.append(row.iloc[0].to_dict())
+                    except Exception:
+                        pass
+
+                if not new_rows:
+                    continue
+
+                new_df = _pd.DataFrame(new_rows)
+                # Ensure game_id column exists
+                if "game_id" not in new_df.columns and id_col in new_df.columns:
+                    new_df["game_id"] = new_df[id_col]
+
+                # Align columns with existing parquet
+                for col in existing_df.columns:
+                    if col not in new_df.columns:
+                        new_df[col] = 0
+                new_df = new_df[[c for c in existing_df.columns if c in new_df.columns]]
+
+                # Match dtypes to existing parquet (prevents ArrowTypeError)
+                for col in new_df.columns:
+                    if col in existing_df.columns:
+                        edtype = existing_df[col].dtype
+                        try:
+                            if edtype == object:
+                                new_df[col] = new_df[col].astype(str)
+                            else:
+                                new_df[col] = new_df[col].astype(edtype)
+                        except (ValueError, TypeError):
+                            new_df[col] = new_df[col].astype(str)
+
+                # Append to parquet
+                combined = _pd.concat([existing_df, new_df], ignore_index=True)
+                if "game_id" in combined.columns:
+                    combined = combined.drop_duplicates(subset=["game_id"], keep="last")
+                combined.to_parquet(output_path, index=False)
+
+                total_added += len(new_df)
+                sports_updated.append(f"{sport}:{len(new_df)}")
+                logger.info("  [pregame] %s: +%d upcoming game features", sport, len(new_df))
+
+            except Exception as exc:
+                logger.warning("  [pregame] %s failed: %s", sport, exc)
+
+        if sports_updated:
+            logger.info("  Pre-game features: %s (%d total)", ", ".join(sports_updated), total_added)
+        return {"status": "ok", "added": total_added, "sports": sports_updated}
+
     # ── Step 5: Model training (all-in-one parallel) ────────
 
     def step_train(self) -> dict[str, Any]:
@@ -1189,9 +1366,10 @@ class Pipeline:
                 (sport, season, str(BACKEND_DIR), str(DATA_DIR))
             )
 
-        # Player props training (NBA/NFL/MLB/NHL)
-        props_sports = [s for s in ["nba", "nfl", "mlb", "nhl"]
-                        if s in {a[0] for a in train_args}]
+        # Player props training — all sports with prop specs
+        from ml.train_player_props import _PROP_SPECS  # noqa: F811
+        _trainable_sports = {a[0] for a in train_args}
+        props_sports = [s for s in sorted(_PROP_SPECS) if s in _trainable_sports]
         props_args = [
             (sport, _season_for_sport(sport, self.target_date), str(BACKEND_DIR))
             for sport in props_sports
@@ -1429,11 +1607,21 @@ class Pipeline:
         from config import ALL_SPORTS
 
         sports = self._sports_list(ALL_SPORTS)
+        target_dates_str = [self.target_date.isoformat()]
         props_args: list[tuple] = []
+        skipped_no_games: list[str] = []
         for sport in sports:
             models_dir = PROJECT_ROOT / "ml" / "models" / sport
-            if (models_dir / "player_props.pkl").exists():
-                props_args.append((sport, str(BACKEND_DIR), self.target_date.isoformat()))
+            if not (models_dir / "player_props.pkl").exists():
+                continue
+            # Game-day detection: skip props for sports with no games today
+            if not _sport_has_games_on_dates(sport, target_dates_str):
+                skipped_no_games.append(sport)
+                continue
+            props_args.append((sport, str(BACKEND_DIR), self.target_date.isoformat()))
+
+        if skipped_no_games:
+            logger.info("  [player_props] No games today: %s", ", ".join(sorted(skipped_no_games)))
 
         if not props_args:
             logger.info("  No sports with player props models — skipping")
@@ -1848,7 +2036,11 @@ class Pipeline:
             self._run_step("accuracy_analysis", self.step_accuracy)
             self._run_step("feature_extraction", self.step_features)
 
-        # Step 4b: Consolidate feature stores  
+        # Step 4b: Pre-extract features for upcoming unplayed games
+        # (runs before consolidation so _all.parquet includes them)
+        self._run_step("pregame_features", self.step_pregame_features)
+
+        # Step 4c: Consolidate feature stores  
         self._run_step("consolidate_features", self.step_consolidate_features)
 
         # Step 5: Train (game models + player props + golf — all parallel)
@@ -1858,8 +2050,10 @@ class Pipeline:
         else:
             self._run_step("training", self.step_train)
 
-        # Step 6+7a: Predict + Diagnostics in parallel (diagnostics reads
-        # models/features, predict writes to predictions/ — no conflicts)
+        # Step 6+7: Predict + Diagnostics + Player Props in parallel
+        # - diagnostics reads models/features only (no conflicts)
+        # - player props uses its own player_props.pkl model and writes to
+        #   its own parquet — fully independent of game predictions
         if self.parallel:
 
             def _predict_thread():
@@ -1868,18 +2062,22 @@ class Pipeline:
             def _diagnostics_thread():
                 self._run_step("diagnostics", self.step_diagnostics)
 
+            def _props_thread():
+                self._run_step("player_props", self.step_predict_props)
+
             t_pred = threading.Thread(target=_predict_thread, name="predict")
             t_diag = threading.Thread(target=_diagnostics_thread, name="diagnostics")
+            t_props = threading.Thread(target=_props_thread, name="props")
             t_pred.start()
             t_diag.start()
+            t_props.start()
             t_pred.join()
             t_diag.join()
+            t_props.join()
         else:
             self._run_step("predictions", self.step_predict)
             self._run_step("diagnostics", self.step_diagnostics)
-
-        # Step 6b: Player props predictions (after game predictions complete)
-        self._run_step("player_props", self.step_predict_props)
+            self._run_step("player_props", self.step_predict_props)
 
         # Step 8+9: Backtest + Season Simulator in parallel (both read-only)
         if self.parallel and not skip_backtest and not skip_simulate:

@@ -7,8 +7,10 @@
 
 import type { Provider, ImportOptions, ImportResult, Sport, RateLimitConfig } from "../../core/types.js";
 import { fetchJSON } from "../../core/http.js";
-import { writeJSON, rawPath, fileExists } from "../../core/io.js";
+import { writeJSON, rawPath, rawPathWithWeekDate, fileExists, ensureDir } from "../../core/io.js";
 import { logger } from "../../core/logger.js";
+import fs from "node:fs";
+import path from "node:path";
 
 // ── Constants ───────────────────────────────────────────────
 
@@ -20,6 +22,9 @@ const API_KEY = process.env.CFB_DATA_KEY ?? "";
 const RATE_LIMIT: RateLimitConfig = { requests: 5, perMs: 1_000 };
 
 const SUPPORTED_SPORTS: Sport[] = ["ncaaf"];
+const SEASON_TYPES_TO_COLLECT = ["regular", "postseason", "allstar", "spring_regular", "spring_postseason"] as const;
+type SeasonType = (typeof SEASON_TYPES_TO_COLLECT)[number];
+const SEASON_TYPE_WEEK_PLAN_CACHE = new Map<string, Array<{ seasonType: string; weeks: number[] }>>();
 
 const ALL_ENDPOINTS = [
   "games",
@@ -101,6 +106,176 @@ async function cfbFetch<T = unknown>(path: string, params: Record<string, string
   });
 }
 
+// ── Helper functions ────────────────────────────────────────
+
+/**
+ * Extract week and date from a CFBData API game object.
+ * Week defaults to 1 if not provided (non-postseason).
+ * Date is extracted from startDate field (YYYY-MM-DD).
+ */
+function getWeekAndDate(game: any): { week: number; date: string } {
+  let week = game.week ?? 1;
+  if (game.seasonType === "postseason") {
+    week = game.week ?? 0;
+  }
+  const date = game.startDate?.split('T')[0] ?? "unknown";
+  return { week, date };
+}
+
+function seasonTypeKey(value: unknown): string {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return "regular";
+  if (SEASON_TYPES_TO_COLLECT.includes(normalized as SeasonType)) return normalized;
+  if (normalized === "both") return "both";
+  return normalized.replace(/\s+/g, "_");
+}
+
+function weekKey(week: number): string {
+  return `week_${String(week).padStart(2, "0")}`;
+}
+
+function endpointPartitionPath(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+  endpoint: string,
+  options: {
+    seasonType?: string;
+    week?: number;
+    date?: string;
+  },
+  ...segments: string[]
+): string {
+  const parts = [endpoint];
+  if (options.seasonType) parts.push(options.seasonType);
+  if (typeof options.week === "number") parts.push(weekKey(options.week));
+  if (options.date) parts.push(options.date);
+  return rawPath(dataDir, NAME, sport, season, ...parts, ...segments);
+}
+
+type GameMeta = { seasonType: string; week: number; date: string };
+
+function buildGameMetaIndex(dataDir: string, sport: Sport, season: number): Map<string, GameMeta> {
+  const index = new Map<string, GameMeta>();
+  const seasonDir = rawPath(dataDir, NAME, sport, season);
+  if (!fs.existsSync(seasonDir)) return index;
+
+  const gamesEndpointDir = rawPath(dataDir, NAME, sport, season, "games");
+  if (fs.existsSync(gamesEndpointDir)) {
+    for (const seasonTypeDirEntry of fs.readdirSync(gamesEndpointDir, { withFileTypes: true })) {
+      if (!seasonTypeDirEntry.isDirectory()) continue;
+      const seasonType = seasonTypeDirEntry.name;
+      const seasonTypeDir = path.join(gamesEndpointDir, seasonType);
+      if (!fs.existsSync(seasonTypeDir)) continue;
+      for (const weekDir of fs.readdirSync(seasonTypeDir)) {
+        const weekPath = path.join(seasonTypeDir, weekDir);
+        if (!fs.statSync(weekPath).isDirectory()) continue;
+        const week = Number(weekDir.replace("week_", ""));
+        for (const dateDir of fs.readdirSync(weekPath)) {
+          const datePath = path.join(weekPath, dateDir);
+          if (!fs.statSync(datePath).isDirectory()) continue;
+          for (const file of fs.readdirSync(datePath)) {
+            if (!file.endsWith(".json")) continue;
+            const gameId = file.replace(/\.json$/, "");
+            if (gameId.includes("_")) continue;
+            index.set(gameId, { seasonType: seasonTypeKey(seasonType), week, date: dateDir });
+          }
+        }
+      }
+    }
+  }
+
+  for (let week = 1; week <= 20; week++) {
+    const legacyGamesDir = rawPathWithWeekDate(dataDir, NAME, sport, season, week, "", "games");
+    if (!fs.existsSync(legacyGamesDir)) continue;
+    for (const dateDir of fs.readdirSync(legacyGamesDir)) {
+      const datePath = path.join(legacyGamesDir, dateDir);
+      if (!fs.statSync(datePath).isDirectory()) continue;
+      for (const file of fs.readdirSync(datePath)) {
+        if (!file.endsWith(".json")) continue;
+        const gameId = file.replace(/\.json$/, "");
+        if (gameId.includes("_")) continue;
+        index.set(gameId, { seasonType: week >= 16 ? "postseason" : "regular", week, date: dateDir });
+      }
+    }
+  }
+
+  return index;
+}
+
+async function fetchSeasonTypeChunks<T>(endpoint: string, season: number): Promise<T[]> {
+  const chunks = await Promise.all(
+    SEASON_TYPES_TO_COLLECT.map(async (seasonType) => {
+      try {
+        return await cfbFetch<T[]>(endpoint, { year: season, seasonType });
+      } catch {
+        return [];
+      }
+    }),
+  );
+  return chunks.flat();
+}
+
+async function fetchGamesForAllSeasonTypes(season: number): Promise<any[]> {
+  const games = await fetchSeasonTypeChunks<any>("/games", season);
+  const deduped = new Map<string, any>();
+  for (const game of games) {
+    const gameId = String(game?.id ?? "");
+    if (!gameId) continue;
+    if (!deduped.has(gameId)) deduped.set(gameId, game);
+  }
+  return Array.from(deduped.values());
+}
+
+async function discoverSeasonTypeWeeks(dataDir: string, sport: Sport, season: number): Promise<Array<{ seasonType: string; weeks: number[] }>> {
+  const cacheKey = `${sport}:${season}`;
+  const cached = SEASON_TYPE_WEEK_PLAN_CACHE.get(cacheKey);
+  if (cached) return cached;
+
+  const seasonTypeWeeks = new Map<string, Set<number>>();
+  const gameMeta = buildGameMetaIndex(dataDir, sport, season);
+  for (const meta of gameMeta.values()) {
+    if (!meta.week || meta.week <= 0) continue;
+    if (!seasonTypeWeeks.has(meta.seasonType)) seasonTypeWeeks.set(meta.seasonType, new Set<number>());
+    seasonTypeWeeks.get(meta.seasonType)!.add(meta.week);
+  }
+
+  if (seasonTypeWeeks.size === 0) {
+    const games = await fetchGamesForAllSeasonTypes(season);
+    for (const game of games) {
+      const seasonType = seasonTypeKey(game?.seasonType);
+      const week = Number(game?.week ?? 0);
+      if (!week || week <= 0) continue;
+      if (!seasonTypeWeeks.has(seasonType)) seasonTypeWeeks.set(seasonType, new Set<number>());
+      seasonTypeWeeks.get(seasonType)!.add(week);
+    }
+  }
+
+  if (seasonTypeWeeks.size === 0) {
+    seasonTypeWeeks.set("regular", new Set(Array.from({ length: 16 }, (_, i) => i + 1)));
+    seasonTypeWeeks.set("postseason", new Set(Array.from({ length: 5 }, (_, i) => i + 1)));
+  }
+
+  const plan = Array.from(seasonTypeWeeks.entries())
+    .map(([seasonType, weeks]) => ({ seasonType, weeks: Array.from(weeks).sort((a, b) => a - b) }))
+    .sort((a, b) => a.seasonType.localeCompare(b.seasonType));
+
+  SEASON_TYPE_WEEK_PLAN_CACHE.set(cacheKey, plan);
+  return plan;
+}
+
+function deriveRowPartition(
+  row: any,
+  fallback: { seasonType?: string; week?: number; date?: string } = {},
+): { gameId: string; seasonType: string; week: number; date?: string } | null {
+  const gameId = String(row?.gameId ?? row?.id ?? "");
+  if (!gameId) return null;
+  const seasonType = seasonTypeKey(row?.seasonType ?? fallback.seasonType);
+  const week = Number(row?.week ?? fallback.week ?? 0);
+  const date = row?.startDate?.split("T")[0] ?? row?.startTime?.split("T")[0] ?? fallback.date;
+  return { gameId, seasonType, week, date };
+}
+
 // ── Endpoint context ────────────────────────────────────────
 
 interface EndpointContext {
@@ -123,7 +298,7 @@ async function importSeasonFile(
   extraParams: Record<string, string | number> = {},
 ): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, outputFile);
+  const outFile = rawPath(dataDir, NAME, sport, season, logName, outputFile);
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, logName, "Skipping — already exists");
     return { filesWritten: 0, errors: [] };
@@ -144,7 +319,7 @@ async function importStaticFile(
   logName: string,
 ): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, outputFile);
+  const outFile = rawPath(dataDir, NAME, sport, season, logName, outputFile);
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, logName, "Skipping — already exists");
     return { filesWritten: 0, errors: [] };
@@ -162,66 +337,159 @@ async function importStaticFile(
 
 async function importGames(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "games.json");
-  if (fileExists(outFile)) {
-    logger.progress(NAME, sport, "games", `Skipping — already exists`);
-    return { filesWritten: 0, errors: [] };
-  }
+  let filesWritten = 0;
+  const errors: string[] = [];
+
   logger.progress(NAME, sport, "games", `Fetching ${season} games`);
   if (dryRun) return { filesWritten: 0, errors: [] };
 
-  const [regular, postseason] = await Promise.all([
-    cfbFetch<unknown[]>("/games", { year: season, seasonType: "regular" }),
-    cfbFetch<unknown[]>("/games", { year: season, seasonType: "postseason" }),
-  ]);
-  const data = [...regular, ...postseason];
-  writeJSON(outFile, data);
-  logger.progress(NAME, sport, "games", `Saved games`);
-  return { filesWritten: 1, errors: [] };
+  const allGames = await fetchGamesForAllSeasonTypes(season);
+
+  // Save each game to individual file in {week}/games/{date}/{gameId}.json
+  for (const game of allGames) {
+    const gameId = String(game.id ?? "");
+    if (!gameId) continue;
+
+    const { week, date } = getWeekAndDate(game);
+    if (date === "unknown") {
+      errors.push(`games/${gameId}: no startDate`);
+      continue;
+    }
+
+    const outFile = endpointPartitionPath(
+      dataDir,
+      sport,
+      season,
+      "games",
+      { seasonType: seasonTypeKey(game.seasonType), week, date },
+      `${gameId}.json`,
+    );
+
+    if (fileExists(outFile)) continue;
+
+    ensureDir(path.dirname(outFile));
+    writeJSON(outFile, game);
+    filesWritten++;
+
+    if (filesWritten % 50 === 0) {
+      logger.progress(NAME, sport, "games", `Saved ${filesWritten} game files`);
+    }
+  }
+
+  logger.progress(NAME, sport, "games", `Saved ${filesWritten} game files total`);
+  return { filesWritten, errors };
 }
 
 async function importGamesTeams(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "games_teams.json");
-  if (fileExists(outFile)) {
-    logger.progress(NAME, sport, "games_teams", `Skipping — already exists`);
-    return { filesWritten: 0, errors: [] };
-  }
   logger.progress(NAME, sport, "games_teams", `Fetching ${season} team game stats`);
   if (dryRun) return { filesWritten: 0, errors: [] };
 
-  const [regular, postseason] = await Promise.all([
-    cfbFetch<unknown[]>("/games/teams", { year: season, seasonType: "regular" }),
-    cfbFetch<unknown[]>("/games/teams", { year: season, seasonType: "postseason" }),
-  ]);
-  const data = [...regular, ...postseason];
-  writeJSON(outFile, data);
-  logger.progress(NAME, sport, "games_teams", `Saved team game stats`);
-  return { filesWritten: 1, errors: [] };
+  const gameMeta = buildGameMetaIndex(dataDir, sport, season);
+  let filesWritten = 0;
+  const seasonTypeWeeks = await discoverSeasonTypeWeeks(dataDir, sport, season);
+
+  const errors: string[] = [];
+  for (const plan of seasonTypeWeeks) {
+    for (const week of plan.weeks) {
+      try {
+        const chunk = await cfbFetch<unknown[]>("/games/teams", {
+          year: season,
+          seasonType: plan.seasonType,
+          week,
+        });
+        if (Array.isArray(chunk) && chunk.length > 0) {
+          for (const row of chunk) {
+            const gameId = String((row as any)?.id ?? "");
+            if (!gameId) continue;
+            const meta = gameMeta.get(gameId);
+            const date = meta?.date ?? "unknown";
+            const outFile = endpointPartitionPath(
+              dataDir,
+              sport,
+              season,
+              "games_teams",
+              { seasonType: plan.seasonType, week, date },
+              `${gameId}.json`,
+            );
+            if (fileExists(outFile)) continue;
+            writeJSON(outFile, row);
+            filesWritten++;
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`games_teams/${plan.seasonType}_week_${week}: ${msg}`);
+      }
+    }
+  }
+  logger.progress(NAME, sport, "games_teams", `Saved ${filesWritten} game team files`);
+  return { filesWritten, errors };
 }
 
 async function importGamesPlayers(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "games_players.json");
-  if (fileExists(outFile)) {
-    logger.progress(NAME, sport, "games_players", `Skipping — already exists`);
-    return { filesWritten: 0, errors: [] };
-  }
   logger.progress(NAME, sport, "games_players", `Fetching ${season} player game stats`);
   if (dryRun) return { filesWritten: 0, errors: [] };
+  const gameMeta = buildGameMetaIndex(dataDir, sport, season);
+  let filesWritten = 0;
+  const seasonTypeWeeks = await discoverSeasonTypeWeeks(dataDir, sport, season);
 
-  const [regular, postseason] = await Promise.all([
-    cfbFetch<unknown[]>("/games/players", { year: season, seasonType: "regular" }),
-    cfbFetch<unknown[]>("/games/players", { year: season, seasonType: "postseason" }),
-  ]);
-  const data = [...regular, ...postseason];
-  writeJSON(outFile, data);
-  logger.progress(NAME, sport, "games_players", `Saved player game stats`);
-  return { filesWritten: 1, errors: [] };
+    const errors: string[] = [];
+    for (const plan of seasonTypeWeeks) {
+      for (const week of plan.weeks) {
+        try {
+          const chunk = await cfbFetch<unknown[]>("/games/players", {
+            year: season,
+            seasonType: plan.seasonType,
+            week,
+          });
+          if (Array.isArray(chunk) && chunk.length > 0) {
+            for (const row of chunk) {
+              const gameId = String((row as any)?.id ?? "");
+              if (!gameId) continue;
+              const meta = gameMeta.get(gameId);
+              const date = meta?.date ?? "unknown";
+              const outFile = endpointPartitionPath(
+                dataDir,
+                sport,
+                season,
+                "games_players",
+                { seasonType: plan.seasonType, week, date },
+                `${gameId}.json`,
+              );
+              if (fileExists(outFile)) continue;
+              writeJSON(outFile, row);
+              filesWritten++;
+            }
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Missing week data is expected in many seasons, so record and continue.
+          errors.push(`${plan.seasonType}_week_${week}: ${msg}`);
+        }
+      }
+    }
+    logger.progress(NAME, sport, "games_players", `Saved ${filesWritten} player game files`);
+    return { filesWritten, errors };
 }
 
 async function importGamesMedia(ctx: EndpointContext): Promise<EndpointResult> {
-  return importSeasonFile(ctx, "/games/media", "games_media.json", "games_media");
+  const { sport, season, dataDir, dryRun } = ctx;
+  logger.progress(NAME, sport, "games_media", `Fetching ${season}`);
+  if (dryRun) return { filesWritten: 0, errors: [] };
+  const mediaRows = await fetchSeasonTypeChunks<any>("/games/media", season);
+  let filesWritten = 0;
+  for (const row of mediaRows) {
+    const meta = deriveRowPartition(row);
+    if (!meta || !meta.week) continue;
+    const outFile = endpointPartitionPath(dataDir, sport, season, "games_media", meta, `${meta.gameId}.json`);
+    if (fileExists(outFile)) continue;
+    writeJSON(outFile, row);
+    filesWritten++;
+  }
+  logger.progress(NAME, sport, "games_media", `Saved ${filesWritten} media files`);
+  return { filesWritten, errors: [] };
 }
 
 async function importGamesWeather(ctx: EndpointContext): Promise<EndpointResult> {
@@ -230,7 +498,7 @@ async function importGamesWeather(ctx: EndpointContext): Promise<EndpointResult>
 
 async function importScoreboard(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "scoreboard.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "scoreboard", "scoreboard.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "scoreboard", "Skipping — already exists");
     return { filesWritten: 0, errors: [] };
@@ -238,11 +506,8 @@ async function importScoreboard(ctx: EndpointContext): Promise<EndpointResult> {
   logger.progress(NAME, sport, "scoreboard", `Fetching ${season} scoreboard`);
   if (dryRun) return { filesWritten: 0, errors: [] };
 
-  const [regular, postseason] = await Promise.all([
-    cfbFetch<unknown[]>("/scoreboard", { year: season, seasonType: "regular" }),
-    cfbFetch<unknown[]>("/scoreboard", { year: season, seasonType: "postseason" }),
-  ]);
-  writeJSON(outFile, [...regular, ...postseason]);
+  const scoreboardRows = await fetchSeasonTypeChunks<unknown>("/scoreboard", season);
+  writeJSON(outFile, scoreboardRows);
   logger.progress(NAME, sport, "scoreboard", "Saved scoreboard");
   return { filesWritten: 1, errors: [] };
 }
@@ -256,20 +521,18 @@ async function importGameBoxAdvanced(ctx: EndpointContext): Promise<EndpointResu
   if (dryRun) return { filesWritten: 0, errors: [] };
 
   let games: Array<{ id?: number | string }> = [];
-  const gamesFile = rawPath(dataDir, NAME, sport, season, "games.json");
-  if (fileExists(gamesFile)) {
+  const gamesFile = rawPath(dataDir, NAME, sport, season, "games", "games.json");
+  const legacyGamesFile = rawPath(dataDir, NAME, sport, season, "games.json");
+  const existingGamesFile = fileExists(gamesFile) ? gamesFile : legacyGamesFile;
+  if (fileExists(existingGamesFile)) {
     const existing = await import("node:fs/promises").then(async (fs) => {
-      const txt = await fs.readFile(gamesFile, "utf-8");
+      const txt = await fs.readFile(existingGamesFile, "utf-8");
       return JSON.parse(txt) as Array<{ id?: number | string }>;
     });
     if (Array.isArray(existing)) games = existing;
   }
   if (!games.length) {
-    const [regular, postseason] = await Promise.all([
-      cfbFetch<Array<{ id?: number | string }>>("/games", { year: season, seasonType: "regular" }),
-      cfbFetch<Array<{ id?: number | string }>>("/games", { year: season, seasonType: "postseason" }),
-    ]);
-    games = [...regular, ...postseason];
+    games = await fetchGamesForAllSeasonTypes(season);
   }
 
   const gameIds = Array.from(new Set(games.map((g) => String(g.id ?? "")).filter(Boolean)));
@@ -299,22 +562,41 @@ async function importCalendar(ctx: EndpointContext): Promise<EndpointResult> {
 
 async function importDrives(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "drives.json");
-  if (fileExists(outFile)) {
-    logger.progress(NAME, sport, "drives", `Skipping — already exists`);
-    return { filesWritten: 0, errors: [] };
-  }
   logger.progress(NAME, sport, "drives", `Fetching ${season} drives`);
   if (dryRun) return { filesWritten: 0, errors: [] };
 
-  const [regular, postseason] = await Promise.all([
-    cfbFetch<unknown[]>("/drives", { year: season, seasonType: "regular" }),
-    cfbFetch<unknown[]>("/drives", { year: season, seasonType: "postseason" }),
-  ]);
-  const data = [...regular, ...postseason];
-  writeJSON(outFile, data);
-  logger.progress(NAME, sport, "drives", `Saved drives`);
-  return { filesWritten: 1, errors: [] };
+  const gameMeta = buildGameMetaIndex(dataDir, sport, season);
+  const filesWrittenErrors: string[] = [];
+  let filesWritten = 0;
+  const seasonTypeWeeks = await discoverSeasonTypeWeeks(dataDir, sport, season);
+
+  for (const plan of seasonTypeWeeks) {
+    for (const week of plan.weeks) {
+      try {
+        const chunk = await cfbFetch<any[]>("/drives", { year: season, seasonType: plan.seasonType, week });
+        const byGame = new Map<string, any[]>();
+        for (const row of chunk ?? []) {
+          const gameId = String(row?.gameId ?? "");
+          if (!gameId) continue;
+          if (!byGame.has(gameId)) byGame.set(gameId, []);
+          byGame.get(gameId)!.push(row);
+        }
+        for (const [gameId, rows] of byGame) {
+          const meta = gameMeta.get(gameId);
+          const date = meta?.date ?? "unknown";
+          const outFile = endpointPartitionPath(dataDir, sport, season, "drives", { seasonType: plan.seasonType, week, date }, `${gameId}.json`);
+          if (fileExists(outFile)) continue;
+          writeJSON(outFile, rows);
+          filesWritten++;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        filesWrittenErrors.push(`drives/${plan.seasonType}_week_${week}: ${msg}`);
+      }
+    }
+  }
+  logger.progress(NAME, sport, "drives", `Saved ${filesWritten} drive files`);
+  return { filesWritten, errors: filesWrittenErrors };
 }
 
 async function importPlays(ctx: EndpointContext): Promise<EndpointResult> {
@@ -325,37 +607,64 @@ async function importPlays(ctx: EndpointContext): Promise<EndpointResult> {
   logger.progress(NAME, sport, "plays", `Fetching ${season} play-by-play (regular + postseason)`);
   if (dryRun) return { filesWritten: 0, errors: [] };
 
-  const seasonTypeWindows: Array<{ seasonType: "regular" | "postseason"; maxWeek: number }> = [
-    { seasonType: "regular", maxWeek: 16 },
-    { seasonType: "postseason", maxWeek: 5 },
-  ];
+  const gameMeta = buildGameMetaIndex(dataDir, sport, season);
+  const seasonTypeWeeks = await discoverSeasonTypeWeeks(dataDir, sport, season);
 
-  for (const window of seasonTypeWindows) {
-    for (let week = 1; week <= window.maxWeek; week++) {
-      const filePrefix = window.seasonType === "regular" ? "week" : "postseason_week";
-      const outFile = rawPath(dataDir, NAME, sport, season, "plays", `${filePrefix}_${week}.json`);
-      if (fileExists(outFile)) {
-        logger.progress(NAME, sport, "plays", `Skipping ${window.seasonType} week ${week} — already exists`);
-        continue;
-      }
-
+  for (const plan of seasonTypeWeeks) {
+    for (const week of plan.weeks) {
       try {
-        const data = await cfbFetch("/plays", {
+        const plays = await cfbFetch<any[]>("/plays", {
           year: season,
           week,
-          seasonType: window.seasonType,
+          seasonType: plan.seasonType,
         });
-        writeJSON(outFile, data);
-        filesWritten++;
-        logger.progress(NAME, sport, "plays", `Saved ${window.seasonType} week ${week}`);
+
+        if (!Array.isArray(plays) || plays.length === 0) {
+          continue;
+        }
+
+        // Group plays by game_id
+        const playsByGame = new Map<string, any[]>();
+        for (const play of plays) {
+          const gameId = String(play.game_id ?? "");
+          if (!gameId) continue;
+
+          if (!playsByGame.has(gameId)) {
+            playsByGame.set(gameId, []);
+          }
+          playsByGame.get(gameId)!.push(play);
+        }
+
+        // Save each game's plays to separate file
+        for (const [gameId, gamePlays] of playsByGame) {
+          const meta = gameMeta.get(gameId);
+          const date = meta?.date ?? "unknown";
+          const outFile = endpointPartitionPath(
+            dataDir,
+            sport,
+            season,
+            "plays",
+            { seasonType: plan.seasonType, week, date },
+            `${gameId}.json`,
+          );
+
+          if (fileExists(outFile)) continue;
+
+          ensureDir(path.dirname(outFile));
+          writeJSON(outFile, gamePlays);
+          filesWritten++;
+        }
+
+        logger.progress(NAME, sport, "plays", `Saved ${plan.seasonType} week ${week} (${playsByGame.size} games)`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.warn(`plays ${window.seasonType} week ${week}: ${msg}`, NAME);
-        errors.push(`plays/${window.seasonType}_week_${week}: ${msg}`);
+        logger.warn(`plays ${plan.seasonType} week ${week}: ${msg}`, NAME);
+        errors.push(`plays/${plan.seasonType}_week_${week}: ${msg}`);
       }
     }
   }
 
+  logger.progress(NAME, sport, "plays", `Saved ${filesWritten} play files total`);
   return { filesWritten, errors };
 }
 
@@ -377,27 +686,38 @@ async function importLivePlays(ctx: EndpointContext): Promise<EndpointResult> {
 
 async function importLines(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "lines.json");
-  if (fileExists(outFile)) {
-    logger.progress(NAME, sport, "lines", `Skipping — already exists`);
-    return { filesWritten: 0, errors: [] };
-  }
   logger.progress(NAME, sport, "lines", `Fetching ${season} betting lines`);
   if (dryRun) return { filesWritten: 0, errors: [] };
+  let filesWritten = 0;
+  const errors: string[] = [];
+  const seasonTypeWeeks = await discoverSeasonTypeWeeks(dataDir, sport, season);
 
-  const [regular, postseason] = await Promise.all([
-    cfbFetch<unknown[]>("/lines", { year: season, seasonType: "regular" }),
-    cfbFetch<unknown[]>("/lines", { year: season, seasonType: "postseason" }),
-  ]);
-  const data = [...regular, ...postseason];
-  writeJSON(outFile, data);
-  logger.progress(NAME, sport, "lines", `Saved betting lines`);
-  return { filesWritten: 1, errors: [] };
+  for (const plan of seasonTypeWeeks) {
+    for (const week of plan.weeks) {
+      try {
+        const chunk = await cfbFetch<any[]>("/lines", { year: season, seasonType: plan.seasonType, week });
+        for (const row of chunk ?? []) {
+          const gameId = String(row?.id ?? "");
+          if (!gameId) continue;
+          const date = row?.startDate?.split("T")[0] ?? "unknown";
+          const outFile = endpointPartitionPath(dataDir, sport, season, "lines", { seasonType: plan.seasonType, week, date }, `${gameId}.json`);
+          if (fileExists(outFile)) continue;
+          writeJSON(outFile, row);
+          filesWritten++;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`lines/${plan.seasonType}_week_${week}: ${msg}`);
+      }
+    }
+  }
+  logger.progress(NAME, sport, "lines", `Saved ${filesWritten} betting line files`);
+  return { filesWritten, errors };
 }
 
 async function importTeams(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "teams.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "teams", "teams.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "teams", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -421,7 +741,7 @@ async function importTeamsAts(ctx: EndpointContext): Promise<EndpointResult> {
 
 async function importRoster(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "roster.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "roster", "roster.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "roster", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -437,7 +757,7 @@ async function importRoster(ctx: EndpointContext): Promise<EndpointResult> {
 
 async function importCoaches(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "coaches.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "coaches", "coaches.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "coaches", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -453,7 +773,7 @@ async function importCoaches(ctx: EndpointContext): Promise<EndpointResult> {
 
 async function importConferences(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "conferences.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "conferences", "conferences.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "conferences", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -469,7 +789,7 @@ async function importConferences(ctx: EndpointContext): Promise<EndpointResult> 
 
 async function importVenues(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "venues.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "venues", "venues.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "venues", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -485,7 +805,7 @@ async function importVenues(ctx: EndpointContext): Promise<EndpointResult> {
 
 async function importStatsSeason(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "stats_season.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "stats_season", "stats_season.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "stats_season", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -501,18 +821,59 @@ async function importStatsSeason(ctx: EndpointContext): Promise<EndpointResult> 
 
 async function importStatsPlayerSeason(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "stats_player_season.json");
-  if (fileExists(outFile)) {
-    logger.progress(NAME, sport, "stats_player_season", `Skipping — already exists`);
-    return { filesWritten: 0, errors: [] };
-  }
-  logger.progress(NAME, sport, "stats_player_season", `Fetching ${season} player season stats`);
+  let filesWritten = 0;
+  const errors: string[] = [];
+
+  logger.progress(NAME, sport, "stats_player_season", `Fetching ${season} player season stats (by week)`);
   if (dryRun) return { filesWritten: 0, errors: [] };
 
-  const data = await cfbFetch("/stats/player/season", { year: season });
-  writeJSON(outFile, data);
-  logger.progress(NAME, sport, "stats_player_season", `Saved player season stats`);
-  return { filesWritten: 1, errors: [] };
+  // Fetch stats by week to split the 30MB file into manageable chunks
+  const seasonTypeWeeks = await discoverSeasonTypeWeeks(dataDir, sport, season);
+
+  for (const plan of seasonTypeWeeks) {
+    for (const week of plan.weeks) {
+      try {
+        const stats = await cfbFetch<any[]>("/stats/player/season", {
+          year: season,
+          seasonType: plan.seasonType,
+          week,
+        });
+
+        if (!Array.isArray(stats) || stats.length === 0) {
+          continue;
+        }
+
+        const outFile = endpointPartitionPath(
+          dataDir,
+          sport,
+          season,
+          "stats_player_season",
+          { seasonType: plan.seasonType, week },
+          "stats.json",
+        );
+
+        if (fileExists(outFile)) continue;
+
+        ensureDir(path.dirname(outFile));
+        writeJSON(outFile, stats);
+        filesWritten++;
+
+        logger.progress(NAME, sport, "stats_player_season", 
+          `Saved ${plan.seasonType} week ${week} (${stats.length} rows)`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn(`stats_player_season ${plan.seasonType} week ${week}: ${msg}`, NAME);
+        errors.push(`stats_player_season/${plan.seasonType}_week_${week}: ${msg}`);
+      }
+    }
+  }
+
+  if (filesWritten === 0) {
+    errors.push("No player stats downloaded");
+  }
+
+  logger.progress(NAME, sport, "stats_player_season", `Saved ${filesWritten} stats files`);
+  return { filesWritten, errors };
 }
 
 async function importStatsCategories(ctx: EndpointContext): Promise<EndpointResult> {
@@ -521,7 +882,7 @@ async function importStatsCategories(ctx: EndpointContext): Promise<EndpointResu
 
 async function importStatsAdvanced(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "stats_advanced.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "stats_advanced", "stats_advanced.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "stats_advanced", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -536,32 +897,100 @@ async function importStatsAdvanced(ctx: EndpointContext): Promise<EndpointResult
 }
 
 async function importStatsGameAdvanced(ctx: EndpointContext): Promise<EndpointResult> {
-  return importSeasonFile(ctx, "/stats/game/advanced", "stats_game_advanced.json", "stats_game_advanced");
+  const { sport, season, dataDir, dryRun } = ctx;
+  logger.progress(NAME, sport, "stats_game_advanced", `Fetching ${season} by week`);
+  if (dryRun) return { filesWritten: 0, errors: [] };
+  let filesWritten = 0;
+  const errors: string[] = [];
+  const seasonTypeWeeks = await discoverSeasonTypeWeeks(dataDir, sport, season);
+  const gameMeta = buildGameMetaIndex(dataDir, sport, season);
+  for (const plan of seasonTypeWeeks) {
+    for (const week of plan.weeks) {
+      try {
+        const chunk = await cfbFetch<any[]>("/stats/game/advanced", { year: season, seasonType: plan.seasonType, week });
+        const byGame = new Map<string, any[]>();
+        for (const row of chunk ?? []) {
+          const gameId = String(row?.gameId ?? "");
+          if (!gameId) continue;
+          if (!byGame.has(gameId)) byGame.set(gameId, []);
+          byGame.get(gameId)!.push(row);
+        }
+        for (const [gameId, rows] of byGame) {
+          const meta = gameMeta.get(gameId);
+          const outFile = endpointPartitionPath(dataDir, sport, season, "stats_game_advanced", { seasonType: plan.seasonType, week, date: meta?.date }, `${gameId}.json`);
+          if (fileExists(outFile)) continue;
+          writeJSON(outFile, rows);
+          filesWritten++;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`stats_game_advanced/${plan.seasonType}_week_${week}: ${msg}`);
+      }
+    }
+  }
+  logger.progress(NAME, sport, "stats_game_advanced", `Saved ${filesWritten} files`);
+  return { filesWritten, errors };
 }
 
 async function importStatsGameHavoc(ctx: EndpointContext): Promise<EndpointResult> {
-  return importSeasonFile(ctx, "/stats/game/havoc", "stats_game_havoc.json", "stats_game_havoc");
+  const { sport, season, dataDir, dryRun } = ctx;
+  logger.progress(NAME, sport, "stats_game_havoc", `Fetching ${season} by week`);
+  if (dryRun) return { filesWritten: 0, errors: [] };
+  let filesWritten = 0;
+  const errors: string[] = [];
+  const seasonTypeWeeks = await discoverSeasonTypeWeeks(dataDir, sport, season);
+  const gameMeta = buildGameMetaIndex(dataDir, sport, season);
+  for (const plan of seasonTypeWeeks) {
+    for (const week of plan.weeks) {
+      try {
+        const chunk = await cfbFetch<any[]>("/stats/game/havoc", { year: season, seasonType: plan.seasonType, week });
+        const byGame = new Map<string, any[]>();
+        for (const row of chunk ?? []) {
+          const gameId = String(row?.gameId ?? "");
+          if (!gameId) continue;
+          if (!byGame.has(gameId)) byGame.set(gameId, []);
+          byGame.get(gameId)!.push(row);
+        }
+        for (const [gameId, rows] of byGame) {
+          const meta = gameMeta.get(gameId);
+          const outFile = endpointPartitionPath(dataDir, sport, season, "stats_game_havoc", { seasonType: plan.seasonType, week, date: meta?.date }, `${gameId}.json`);
+          if (fileExists(outFile)) continue;
+          writeJSON(outFile, rows);
+          filesWritten++;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`stats_game_havoc/${plan.seasonType}_week_${week}: ${msg}`);
+      }
+    }
+  }
+  logger.progress(NAME, sport, "stats_game_havoc", `Saved ${filesWritten} files`);
+  return { filesWritten, errors };
 }
 
 async function importRankings(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "rankings.json");
-  if (fileExists(outFile)) {
-    logger.progress(NAME, sport, "rankings", `Skipping — already exists`);
-    return { filesWritten: 0, errors: [] };
-  }
   logger.progress(NAME, sport, "rankings", `Fetching ${season} rankings`);
   if (dryRun) return { filesWritten: 0, errors: [] };
 
   const data = await cfbFetch("/rankings", { year: season });
-  writeJSON(outFile, data);
-  logger.progress(NAME, sport, "rankings", `Saved rankings`);
-  return { filesWritten: 1, errors: [] };
+  let filesWritten = 0;
+  for (const row of (Array.isArray(data) ? data : [])) {
+    const seasonType = seasonTypeKey((row as any)?.seasonType);
+    const week = Number((row as any)?.week ?? 0);
+    if (!week) continue;
+    const outFile = endpointPartitionPath(dataDir, sport, season, "rankings", { seasonType, week }, "rankings.json");
+    if (fileExists(outFile)) continue;
+    writeJSON(outFile, row);
+    filesWritten++;
+  }
+  logger.progress(NAME, sport, "rankings", `Saved ${filesWritten} ranking files`);
+  return { filesWritten, errors: [] };
 }
 
 async function importRecruiting(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "recruiting.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "recruiting", "recruiting.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "recruiting", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -585,7 +1014,7 @@ async function importRecruitingGroups(ctx: EndpointContext): Promise<EndpointRes
 
 async function importTalent(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "talent.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "talent", "talent.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "talent", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -601,7 +1030,7 @@ async function importTalent(ctx: EndpointContext): Promise<EndpointResult> {
 
 async function importRatingsSp(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "ratings_sp.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "ratings_sp", "ratings_sp.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "ratings_sp", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -630,7 +1059,7 @@ async function importRatingsSrs(ctx: EndpointContext): Promise<EndpointResult> {
 
 async function importRatingsElo(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "ratings_elo.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "ratings_elo", "ratings_elo.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "ratings_elo", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -646,7 +1075,7 @@ async function importRatingsElo(ctx: EndpointContext): Promise<EndpointResult> {
 
 async function importRatingsFpi(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "ratings_fpi.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "ratings_fpi", "ratings_fpi.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "ratings_fpi", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -661,7 +1090,46 @@ async function importRatingsFpi(ctx: EndpointContext): Promise<EndpointResult> {
 }
 
 async function importPpaPredicted(ctx: EndpointContext): Promise<EndpointResult> {
-  return importSeasonFile(ctx, "/ppa/predicted", "ppa_predicted.json", "ppa_predicted");
+  const { sport, season, dataDir, dryRun } = ctx;
+  const outFile = rawPath(dataDir, NAME, sport, season, "ppa_predicted", "ppa_predicted.json");
+  if (fileExists(outFile)) {
+    logger.progress(NAME, sport, "ppa_predicted", "Skipping — already exists");
+    return { filesWritten: 0, errors: [] };
+  }
+
+  logger.progress(NAME, sport, "ppa_predicted", `Fetching ${season} (down/distance grid)`);
+  if (dryRun) return { filesWritten: 0, errors: [] };
+
+  const downs = [1, 2, 3, 4];
+  const distances = [1, 2, 3, 5, 7, 10, 15, 20];
+  const rows: unknown[] = [];
+  const errors: string[] = [];
+
+  for (const down of downs) {
+    for (const distance of distances) {
+      try {
+        const chunk = await cfbFetch<unknown[]>("/ppa/predicted", {
+          year: season,
+          down,
+          distance,
+        });
+        if (Array.isArray(chunk) && chunk.length) {
+          const outFile = rawPath(dataDir, NAME, sport, season, "ppa_predicted", `down_${down}`, `distance_${distance}.json`);
+          if (!fileExists(outFile)) {
+            writeJSON(outFile, chunk);
+            rows.push({ down, distance, count: chunk.length });
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`ppa_predicted/down_${down}_distance_${distance}: ${msg}`);
+      }
+    }
+  }
+
+  writeJSON(outFile, rows);
+  logger.progress(NAME, sport, "ppa_predicted", `Saved ${rows.length} grid rows`);
+  return { filesWritten: 1, errors };
 }
 
 async function importPpaTeams(ctx: EndpointContext): Promise<EndpointResult> {
@@ -669,11 +1137,61 @@ async function importPpaTeams(ctx: EndpointContext): Promise<EndpointResult> {
 }
 
 async function importPpaGames(ctx: EndpointContext): Promise<EndpointResult> {
-  return importSeasonFile(ctx, "/ppa/games", "ppa_games.json", "ppa_games");
+  const { sport, season, dataDir, dryRun } = ctx;
+  logger.progress(NAME, sport, "ppa_games", `Fetching ${season}`);
+  if (dryRun) return { filesWritten: 0, errors: [] };
+  const data = await cfbFetch<any[]>("/ppa/games", { year: season });
+  let filesWritten = 0;
+  const byGame = new Map<string, any[]>();
+  for (const row of data ?? []) {
+    const gameId = String(row?.gameId ?? "");
+    if (!gameId) continue;
+    if (!byGame.has(gameId)) byGame.set(gameId, []);
+    byGame.get(gameId)!.push(row);
+  }
+  for (const [gameId, rows] of byGame) {
+    const meta = deriveRowPartition(rows[0]);
+    if (!meta || !meta.week) continue;
+    const outFile = endpointPartitionPath(dataDir, sport, season, "ppa_games", meta, `${gameId}.json`);
+    if (fileExists(outFile)) continue;
+    writeJSON(outFile, rows);
+    filesWritten++;
+  }
+  logger.progress(NAME, sport, "ppa_games", `Saved ${filesWritten} files`);
+  return { filesWritten, errors: [] };
 }
 
 async function importPpaPlayersGames(ctx: EndpointContext): Promise<EndpointResult> {
-  return importSeasonFile(ctx, "/ppa/players/games", "ppa_players_games.json", "ppa_players_games");
+  const { sport, season, dataDir, dryRun } = ctx;
+  logger.progress(NAME, sport, "ppa_players_games", `Fetching ${season} by week`);
+  if (dryRun) return { filesWritten: 0, errors: [] };
+  const seasonTypeWeeks = await discoverSeasonTypeWeeks(dataDir, sport, season);
+
+  let filesWritten = 0;
+  const errors: string[] = [];
+  for (const plan of seasonTypeWeeks) {
+    for (const week of plan.weeks) {
+      try {
+        const chunk = await cfbFetch<unknown[]>("/ppa/players/games", {
+          year: season,
+          seasonType: plan.seasonType,
+          week,
+        });
+        if (Array.isArray(chunk) && chunk.length > 0) {
+          const outFile = endpointPartitionPath(dataDir, sport, season, "ppa_players_games", { seasonType: plan.seasonType, week }, "players.json");
+          if (!fileExists(outFile)) {
+            writeJSON(outFile, chunk);
+            filesWritten++;
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`ppa_players_games/${plan.seasonType}_week_${week}: ${msg}`);
+      }
+    }
+  }
+  logger.progress(NAME, sport, "ppa_players_games", `Saved ${filesWritten} weekly files`);
+  return { filesWritten, errors };
 }
 
 async function importPpaPlayersSeason(ctx: EndpointContext): Promise<EndpointResult> {
@@ -681,7 +1199,21 @@ async function importPpaPlayersSeason(ctx: EndpointContext): Promise<EndpointRes
 }
 
 async function importWpPregame(ctx: EndpointContext): Promise<EndpointResult> {
-  return importSeasonFile(ctx, "/metrics/wp/pregame", "wp_pregame.json", "wp_pregame");
+  const { sport, season, dataDir, dryRun } = ctx;
+  logger.progress(NAME, sport, "wp_pregame", `Fetching ${season}`);
+  if (dryRun) return { filesWritten: 0, errors: [] };
+  const data = await cfbFetch<any[]>("/metrics/wp/pregame", { year: season });
+  let filesWritten = 0;
+  for (const row of data ?? []) {
+    const meta = deriveRowPartition(row);
+    if (!meta || !meta.week) continue;
+    const outFile = endpointPartitionPath(dataDir, sport, season, "wp_pregame", meta, `${meta.gameId}.json`);
+    if (fileExists(outFile)) continue;
+    writeJSON(outFile, row);
+    filesWritten++;
+  }
+  logger.progress(NAME, sport, "wp_pregame", `Saved ${filesWritten} files`);
+  return { filesWritten, errors: [] };
 }
 
 async function importDraftTeams(ctx: EndpointContext): Promise<EndpointResult> {
@@ -740,7 +1272,46 @@ async function importPlayerPortal(ctx: EndpointContext): Promise<EndpointResult>
 }
 
 async function importMetricsWp(ctx: EndpointContext): Promise<EndpointResult> {
-  return importSeasonFile(ctx, "/metrics/wp", "metrics_wp.json", "metrics_wp");
+  const { sport, season, dataDir, dryRun } = ctx;
+  const outDir = rawPath(dataDir, NAME, sport, season, "metrics_wp");
+  if (fileExists(path.join(outDir, "_COMPLETE"))) {
+    logger.progress(NAME, sport, "metrics_wp", "Skipping — already exists");
+    return { filesWritten: 0, errors: [] };
+  }
+
+  logger.progress(NAME, sport, "metrics_wp", `Fetching ${season} by game`);
+  if (dryRun) return { filesWritten: 0, errors: [] };
+  const gameMeta = buildGameMetaIndex(dataDir, sport, season);
+
+  // Use game index so endpoint-first and legacy layouts both resolve game IDs.
+  const gameIds = new Set<string>(gameMeta.keys());
+
+  let filesWritten = 0;
+  const errors: string[] = [];
+  for (const gameId of gameIds) {
+    const meta = gameMeta.get(gameId);
+    const outFile = endpointPartitionPath(
+      dataDir,
+      sport,
+      season,
+      "metrics_wp",
+      { seasonType: meta?.seasonType, week: meta?.week, date: meta?.date },
+      `${gameId}.json`,
+    );
+    if (fileExists(outFile)) continue;
+    try {
+      const data = await cfbFetch("/metrics/wp", { gameId });
+      writeJSON(outFile, data);
+      filesWritten++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`metrics_wp/${gameId}: ${msg}`);
+    }
+  }
+
+  writeJSON(path.join(outDir, "_COMPLETE"), { gameCount: gameIds.size, filesWritten, errors: errors.length });
+  logger.progress(NAME, sport, "metrics_wp", `Saved ${filesWritten} game wp files`);
+  return { filesWritten, errors };
 }
 
 async function importMetricsFgEp(ctx: EndpointContext): Promise<EndpointResult> {

@@ -55,6 +55,10 @@ const SOCCER_SPORTS = new Set<Sport>(["epl", "laliga", "bundesliga", "seriea", "
 // Sports where the /summary endpoint doesn't work — use scoreboard event data directly
 const SCOREBOARD_ONLY_SPORTS = new Set<Sport>(["golf", "lpga", "f1", "indycar", "atp", "wta"]);
 
+// ESPN Core odds endpoint rejects competition/event IDs for these leagues.
+// Skip early to avoid thousands of guaranteed 400 retries in all-sport runs.
+const ODDS_UNSUPPORTED_SPORTS = new Set<Sport>(["atp", "wta"]);
+
 const ALL_ENDPOINTS = [
   "teams",
   "standings",
@@ -76,6 +80,20 @@ const ALL_ENDPOINTS = [
 ] as const;
 
 type Endpoint = (typeof ALL_ENDPOINTS)[number];
+
+type EspnSeasonType = "preseason" | "regular" | "postseason" | "offseason" | "unknown";
+
+interface EspnEventPathMeta {
+  date: string | null;
+  seasonType: EspnSeasonType;
+}
+
+interface EspnGameIndexEntry {
+  eventId: string;
+  date: string | null;
+  seasonType: EspnSeasonType;
+  relativePath: string;
+}
 
 // ── Helpers ─────────────────────────────────────────────────
 
@@ -193,6 +211,227 @@ function filterRecentDates(dates: string[], recentDays?: number): string[] {
   return dates.filter(d => d >= cutoffStr && d <= tomorrowStr);
 }
 
+function seasonTypeLabelFromId(id: number | string | null | undefined): EspnSeasonType {
+  const normalized = Number.parseInt(String(id ?? ""), 10);
+  if (normalized === 1) return "preseason";
+  if (normalized === 2) return "regular";
+  if (normalized === 3) return "postseason";
+  if (normalized === 4) return "offseason";
+  return "unknown";
+}
+
+function normalizeEspnDate(dateInput: string | null | undefined): string | null {
+  if (!dateInput) return null;
+  const text = String(dateInput).trim();
+  if (!text) return null;
+  if (/^\d{8}$/.test(text)) {
+    return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
+    return text.slice(0, 10);
+  }
+  return null;
+}
+
+function monthKeyFromDate(dateIso: string | null): string {
+  return dateIso ? dateIso.slice(0, 7) : "unknown-month";
+}
+
+function safeDateKey(dateIso: string | null): string {
+  return dateIso ?? "unknown-date";
+}
+
+function inferEventSeasonType(source: any, fallback: EspnSeasonType = "unknown"): EspnSeasonType {
+  const candidates = [
+    source?.__seasonType,
+    source?.seasonType,
+    source?.seasonTypeName,
+    source?.season?.type?.name,
+    source?.season?.type?.slug,
+    source?.season?.slug,
+    source?.summary?.season?.type?.name,
+    source?.summary?.season?.type?.slug,
+    source?.summary?.season?.slug,
+    source?.scoreboard?.season?.type?.name,
+    source?.scoreboard?.season?.type?.slug,
+  ];
+
+  const idCandidates = [
+    source?.seasonTypeId,
+    source?.seasonType?.id,
+    source?.season?.type?.id,
+    source?.summary?.season?.type?.id,
+    source?.scoreboard?.season?.type?.id,
+  ];
+
+  for (const candidate of idCandidates) {
+    const inferred = seasonTypeLabelFromId(candidate);
+    if (inferred !== "unknown") return inferred;
+  }
+
+  for (const candidate of candidates) {
+    const text = String(candidate ?? "").toLowerCase();
+    if (!text) continue;
+    if (text.includes("pre")) return "preseason";
+    if (text.includes("post")) return "postseason";
+    if (text.includes("regular")) return "regular";
+    if (text.includes("off")) return "offseason";
+  }
+
+  return fallback;
+}
+
+function buildEventPathMeta(source: any, fallbackSeasonType: EspnSeasonType = "unknown"): EspnEventPathMeta {
+  const competitionDate = source?.summary?.header?.competitions?.[0]?.date
+    ?? source?.header?.competitions?.[0]?.date
+    ?? source?.scoreboard?.date
+    ?? source?.event?.date
+    ?? source?.date
+    ?? null;
+  return {
+    date: normalizeEspnDate(competitionDate),
+    seasonType: inferEventSeasonType(source, fallbackSeasonType),
+  };
+}
+
+function espnReferencePath(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+  endpoint: string,
+  fileName = `${endpoint}.json`,
+): string {
+  return rawPath(dataDir, "espn", sport, season, "reference", endpoint, fileName);
+}
+
+function espnTeamsIndexPath(dataDir: string, sport: Sport, season: number): string {
+  return rawPath(dataDir, "espn", sport, season, "teams", "index.json");
+}
+
+function espnTeamPath(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+  teamId: string,
+  fileName: string,
+): string {
+  return rawPath(dataDir, "espn", sport, season, "teams", teamId, fileName);
+}
+
+function espnPlayersIndexPath(dataDir: string, sport: Sport, season: number): string {
+  return rawPath(dataDir, "espn", sport, season, "players", "index.json");
+}
+
+function espnPlayerPath(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+  playerId: string,
+  fileName: string,
+): string {
+  return rawPath(dataDir, "espn", sport, season, "players", playerId, fileName);
+}
+
+function espnAthletesIndexPath(dataDir: string, sport: Sport, season: number): string {
+  return rawPath(dataDir, "espn", sport, season, "athletes", "index.json");
+}
+
+function espnAthletePath(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+  athleteId: string,
+  fileName: string,
+): string {
+  return rawPath(dataDir, "espn", sport, season, "athletes", athleteId, fileName);
+}
+
+function espnSnapshotPath(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+  endpoint: string,
+  dateInput: string,
+): string {
+  const dateIso = normalizeEspnDate(dateInput) ?? dateInput;
+  return rawPath(dataDir, "espn", sport, season, "snapshots", endpoint, monthKeyFromDate(dateIso), `${safeDateKey(dateIso)}.json`);
+}
+
+function espnGamesIndexPath(dataDir: string, sport: Sport, season: number): string {
+  return espnReferencePath(dataDir, sport, season, "games", "index.json");
+}
+
+function espnEventPath(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+  meta: EspnEventPathMeta,
+  eventId: string,
+  fileName: string,
+): string {
+  return rawPath(
+    dataDir,
+    "espn",
+    sport,
+    season,
+    "events",
+    meta.seasonType,
+    monthKeyFromDate(meta.date),
+    safeDateKey(meta.date),
+    eventId,
+    fileName,
+  );
+}
+
+function espnRelativeSeasonPath(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+  absolutePath: string,
+): string {
+  const seasonRoot = rawPath(dataDir, "espn", sport, season);
+  return absolutePath.startsWith(`${seasonRoot}/`)
+    ? absolutePath.slice(seasonRoot.length + 1)
+    : absolutePath;
+}
+
+function readGameIndex(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+): Map<string, EspnGameIndexEntry> {
+  const indexPath = espnGamesIndexPath(dataDir, sport, season);
+  const data = readJSON<any>(indexPath);
+  const entries = Array.isArray(data?.events) ? data.events : [];
+  const gameIndex = new Map<string, EspnGameIndexEntry>();
+  for (const entry of entries) {
+    const eventId = String(entry?.eventId ?? "");
+    if (!eventId) continue;
+    gameIndex.set(eventId, {
+      eventId,
+      date: normalizeEspnDate(entry?.date),
+      seasonType: inferEventSeasonType(entry, "unknown"),
+      relativePath: String(entry?.relativePath ?? ""),
+    });
+  }
+  return gameIndex;
+}
+
+function writeGameIndex(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+  entries: Map<string, EspnGameIndexEntry>,
+): void {
+  const indexPath = espnGamesIndexPath(dataDir, sport, season);
+  writeJSON(indexPath, {
+    season,
+    count: entries.size,
+    events: Array.from(entries.values()).sort((a, b) => a.eventId.localeCompare(b.eventId)),
+    fetchedAt: new Date().toISOString(),
+  });
+}
+
 // ── Fetch helpers (wrapping core fetchJSON) ─────────────────
 
 async function espnFetch<T = unknown>(url: string): Promise<T | null> {
@@ -239,7 +478,7 @@ async function importTeams(ctx: EndpointContext): Promise<EndpointResult> {
   }
 
   const teams = data.sports?.[0]?.leagues?.[0]?.teams ?? [];
-  const outPath = rawPath(dataDir, "espn", sport, season, "teams.json");
+  const outPath = espnTeamsIndexPath(dataDir, sport, season);
   writeJSON(outPath, {
     season,
     count: teams.length,
@@ -254,7 +493,7 @@ async function importTeams(ctx: EndpointContext): Promise<EndpointResult> {
     const team = entry.team ?? entry;
     const teamId = team.id;
     if (!teamId) continue;
-    const teamPath = rawPath(dataDir, "espn", sport, season, "teams", `${teamId}.json`);
+    const teamPath = espnTeamPath(dataDir, sport, season, String(teamId), "profile.json");
     if (fileExists(teamPath)) continue;
     teamsToFetch.push({ teamId: String(teamId), teamPath });
   }
@@ -302,7 +541,7 @@ async function importStandings(ctx: EndpointContext): Promise<EndpointResult> {
     return { filesWritten, errors };
   }
 
-  const outPath = rawPath(dataDir, "espn", sport, season, "standings.json");
+  const outPath = espnReferencePath(dataDir, sport, season, "standings");
   writeJSON(outPath, {
     season,
     standings: data.children ?? data.standings ?? data,
@@ -324,6 +563,7 @@ async function importGames(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
   let filesWritten = 0;
   const errors: string[] = [];
+  const gameIndex = readGameIndex(dataDir, sport, season);
 
   if (dryRun) {
     logger.progress("espn", sport, "games", "Dry run — skipping");
@@ -338,13 +578,14 @@ async function importGames(ctx: EndpointContext): Promise<EndpointResult> {
   // Fetch all season types: 2=regular, 3=postseason
   // Page 1 first (reveals totalPages), then remaining pages concurrently
   for (const seasonType of [2, 3]) {
+    const seasonTypeLabel = seasonTypeLabelFromId(seasonType);
     const baseUrl = `${CORE_API}/${leaguePath}/seasons/${yr}/types/${seasonType}/events`;
     logger.progress("espn", sport, "games", `Fetching type ${seasonType} events: ${baseUrl}`);
 
     const page1 = await espnFetch<any>(`${baseUrl}?limit=100&page=1`);
     if (!page1?.items?.length) continue;
 
-    eventRefs.push(...page1.items);
+    eventRefs.push(...page1.items.map((item: any) => ({ ...item, __seasonType: seasonTypeLabel })));
     const totalPages = page1.pageCount ?? 1;
 
     if (totalPages > 1) {
@@ -353,7 +594,7 @@ async function importGames(ctx: EndpointContext): Promise<EndpointResult> {
       const pageResults = await Promise.allSettled(
         pageNums.map(async (p) => {
           const data = await espnFetch<any>(`${baseUrl}?limit=100&page=${p}`);
-          return data?.items ?? [];
+          return (data?.items ?? []).map((item: any) => ({ ...item, __seasonType: seasonTypeLabel }));
         }),
       );
       for (const r of pageResults) {
@@ -373,16 +614,6 @@ async function importGames(ctx: EndpointContext): Promise<EndpointResult> {
     logger.progress("espn", sport, "games", `Core API returned ${eventRefs.length} events across all season types`);
   }
 
-  // Save manifest
-  const manifestPath = rawPath(dataDir, "espn", sport, season, "games", "all_games.json");
-  writeJSON(manifestPath, {
-    season,
-    count: eventRefs.length,
-    games: eventRefs,
-    fetchedAt: new Date().toISOString(),
-  });
-  filesWritten++;
-
   logger.progress("espn", sport, "games", `${eventRefs.length} events found — fetching summaries`);
 
   // ── Step 2a: Merge scoreboard event IDs ─────────────────────
@@ -393,29 +624,34 @@ async function importGames(ctx: EndpointContext): Promise<EndpointResult> {
   // (Core API is authoritative for recent games; merge only helps for historical backfills)
   const coreIds = new Set(eventRefs.map((r: any) => extractEventId(r)).filter(Boolean));
   if (!ctx.recentDays || eventRefs.length === 0) {
-    // Full run or Core API empty — do the merge
-    const sbDir = rawPath(dataDir, "espn", sport, season.toString(), "scoreboard", "");
     try {
       const { default: fs } = await import("node:fs");
-      const sbPath = sbDir.replace(/\/+$/, "");
-      if (fs.existsSync(sbPath)) {
-        let sbFiles = fs.readdirSync(sbPath).filter((f: string) => f.endsWith(".json"));
-        if (ctx.recentDays && ctx.recentDays > 0) {
-          const recentDates = new Set(filterRecentDates(seasonDateRange(sport, season), ctx.recentDays));
-          sbFiles = sbFiles.filter((f: string) => recentDates.has(f.replace(".json", "")));
-        }
-        for (const sbFile of sbFiles) {
-          const sbData = readJSON<any>(`${sbPath}/${sbFile}`);
+      const snapshotsRoot = rawPath(dataDir, "espn", sport, season, "snapshots", "scoreboard");
+      if (fs.existsSync(snapshotsRoot)) {
+        const monthDirs = fs.readdirSync(snapshotsRoot, { withFileTypes: true }).filter((entry: any) => entry.isDirectory());
+        const recentDates = ctx.recentDays && ctx.recentDays > 0
+          ? new Set(filterRecentDates(seasonDateRange(sport, season), ctx.recentDays).map((date) => normalizeEspnDate(date) ?? date))
+          : null;
+
+        for (const monthDir of monthDirs) {
+          const monthPath = `${snapshotsRoot}/${monthDir.name}`;
+          let sbFiles = fs.readdirSync(monthPath).filter((f: string) => f.endsWith(".json"));
+          if (recentDates) {
+            sbFiles = sbFiles.filter((f: string) => recentDates.has(f.replace(".json", "")));
+          }
+          for (const sbFile of sbFiles) {
+            const sbData = readJSON<any>(`${monthPath}/${sbFile}`);
           if (!sbData?.events) continue;
           for (const ev of sbData.events) {
             const evId = String(ev.id ?? "");
             if (evId && !coreIds.has(evId)) {
               const statusName = ev.status?.type?.name ?? "";
               if (statusName === "STATUS_FINAL" || statusName === "STATUS_FULL_TIME") {
-                eventRefs.push({ id: evId });
+                eventRefs.push({ id: evId, __seasonType: inferEventSeasonType(ev, "regular") });
                 coreIds.add(evId);
               }
             }
+          }
           }
         }
         logger.progress("espn", sport, "games", `After scoreboard merge: ${eventRefs.length} total events`);
@@ -459,19 +695,27 @@ async function importGames(ctx: EndpointContext): Promise<EndpointResult> {
           const isTennis = sport === "atp" || sport === "wta";
 
           if (isTennis && groupings.length > 0) {
-            const tournPath = rawPath(dataDir, "espn", sport, season, "games", `${eventId}.json`);
-            if (!fileExists(tournPath)) {
-              writeJSON(tournPath, {
-                eventId,
-                season,
-                tournament: true,
-                name: ev.name ?? ev.shortName ?? "",
-                summary: { header: { competitions: [] }, event: ev },
-                scoreboard: ev,
-                fetchedAt: new Date().toISOString(),
-              });
-              filesWritten++;
-            }
+            const fallbackSeasonType = inferEventSeasonType(ev, "regular");
+            const eventPayload = {
+              eventId,
+              season,
+              tournament: true,
+              name: ev.name ?? ev.shortName ?? "",
+              summary: { header: { competitions: [] }, event: ev },
+              scoreboard: ev,
+              __seasonType: fallbackSeasonType,
+              fetchedAt: new Date().toISOString(),
+            };
+            const eventMeta = buildEventPathMeta(eventPayload, fallbackSeasonType);
+            const tournPath = espnEventPath(dataDir, sport, season, eventMeta, eventId, "game.json");
+            writeJSON(tournPath, eventPayload);
+            gameIndex.set(eventId, {
+              eventId,
+              date: eventMeta.date,
+              seasonType: eventMeta.seasonType,
+              relativePath: espnRelativeSeasonPath(dataDir, sport, season, tournPath),
+            });
+            filesWritten++;
             saved++;
 
             for (const group of groupings) {
@@ -479,30 +723,46 @@ async function importGames(ctx: EndpointContext): Promise<EndpointResult> {
               for (const match of matches) {
                 const matchId = String(match.id ?? "");
                 if (!matchId) continue;
-                const matchPath = rawPath(dataDir, "espn", sport, season, "games", `match_${matchId}.json`);
-                if (fileExists(matchPath)) { saved++; continue; }
-                writeJSON(matchPath, {
+                const matchPayload = {
                   eventId: matchId,
                   tournamentId: eventId,
                   tournamentName: ev.name ?? ev.shortName ?? "",
                   season,
                   matchData: match,
+                  __seasonType: eventMeta.seasonType,
                   fetchedAt: new Date().toISOString(),
+                };
+                const matchMeta = buildEventPathMeta(matchPayload, eventMeta.seasonType);
+                const matchPath = espnEventPath(dataDir, sport, season, matchMeta, matchId, "game.json");
+                writeJSON(matchPath, matchPayload);
+                gameIndex.set(matchId, {
+                  eventId: matchId,
+                  date: matchMeta.date,
+                  seasonType: matchMeta.seasonType,
+                  relativePath: espnRelativeSeasonPath(dataDir, sport, season, matchPath),
                 });
                 filesWritten++;
                 saved++;
               }
             }
           } else {
-            const gamePath = rawPath(dataDir, "espn", sport, season, "games", `${eventId}.json`);
-            if (fileExists(gamePath)) { saved++; continue; }
-
-            writeJSON(gamePath, {
+            const fallbackSeasonType = inferEventSeasonType(ev, "regular");
+            const eventPayload = {
               eventId,
               season,
               summary: { header: { competitions: ev.competitions ?? [] }, event: ev },
               scoreboard: ev,
+              __seasonType: fallbackSeasonType,
               fetchedAt: new Date().toISOString(),
+            };
+            const eventMeta = buildEventPathMeta(eventPayload, fallbackSeasonType);
+            const gamePath = espnEventPath(dataDir, sport, season, eventMeta, eventId, "game.json");
+            writeJSON(gamePath, eventPayload);
+            gameIndex.set(eventId, {
+              eventId,
+              date: eventMeta.date,
+              seasonType: eventMeta.seasonType,
+              relativePath: espnRelativeSeasonPath(dataDir, sport, season, gamePath),
             });
             filesWritten++;
             saved++;
@@ -516,53 +776,49 @@ async function importGames(ctx: EndpointContext): Promise<EndpointResult> {
     }
   } else {
     // Standard: fetch individual game summaries via Site API
-    // Build list of events that need fetching (skip already-final games)
-    const toFetch: { eventId: string; gamePath: string }[] = [];
-    const { default: fs } = await import("node:fs");
+    const toFetch: { eventId: string; fallbackSeasonType: EspnSeasonType }[] = [];
     for (const ref of eventRefs) {
       const eventId = extractEventId(ref);
       if (!eventId) continue;
-      const gamePath = rawPath(dataDir, "espn", sport, season, "games", `${eventId}.json`);
-      if (fileExists(gamePath)) {
-        // Fast path: if file is old (>48h), assume game is final — skip JSON parse
-        try {
-          const mtime = fs.statSync(gamePath).mtimeMs;
-          if (Date.now() - mtime > 48 * 60 * 60 * 1000) {
-            saved++;
-            continue;
-          }
-        } catch { /* stat failed, check JSON */ }
-        const existing = readJSON<any>(gamePath);
-        const existingStatus = existing?.summary?.header?.competitions?.[0]?.status?.type?.name ?? "unknown";
-        if (existingStatus === "STATUS_FINAL" || existingStatus === "STATUS_FULL_TIME") {
-          saved++;
-          continue;
-        }
-      }
-      toFetch.push({ eventId, gamePath });
+      toFetch.push({ eventId, fallbackSeasonType: inferEventSeasonType(ref, "unknown") });
     }
 
-    logger.progress("espn", sport, "games", `${saved} already final, ${toFetch.length} to fetch`);
+    logger.progress("espn", sport, "games", `${toFetch.length} summaries to resolve into event partitions`);
 
     // Fetch in concurrent batches (rate limit handles throttling)
     const BATCH_SIZE = 10;
     for (let i = 0; i < toFetch.length; i += BATCH_SIZE) {
       const batch = toFetch.slice(i, i + BATCH_SIZE);
       const results = await Promise.allSettled(
-        batch.map(async ({ eventId, gamePath }) => {
+        batch.map(async ({ eventId, fallbackSeasonType }) => {
           const summaryUrl = `${SITE_API}/${sportPath}/summary?event=${eventId}`;
           const summary = await espnFetch<any>(summaryUrl);
           if (summary) {
-            writeJSON(gamePath, { eventId, season, summary, fetchedAt: new Date().toISOString() });
-            return { ok: true, eventId };
+            const payload = { eventId, season, summary, __seasonType: fallbackSeasonType, fetchedAt: new Date().toISOString() };
+            const meta = buildEventPathMeta(payload, fallbackSeasonType);
+            const gamePath = espnEventPath(dataDir, sport, season, meta, eventId, "game.json");
+            writeJSON(gamePath, payload);
+            return {
+              ok: true,
+              entry: {
+                eventId,
+                date: meta.date,
+                seasonType: meta.seasonType,
+                relativePath: espnRelativeSeasonPath(dataDir, sport, season, gamePath),
+              } as EspnGameIndexEntry,
+            };
           }
           return { ok: false, eventId };
         }),
       );
       for (const r of results) {
         if (r.status === "fulfilled" && r.value.ok) {
-          filesWritten++;
-          saved++;
+          const entry = r.value.entry;
+          if (entry) {
+            gameIndex.set(entry.eventId, entry);
+            filesWritten++;
+            saved++;
+          }
         } else if (r.status === "fulfilled" && !r.value.ok) {
           errors.push(`${sport}/${season}/games/${r.value.eventId}: summary fetch failed`);
         } else if (r.status === "rejected") {
@@ -574,6 +830,9 @@ async function importGames(ctx: EndpointContext): Promise<EndpointResult> {
       }
     }
   } // end else (non-scoreboard-only sports)
+
+  writeGameIndex(dataDir, sport, season, gameIndex);
+  filesWritten++;
 
   logger.progress("espn", sport, "games", `Done — ${filesWritten} files written`);
   return { filesWritten, errors };
@@ -615,7 +874,12 @@ async function fetchGamesByScoreboard(sport: Sport, season: number, recentDays?:
           const id = String(ev.id);
           if (!seenIds.has(id)) {
             seenIds.add(id);
-            allEvents.push({ id, $ref: `${CORE_API}/${coreLeaguePath(sport)}/events/${id}`, ...ev });
+            allEvents.push({
+              id,
+              $ref: `${CORE_API}/${coreLeaguePath(sport)}/events/${id}`,
+              __seasonType: inferEventSeasonType(ev, "regular"),
+              ...ev,
+            });
           }
         }
       }
@@ -654,7 +918,7 @@ async function importRosters(ctx: EndpointContext): Promise<EndpointResult> {
   for (const team of teams) {
     const teamId = team.id;
     if (!teamId) continue;
-    const rosterPath = rawPath(dataDir, "espn", sport, season, "rosters", `${teamId}.json`);
+    const rosterPath = espnTeamPath(dataDir, sport, season, String(teamId), "roster.json");
     if (fileExists(rosterPath)) {
       filesWritten++;
       continue;
@@ -715,7 +979,7 @@ async function importInjuries(ctx: EndpointContext): Promise<EndpointResult> {
 
   const data = await espnFetch<any>(url);
   if (data) {
-    const outPath = rawPath(dataDir, "espn", sport, season, "injuries.json");
+    const outPath = espnSnapshotPath(dataDir, sport, season, "injuries", new Date().toISOString().slice(0, 10));
     writeJSON(outPath, { season, injuries: data, fetchedAt: new Date().toISOString() });
     filesWritten++;
   } else {
@@ -731,7 +995,7 @@ async function importInjuries(ctx: EndpointContext): Promise<EndpointResult> {
           const teamUrl = `${SITE_API}/${sportPath}/teams/${teamId}/injuries`;
           const teamData = await espnFetch<any>(teamUrl);
           if (teamData) {
-            const teamPath = rawPath(dataDir, "espn", sport, season, "injuries", `${teamId}.json`);
+            const teamPath = espnTeamPath(dataDir, sport, season, String(teamId), "injuries.json");
             writeJSON(teamPath, {
               teamId,
               season,
@@ -776,7 +1040,7 @@ async function importNews(ctx: EndpointContext): Promise<EndpointResult> {
   }
 
   const dateStr = new Date().toISOString().split("T")[0];
-  const outPath = rawPath(dataDir, "espn", sport, season, "news", `${dateStr}.json`);
+  const outPath = espnSnapshotPath(dataDir, sport, season, "news", dateStr);
   writeJSON(outPath, {
     season,
     date: dateStr,
@@ -802,6 +1066,11 @@ async function importOdds(ctx: EndpointContext): Promise<EndpointResult> {
 
   if (dryRun) return { filesWritten: 0, errors: [] };
 
+  if (ODDS_UNSUPPORTED_SPORTS.has(sport)) {
+    logger.info(`${sport}/${season} — odds endpoint not supported for this league; skipping`, "espn");
+    return { filesWritten, errors };
+  }
+
   // Load event IDs from the games manifest
   const eventIds = await loadEventIds(dataDir, sport, season);
   if (!eventIds.length) {
@@ -812,11 +1081,14 @@ async function importOdds(ctx: EndpointContext): Promise<EndpointResult> {
   logger.progress("espn", sport, "odds", `Fetching odds for ${eventIds.length} events`);
 
   const leaguePath = coreLeaguePath(sport);
-  const allOdds: any[] = [];
+  const gameIndex = readGameIndex(dataDir, sport, season);
 
   // Filter to only events that don't already have cached odds
   const uncachedEvents = eventIds.filter((eventId) => {
-    const oddsPath = rawPath(dataDir, "espn", sport, season, "odds", `${eventId}.json`);
+    const indexed = gameIndex.get(eventId);
+    const oddsPath = indexed
+      ? rawPath(dataDir, "espn", sport, season, indexed.relativePath.replace(/game\.json$/, "odds.json"))
+      : espnEventPath(dataDir, sport, season, { date: null, seasonType: "unknown" }, eventId, "odds.json");
     if (fileExists(oddsPath)) {
       filesWritten++;
       return false;
@@ -852,7 +1124,11 @@ async function importOdds(ctx: EndpointContext): Promise<EndpointResult> {
         const validResolved = resolved.filter(Boolean);
 
         if (validResolved.length) {
-          const oddsPath = rawPath(dataDir, "espn", sport, season, "odds", `${eventId}.json`);
+          const indexed = gameIndex.get(eventId);
+          const meta: EspnEventPathMeta = indexed
+            ? { date: indexed.date, seasonType: indexed.seasonType }
+            : { date: null, seasonType: "unknown" };
+          const oddsPath = espnEventPath(dataDir, sport, season, meta, eventId, "odds.json");
           writeJSON(oddsPath, {
             eventId,
             season,
@@ -868,21 +1144,9 @@ async function importOdds(ctx: EndpointContext): Promise<EndpointResult> {
     for (const result of batchResults) {
       if (result.status === "fulfilled" && result.value) {
         filesWritten++;
-        allOdds.push(...result.value);
+        // Event-scoped files are the canonical odds storage; no bulky season aggregate.
       }
     }
-  }
-
-  // Save combined file
-  if (allOdds.length) {
-    const allPath = rawPath(dataDir, "espn", sport, season, "odds", "all_odds.json");
-    writeJSON(allPath, {
-      season,
-      count: allOdds.length,
-      odds: allOdds,
-      fetchedAt: new Date().toISOString(),
-    });
-    filesWritten++;
   }
 
   logger.progress("espn", sport, "odds", `Done — ${filesWritten} odds files`);
@@ -942,7 +1206,7 @@ async function importPlayers(ctx: EndpointContext): Promise<EndpointResult> {
         const playerId = athlete.id ?? extractIdFromRef(item.$ref);
         if (!playerId) continue;
 
-        const playerPath = rawPath(dataDir, "espn", sport, season, "players", `${playerId}.json`);
+        const playerPath = espnPlayerPath(dataDir, sport, season, String(playerId), "profile.json");
         if (fileExists(playerPath)) {
           filesWritten++;
           continue;
@@ -967,7 +1231,7 @@ async function importPlayers(ctx: EndpointContext): Promise<EndpointResult> {
 
   // Save combined player index
   if (allPlayers.length) {
-    const indexPath = rawPath(dataDir, "espn", sport, season, "players", "all_players.json");
+    const indexPath = espnPlayersIndexPath(dataDir, sport, season);
     writeJSON(indexPath, {
       season,
       count: allPlayers.length,
@@ -1042,7 +1306,7 @@ async function importAthletes(ctx: EndpointContext): Promise<EndpointResult> {
   }
 
   // ── Step 2: Save manifest ─────────────────────────────────
-  const manifestPath = rawPath(dataDir, "espn", sport, season, "athletes", "all_athletes.json");
+  const manifestPath = espnAthletesIndexPath(dataDir, sport, season);
   writeJSON(manifestPath, {
     season,
     count: allRefs.length,
@@ -1055,7 +1319,7 @@ async function importAthletes(ctx: EndpointContext): Promise<EndpointResult> {
   // Build list of athletes needing fetch (skip existing)
   const toResolve: { id: string; $ref: string; athletePath: string }[] = [];
   for (const ref of allRefs) {
-    const athletePath = rawPath(dataDir, "espn", sport, season, "athletes", `${ref.id}.json`);
+    const athletePath = espnAthletePath(dataDir, sport, season, ref.id, "profile.json");
     if (fileExists(athletePath)) {
       filesWritten++;
     } else {
@@ -1117,7 +1381,7 @@ async function importScoreboard(ctx: EndpointContext): Promise<EndpointResult> {
   // Separate dates into cached (skip) and to-fetch
   const toFetch: string[] = [];
   for (const date of dates) {
-    const outPath = rawPath(dataDir, "espn", sport, season, "scoreboard", `${date}.json`);
+    const outPath = espnSnapshotPath(dataDir, sport, season, "scoreboard", date);
     if (!fileExists(outPath)) {
       toFetch.push(date);
       continue;
@@ -1161,10 +1425,10 @@ async function importScoreboard(ctx: EndpointContext): Promise<EndpointResult> {
         const url = `${SITE_API}/${sportPath}/scoreboard?dates=${date}&limit=100`;
         const data = await espnFetch<any>(url);
         if (data) {
-          const outPath = rawPath(dataDir, "espn", sport, season, "scoreboard", `${date}.json`);
+          const outPath = espnSnapshotPath(dataDir, sport, season, "scoreboard", date);
           writeJSON(outPath, {
             season,
-            date,
+            date: normalizeEspnDate(date),
             events: data.events ?? [],
             count: data.events?.length ?? 0,
             fetchedAt: new Date().toISOString(),
@@ -1208,7 +1472,7 @@ async function importTeamStats(ctx: EndpointContext): Promise<EndpointResult> {
   for (const team of teams) {
     const teamId = team.id;
     if (!teamId) continue;
-    const outPath = rawPath(dataDir, "espn", sport, season, "team_stats", `${teamId}.json`);
+    const outPath = espnTeamPath(dataDir, sport, season, String(teamId), "statistics.json");
     if (fileExists(outPath)) { filesWritten++; continue; }
     toFetchStats.push({ teamId: String(teamId), outPath });
   }
@@ -1259,7 +1523,7 @@ async function importTeamSchedule(ctx: EndpointContext): Promise<EndpointResult>
   for (const team of teams) {
     const teamId = team.id;
     if (!teamId) continue;
-    const outPath = rawPath(dataDir, "espn", sport, season, "team_schedule", `${teamId}.json`);
+    const outPath = espnTeamPath(dataDir, sport, season, String(teamId), "schedule.json");
     if (fileExists(outPath)) { filesWritten++; continue; }
     toFetchSched.push({ teamId: String(teamId), outPath });
   }
@@ -1307,7 +1571,7 @@ async function importPlayerStats(ctx: EndpointContext): Promise<EndpointResult> 
   // Separate cached from to-fetch
   const toFetch: string[] = [];
   for (const pid of playerIds) {
-    const outPath = rawPath(dataDir, "espn", sport, season, "player_stats", `${pid}.json`);
+    const outPath = espnPlayerPath(dataDir, sport, season, pid, "statistics.json");
     if (fileExists(outPath)) {
       filesWritten++;
     } else {
@@ -1327,7 +1591,7 @@ async function importPlayerStats(ctx: EndpointContext): Promise<EndpointResult> 
         const url = `https://site.api.espn.com/apis/v2/sports/${sportName}/${leagueName}/athletes/${playerId}/statistics?season=${season}`;
         const data = await espnFetch<any>(url);
         if (data) {
-          const outPath = rawPath(dataDir, "espn", sport, season, "player_stats", `${playerId}.json`);
+          const outPath = espnPlayerPath(dataDir, sport, season, playerId, "statistics.json");
           writeJSON(outPath, {
             playerId,
             season,
@@ -1374,7 +1638,7 @@ async function importDepthCharts(ctx: EndpointContext): Promise<EndpointResult> 
   for (const team of teams) {
     const teamId = team.id;
     if (!teamId) continue;
-    const outPath = rawPath(dataDir, "espn", sport, season, "depth_charts", `${teamId}.json`);
+    const outPath = espnTeamPath(dataDir, sport, season, String(teamId), "depth_chart.json");
     if (fileExists(outPath)) { filesWritten++; continue; }
     toFetchDC.push({ teamId: String(teamId), outPath });
   }
@@ -1418,7 +1682,7 @@ async function importTransactions(ctx: EndpointContext): Promise<EndpointResult>
   // Separate cached from to-fetch
   const toFetchDates: string[] = [];
   for (const date of dates) {
-    const outPath = rawPath(dataDir, "espn", sport, season, "transactions", `${date}.json`);
+    const outPath = espnSnapshotPath(dataDir, sport, season, "transactions", date);
     if (fileExists(outPath)) { filesWritten++; } else { toFetchDates.push(date); }
   }
 
@@ -1432,9 +1696,9 @@ async function importTransactions(ctx: EndpointContext): Promise<EndpointResult>
         if (data) {
           const items = data.items ?? data.transactions ?? [];
           if (items.length > 0 || data.count > 0) {
-            const outPath = rawPath(dataDir, "espn", sport, season, "transactions", `${date}.json`);
+            const outPath = espnSnapshotPath(dataDir, sport, season, "transactions", date);
             writeJSON(outPath, {
-              season, date, transactions: items, count: items.length,
+              season, date: normalizeEspnDate(date), transactions: items, count: items.length,
               fetchedAt: new Date().toISOString(),
             });
             return true;
@@ -1461,7 +1725,7 @@ async function importRankings(ctx: EndpointContext): Promise<EndpointResult> {
 
   if (dryRun) return { filesWritten: 0, errors: [] };
 
-  const outPath = rawPath(dataDir, "espn", sport, season, "rankings.json");
+  const outPath = espnReferencePath(dataDir, sport, season, "rankings");
   if (fileExists(outPath)) {
     logger.progress("espn", sport, "rankings", "Already exists — skipping");
     return { filesWritten: 1, errors: [] };
@@ -1487,8 +1751,8 @@ async function importRankings(ctx: EndpointContext): Promise<EndpointResult> {
     filesWritten++;
     logger.progress("espn", sport, "rankings", "Saved rankings");
   } else {
-    errors.push(`${sport}/${season}/rankings: no ranking data available`);
-    logger.progress("espn", sport, "rankings", "No ranking data found");
+    // Not all ESPN leagues expose rankings/power index endpoints.
+    logger.progress("espn", sport, "rankings", "No ranking data available for this league — skipping");
   }
 
   return { filesWritten, errors };
@@ -1503,7 +1767,7 @@ async function importFutures(ctx: EndpointContext): Promise<EndpointResult> {
 
   if (dryRun) return { filesWritten: 0, errors: [] };
 
-  const outPath = rawPath(dataDir, "espn", sport, season, "futures.json");
+  const outPath = espnReferencePath(dataDir, sport, season, "futures");
   if (fileExists(outPath)) {
     logger.progress("espn", sport, "futures", "Already exists — skipping");
     return { filesWritten: 1, errors: [] };
@@ -1522,8 +1786,8 @@ async function importFutures(ctx: EndpointContext): Promise<EndpointResult> {
     filesWritten++;
     logger.progress("espn", sport, "futures", "Saved futures");
   } else {
-    errors.push(`${sport}/${season}/futures: no futures data available`);
-    logger.progress("espn", sport, "futures", "No futures data found");
+    // Not all ESPN leagues expose futures endpoints.
+    logger.progress("espn", sport, "futures", "No futures data available for this league — skipping");
   }
 
   return { filesWritten, errors };
@@ -1546,7 +1810,7 @@ async function loadTeamList(
   const cached = _teamListCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
-  const teamsPath = rawPath(dataDir, "espn", sport, season, "teams.json");
+  const teamsPath = espnTeamsIndexPath(dataDir, sport, season);
   if (!fileExists(teamsPath)) {
     _teamListCache.set(cacheKey, []);
     return [];
@@ -1579,18 +1843,14 @@ async function loadEventIds(
   const cached = _eventIdCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
-  const manifestPath = rawPath(dataDir, "espn", sport, season, "games", "all_games.json");
-  if (!fileExists(manifestPath)) {
+  const gameIndex = readGameIndex(dataDir, sport, season);
+  if (gameIndex.size === 0) {
     _eventIdCache.set(cacheKey, []);
     return [];
   }
 
   try {
-    const data = readJSON<any>(manifestPath);
-    const games: any[] = data?.games ?? [];
-    const ids = games
-      .map((g: any) => extractEventId(g))
-      .filter((id): id is string => id !== null);
+    const ids = Array.from(gameIndex.keys()).sort();
     _eventIdCache.set(cacheKey, ids);
     return ids;
   } catch {
@@ -1615,7 +1875,7 @@ async function loadRosterPlayerIds(
       const teamId = team.id;
       if (!teamId) continue;
 
-      const rosterPath = rawPath(dataDir, "espn", sport, season, "rosters", `${teamId}.json`);
+      const rosterPath = espnTeamPath(dataDir, sport, season, String(teamId), "roster.json");
       if (!fileExists(rosterPath)) continue;
 
       const data = readJSON<any>(rosterPath);

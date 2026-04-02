@@ -1228,9 +1228,9 @@ async def list_match_events(
 
 @router.get(
     "/ratings",
-    summary="ELO, SPI, RAPTOR ratings",
+    summary="Advanced ratings",
     description=(
-        "FiveThirtyEight-sourced ratings: ELO (NBA, NFL), SPI (soccer), RAPTOR (NBA players). "
+        "Advanced team/player rating records when available. "
         "Filterable by rating type and team/player."
     ),
     tags=["Advanced"],
@@ -1268,7 +1268,7 @@ async def list_ratings(
     limit: int = Query(50, ge=1, le=1000, description="Page size"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
 ):
-    """ELO, SPI, and RAPTOR ratings from FiveThirtyEight."""
+    """Advanced team/player rating records."""
     _require_internal_access(api_key)
     await check_tier_access(api_key, sport, "ratings")
     await rate_limit_check(api_key)
@@ -1419,6 +1419,129 @@ async def list_team_stats(
             col = sort.lstrip("-")
             if col in df.columns:
                 df = df.sort_values(col, ascending=not desc, na_position="last")
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/team-game-stats",
+    summary="Per-team game stats",
+    description="Game-level team stat lines (MLB-focused).",
+    tags=["stats"],
+)
+async def list_team_game_stats(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    game_id: Optional[str] = Query(None, description="Filter by game ID"),
+    team_id: Optional[str] = Query(None, description="Filter by team ID"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "stats")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "team_game_stats", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if game_id and "game_id" in df.columns:
+            df = df[df["game_id"].astype(str) == game_id]
+        if team_id and "team_id" in df.columns:
+            df = df[df["team_id"].astype(str) == team_id]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/batter-game-stats",
+    summary="Per-batter game stats",
+    description="Game-level batter stat lines (MLB-focused).",
+    tags=["stats"],
+)
+async def list_batter_game_stats(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    game_id: Optional[str] = Query(None, description="Filter by game ID"),
+    player_id: Optional[str] = Query(None, description="Filter by player ID"),
+    team_id: Optional[str] = Query(None, description="Filter by team ID"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "stats")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "batter_game_stats", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if game_id and "game_id" in df.columns:
+            df = df[df["game_id"].astype(str) == game_id]
+        if player_id and "player_id" in df.columns:
+            df = df[df["player_id"].astype(str) == player_id]
+        if team_id and "team_id" in df.columns:
+            df = df[df["team_id"].astype(str) == team_id]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/pitcher-game-stats",
+    summary="Per-pitcher game stats",
+    description="Game-level pitcher stat lines (MLB-focused).",
+    tags=["stats"],
+)
+async def list_pitcher_game_stats(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    game_id: Optional[str] = Query(None, description="Filter by game ID"),
+    player_id: Optional[str] = Query(None, description="Filter by player ID"),
+    team_id: Optional[str] = Query(None, description="Filter by team ID"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "stats")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "pitcher_game_stats", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if game_id and "game_id" in df.columns:
+            df = df[df["game_id"].astype(str) == game_id]
+        if player_id and "player_id" in df.columns:
+            df = df[df["player_id"].astype(str) == player_id]
+        if team_id and "team_id" in df.columns:
+            df = df[df["team_id"].astype(str) == team_id]
         data = svc._df_to_records(df)
     except Exception:
         data = []
@@ -1771,4 +1894,185 @@ async def get_injuries(
             "high_count": sum(1 for i in injuries if i.get("impact_analysis", {}).get("severity") == "high"),
         },
         api_key=api_key, response=response,
+    )
+
+
+# ── Weather endpoint ─────────────────────────────────────────────────────────
+
+_VENUE_COORDS: dict[str, tuple[float, float]] = {
+    # MLB
+    "fenway park": (42.3467, -71.0972),
+    "wrigley field": (41.9484, -87.6553),
+    "yankee stadium": (40.8296, -73.9262),
+    "dodger stadium": (34.0739, -118.2400),
+    "oracle park": (37.7786, -122.3893),
+    "petco park": (32.7076, -117.1570),
+    "tropicana field": (27.7683, -82.6534),
+    # NFL
+    "lambeau field": (44.5013, -88.0622),
+    "soldier field": (41.8623, -87.6167),
+    "arrowhead stadium": (39.0489, -94.4839),
+    "gillette stadium": (42.0909, -71.2643),
+    "metlife stadium": (40.8135, -74.0745),
+    "m&t bank stadium": (39.2780, -76.6227),
+    "bank of america stadium": (35.2258, -80.8527),
+    "levi's stadium": (37.4033, -121.9694),
+    "sofi stadium": (33.9535, -118.3392),
+    "empower field": (39.7439, -105.0200),
+    # Soccer/outdoor
+    "wembley stadium": (51.5560, -0.2796),
+    "old trafford": (53.4631, -2.2913),
+    "camp nou": (41.3809, 2.1228),
+    "anfield": (53.4308, -2.9608),
+    # F1 circuits
+    "bahrain international circuit": (26.0325, 50.5106),
+    "jeddah corniche circuit": (21.6319, 39.1044),
+    "albert park circuit": (-37.8497, 144.9680),
+    "circuit de monaco": (43.7338, 7.4215),
+    "circuit de spa-francorchamps": (50.4372, 5.9714),
+    "silverstone circuit": (52.0786, -1.0169),
+    "autodromo nazionale monza": (45.6156, 9.2811),
+    "circuit of the americas": (30.1328, -97.6411),
+    "autodromo jose carlos pace": (-23.7036, -46.6997),
+    "yas marina circuit": (24.4672, 54.6031),
+    "suzuka circuit": (34.8431, 136.5407),
+    "marina bay street circuit": (1.2914, 103.8639),
+}
+
+
+async def _fetch_open_meteo(lat: float, lon: float) -> dict:
+    """Fetch current weather from Open-Meteo (free, no API key)."""
+    import httpx
+    url = (
+        f"https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}&longitude={lon}"
+        f"&current=temperature_2m,wind_speed_10m,wind_direction_10m,"
+        f"precipitation_probability,weather_code,relative_humidity_2m"
+        f"&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            data = r.json()
+            curr = data.get("current", {})
+            wmo = curr.get("weather_code", 0)
+            # WMO weather interpretation
+            if wmo == 0:
+                condition = "Clear"
+            elif wmo in range(1, 4):
+                condition = "Partly Cloudy"
+            elif wmo in range(4, 50):
+                condition = "Cloudy / Fog"
+            elif wmo in range(51, 70):
+                condition = "Drizzle / Light Rain"
+            elif wmo in range(71, 80):
+                condition = "Snow"
+            elif wmo in range(80, 100):
+                condition = "Rain / Storms"
+            else:
+                condition = "Unknown"
+            return {
+                "temp_f": curr.get("temperature_2m"),
+                "wind_mph": curr.get("wind_speed_10m"),
+                "wind_direction_deg": curr.get("wind_direction_10m"),
+                "humidity_pct": curr.get("relative_humidity_2m"),
+                "precipitation_pct": curr.get("precipitation_probability"),
+                "condition": condition,
+                "wmo_code": wmo,
+                "source": "open-meteo",
+            }
+    except Exception:
+        return {}
+
+
+def _deg_to_compass(deg: float | None) -> str:
+    if deg is None:
+        return ""
+    dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    return dirs[round(deg / 22.5) % 16]
+
+
+def _find_venue_coords(venue_name: str) -> tuple[float, float] | None:
+    v = venue_name.lower()
+    for key, coords in _VENUE_COORDS.items():
+        if key in v or v in key:
+            return coords
+    return None
+
+
+@router.get(
+    "/{sport}/games/{game_id}/weather",
+    summary="Weather data for a game venue",
+    tags=["games"],
+)
+async def get_game_weather(
+    sport: ValidSport,
+    game_id: str,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+):
+    """Return current/forecast weather for a game's venue.
+
+    Checks the normalized weather parquet first; falls back to
+    a live Open-Meteo fetch using a known-coordinates lookup.
+    """
+    await rate_limit_check(api_key)
+    response.headers["Cache-Control"] = "public, max-age=900"
+
+    # 1. Try normalized weather parquet
+    season = get_current_season(sport)
+    weather_records = ds.get_weather(sport, season, game_id)
+    if weather_records:
+        w = weather_records[0]
+        dome = bool(w.get("dome"))
+        wind_dir = str(w.get("wind_direction") or "")
+        result = {
+            "game_id": game_id,
+            "sport": sport,
+            "dome": dome,
+            "temp_f": w.get("temp_f"),
+            "wind_mph": None if dome else w.get("wind_mph"),
+            "wind_direction": None if dome else wind_dir,
+            "wind_direction_deg": None,
+            "humidity_pct": w.get("humidity_pct"),
+            "precipitation_pct": w.get("precipitation"),
+            "condition": w.get("condition"),
+            "source": "normalized",
+        }
+        return result
+
+    # 2. Look up game to get venue
+    game = ds.get_game(sport, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    venue_name: str = game.get("venue") or ""
+    coords = _find_venue_coords(venue_name)
+
+    # 3. Fetch from Open-Meteo if coords found
+    if coords:
+        weather = await _fetch_open_meteo(coords[0], coords[1])
+        if weather:
+            wind_dir_deg: float | None = weather.get("wind_direction_deg")
+            return {
+                "game_id": game_id,
+                "sport": sport,
+                "venue": venue_name,
+                "dome": False,
+                "temp_f": weather.get("temp_f"),
+                "wind_mph": weather.get("wind_mph"),
+                "wind_direction": _deg_to_compass(wind_dir_deg),
+                "wind_direction_deg": wind_dir_deg,
+                "humidity_pct": weather.get("humidity_pct"),
+                "precipitation_pct": weather.get("precipitation_pct"),
+                "condition": weather.get("condition"),
+                "source": "open-meteo",
+            }
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"No weather data available for venue: {venue_name!r}",
     )

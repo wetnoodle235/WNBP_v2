@@ -54,6 +54,14 @@ EXTRACTORS: dict[str, type[BaseFeatureExtractor]] = {
     "nwsl": SoccerExtractor,
     "ligamx": SoccerExtractor,
     "europa": SoccerExtractor,
+    "eredivisie": SoccerExtractor,
+    "primeiraliga": SoccerExtractor,
+    "championship": SoccerExtractor,
+    "bundesliga2": SoccerExtractor,
+    "serieb": SoccerExtractor,
+    "ligue2": SoccerExtractor,
+    "worldcup": SoccerExtractor,
+    "euros": SoccerExtractor,
     # Combat
     "ufc": CombatExtractor,
     # Tennis

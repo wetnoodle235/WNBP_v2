@@ -131,8 +131,8 @@ class EnsembleVoter:
 
     BASE_REGRESSORS: list[tuple[str, Any]] = [
         ("ridge", Ridge(alpha=2.0)),
-        ("lasso", Lasso(alpha=0.1, max_iter=5000)),
-        ("elastic_net", ElasticNet(alpha=0.1, l1_ratio=0.5, max_iter=5000)),
+        ("lasso", Lasso(alpha=0.1, max_iter=2000, tol=1e-3)),
+        ("elastic_net", ElasticNet(alpha=0.1, l1_ratio=0.5, max_iter=2000, tol=1e-3)),
         ("random_forest", RandomForestRegressor(n_estimators=150, max_depth=7, min_samples_leaf=3, n_jobs=8, random_state=42)),
         (
             "gradient_boosting",
@@ -161,8 +161,22 @@ class EnsembleVoter:
         self.feature_names: list[str] = []
         self._fitted_classifiers = False
         self._fitted_regressors = False
-        self.calibrator: Any = None  # isotonic regression calibrator
+        self.calibrator: Any = None  # calibrator (isotonic or Platt)
+        self._calibrator_type: str = "isotonic"
         self._load_models()
+
+    def _calibrate(self, raw_probs: np.ndarray) -> np.ndarray:
+        """Apply calibrator and clip to [0.05, 0.95]."""
+        if self.calibrator is None:
+            return raw_probs
+        try:
+            if self._calibrator_type == "platt":
+                cal = self.calibrator.predict_proba(raw_probs.reshape(-1, 1))[:, 1]
+            else:
+                cal = self.calibrator.predict(raw_probs)
+            return np.clip(cal, 0.05, 0.95)
+        except Exception:
+            return np.clip(raw_probs, 0.05, 0.95)
 
     # ── Private helpers ──────────────────────────────────
 
@@ -417,16 +431,30 @@ class EnsembleVoter:
         # Fit isotonic calibrator on validation-set ensemble probabilities
         try:
             from sklearn.isotonic import IsotonicRegression
+            from sklearn.linear_model import LogisticRegression
 
             ensemble_val_probs = self._weighted_probs(X_v)
-            cal = IsotonicRegression(out_of_bounds="clip")
-            cal.fit(ensemble_val_probs, y_v)
-            self.calibrator = cal
-            cal_probs = cal.predict(ensemble_val_probs)
-            cal_brier = brier_score_loss(y_v, cal_probs)
-            logger.info("Isotonic calibrator fitted  val_brier=%.4f", cal_brier)
+
+            # Fit both isotonic and Platt (sigmoid) calibrators; pick lower Brier
+            cal_iso = IsotonicRegression(out_of_bounds="clip")
+            cal_iso.fit(ensemble_val_probs, y_v)
+            brier_iso = brier_score_loss(y_v, cal_iso.predict(ensemble_val_probs))
+
+            cal_platt = LogisticRegression(max_iter=1000)
+            cal_platt.fit(ensemble_val_probs.reshape(-1, 1), y_v)
+            brier_platt = brier_score_loss(y_v, cal_platt.predict_proba(ensemble_val_probs.reshape(-1, 1))[:, 1])
+
+            if brier_iso <= brier_platt:
+                self.calibrator = cal_iso
+                self._calibrator_type = "isotonic"
+                cal_brier = brier_iso
+            else:
+                self.calibrator = cal_platt
+                self._calibrator_type = "platt"
+                cal_brier = brier_platt
+            logger.info("Calibrator fitted (%s)  val_brier=%.4f", self._calibrator_type, cal_brier)
         except Exception:
-            logger.warning("Could not fit isotonic calibrator", exc_info=True)
+            logger.warning("Could not fit calibrator", exc_info=True)
 
         logger.info(
             "Fitted %d classifiers (best: %s, weight=%.4f)",
@@ -572,11 +600,8 @@ class EnsembleVoter:
             total_w += w
         raw_probs = weighted_sum / max(total_w, 1e-9)
 
-        # Isotonic calibration then clip to [0.10, 0.90]
-        if self.calibrator is not None:
-            probabilities = np.clip(self.calibrator.predict(raw_probs), 0.10, 0.90)
-        else:
-            probabilities = raw_probs
+        # Calibration then clip to [0.05, 0.95]
+        probabilities = self._calibrate(raw_probs)
         predictions = (probabilities >= 0.5).astype(int)
 
         # Per-sample vote details
@@ -635,9 +660,8 @@ class EnsembleVoter:
         if total_w < 1e-9:
             return 0.5
         raw = weighted_sum / total_w
-        if self.calibrator is not None:
-            raw = float(np.clip(self.calibrator.predict(np.array([raw])), 0.10, 0.90)[0])
-        return float(raw)
+        raw_arr = np.array([raw])
+        return float(self._calibrate(raw_arr)[0])
 
     def predict_regression_fast(self, X_scaled: "np.ndarray") -> float:
         """Fast single-sample regression for extra-market inference.
@@ -693,9 +717,7 @@ class EnsembleVoter:
         if total_w < 1e-9:
             return np.full(n, 0.5)
         raw = weighted_sum / total_w
-        if self.calibrator is not None:
-            raw = np.clip(self.calibrator.predict(raw), 0.10, 0.90)
-        return raw
+        return self._calibrate(raw)
 
     def predict_regression_fast_batch(self, X_scaled: "np.ndarray") -> "np.ndarray":
         """Batch version of predict_regression_fast.

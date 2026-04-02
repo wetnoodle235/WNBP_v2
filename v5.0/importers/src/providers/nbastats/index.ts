@@ -7,14 +7,16 @@
 
 import type { Provider, ImportOptions, ImportResult, Sport, RateLimitConfig, FetchOptions } from "../../core/types.js";
 import { fetchJSON } from "../../core/http.js";
-import { writeJSON, rawPath, fileExists } from "../../core/io.js";
+import { writeJSON, rawPath, fileExists, readJSON } from "../../core/io.js";
 import { logger } from "../../core/logger.js";
 
 // ── API base ────────────────────────────────────────────────
 const BASE_URL = "https://stats.nba.com/stats";
+const LIVE_BASE_URL = "https://cdn.nba.com/static/json/liveData";
 
 // ── Rate limit: ~1 req per 1.2s ────────────────────────────
 const RATE_LIMIT: RateLimitConfig = { requests: 1, perMs: 1_200 };
+const LIVE_RATE_LIMIT: RateLimitConfig = { requests: 8, perMs: 1_000 };
 
 // ── Browser-like headers required by stats.nba.com ──────────
 const NBA_HEADERS: Record<string, string> = {
@@ -40,6 +42,12 @@ const FETCH_OPTS: FetchOptions = {
   retryDelayMs: 3_000,
 };
 
+const LIVE_FETCH_OPTS: FetchOptions = {
+  timeoutMs: 45_000,
+  retries: 2,
+  retryDelayMs: 1_500,
+};
+
 // ── League IDs ──────────────────────────────────────────────
 const LEAGUE_IDS: Record<string, string> = {
   nba: "00",
@@ -55,6 +63,8 @@ const WNBA_SUPPORTED_ENDPOINTS = new Set<Endpoint>([
   "team-stats",
   "player-game-logs",
   "team-game-logs",
+  "players",
+  "teams",
 ]);
 
 // ── Season types to iterate ─────────────────────────────────
@@ -70,6 +80,10 @@ const ALL_ENDPOINTS = [
   "team-game-logs",
   "shot-charts",
   "tracking-stats",
+  "scoreboard",
+  "game-details",
+  "players",
+  "teams",
 ] as const;
 
 type Endpoint = (typeof ALL_ENDPOINTS)[number];
@@ -133,6 +147,16 @@ async function nbaFetch<T = unknown>(url: string): Promise<T | null> {
   }
 }
 
+async function liveFetch<T = unknown>(url: string): Promise<T | null> {
+  try {
+    return await fetchJSON<T>(url, "nbastats-cdn", LIVE_RATE_LIMIT, LIVE_FETCH_OPTS);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`liveData fetch failed: ${msg}`, "nbastats");
+    return null;
+  }
+}
+
 // ── Endpoint context / result ───────────────────────────────
 
 interface EndpointContext {
@@ -149,6 +173,18 @@ interface EndpointResult {
   errors: string[];
 }
 
+interface GameIndexEntry {
+  gameId: string;
+  date: string;
+  seasonType: SeasonType;
+  homeTeamId?: string;
+  awayTeamId?: string;
+  homeTeamName?: string;
+  awayTeamName?: string;
+}
+
+type RowRecord = Record<string, unknown>;
+
 function emptyResult(): EndpointResult {
   return { filesWritten: 0, errors: [] };
 }
@@ -161,6 +197,186 @@ function outPath(
 ): string {
   const stSlug = seasonTypeSlug(seasonType);
   return rawPath(ctx.dataDir, "nbastats", ctx.sport, ctx.seasonStr, stSlug, ...segments);
+}
+
+function seasonAggregatePath(
+  ctx: EndpointContext,
+  seasonType: SeasonType,
+  ...segments: string[]
+): string {
+  return outPath(ctx, seasonType, "season_aggregates", ...segments);
+}
+
+function referencePath(ctx: EndpointContext, ...segments: string[]): string {
+  return rawPath(ctx.dataDir, "nbastats", ctx.sport, ctx.seasonStr, "reference", ...segments);
+}
+
+function datePath(
+  ctx: EndpointContext,
+  seasonType: SeasonType,
+  date: string,
+  ...segments: string[]
+): string {
+  return outPath(ctx, seasonType, "dates", date, ...segments);
+}
+
+function gamePath(
+  ctx: EndpointContext,
+  seasonType: SeasonType,
+  gameId: string,
+  ...segments: string[]
+): string {
+  return outPath(ctx, seasonType, "games", gameId, ...segments);
+}
+
+function formatScoreboardDate(date: string): string {
+  const [year, month, day] = date.split("-");
+  return `${month}/${day}/${year}`;
+}
+
+function promoteLegacyPath(structuredPath: string, legacyPath: string): boolean {
+  if (fileExists(structuredPath)) return false;
+  const payload = readJSON(legacyPath);
+  if (payload === null) return false;
+  writeJSON(structuredPath, payload);
+  return true;
+}
+
+function writeAggregatePayload(structuredPath: string, legacyPath: string, payload: unknown): void {
+  writeJSON(structuredPath, payload);
+  writeJSON(legacyPath, payload);
+}
+
+function extractResultRows(data: unknown): RowRecord[] {
+  if (!data || typeof data !== "object") return [];
+
+  const payload = data as { resultSets?: unknown; resultSet?: unknown };
+  const resultSets = Array.isArray(payload.resultSets)
+    ? payload.resultSets
+    : payload.resultSet
+      ? [payload.resultSet]
+      : [];
+
+  const rows: RowRecord[] = [];
+  for (const set of resultSets) {
+    if (!set || typeof set !== "object") continue;
+    const headers = Array.isArray((set as { headers?: unknown }).headers)
+      ? (set as { headers: unknown[] }).headers.map((header) => String(header).toUpperCase())
+      : [];
+    const rowSet = Array.isArray((set as { rowSet?: unknown }).rowSet)
+      ? (set as { rowSet: unknown[] }).rowSet
+      : [];
+    for (const row of rowSet) {
+      if (!Array.isArray(row)) continue;
+      rows.push(Object.fromEntries(headers.map((header, index) => [header, row[index]])));
+    }
+  }
+
+  return rows;
+}
+
+function buildGameIndexFromRows(rows: RowRecord[], seasonType: SeasonType): GameIndexEntry[] {
+  const entries = new Map<string, GameIndexEntry>();
+
+  for (const row of rows) {
+    const gameId = String(row.GAME_ID ?? "").trim();
+    if (!gameId) continue;
+
+    const date = String(row.GAME_DATE ?? "").slice(0, 10);
+    const matchup = String(row.MATCHUP ?? "");
+    const isHome = matchup.includes(" vs. ");
+    const entry = entries.get(gameId) ?? { gameId, date, seasonType };
+    const teamId = String(row.TEAM_ID ?? "").trim();
+    const teamName = String(row.TEAM_NAME ?? "").trim();
+
+    if (isHome) {
+      entry.homeTeamId = teamId || entry.homeTeamId;
+      entry.homeTeamName = teamName || entry.homeTeamName;
+    } else {
+      entry.awayTeamId = teamId || entry.awayTeamId;
+      entry.awayTeamName = teamName || entry.awayTeamName;
+    }
+
+    entries.set(gameId, entry);
+  }
+
+  return [...entries.values()].sort((left, right) => left.date.localeCompare(right.date) || left.gameId.localeCompare(right.gameId));
+}
+
+function buildTeamIndex(entries: GameIndexEntry[]): Array<Record<string, string>> {
+  const teams = new Map<string, string>();
+
+  for (const entry of entries) {
+    if (entry.homeTeamId && entry.homeTeamName) teams.set(entry.homeTeamId, entry.homeTeamName);
+    if (entry.awayTeamId && entry.awayTeamName) teams.set(entry.awayTeamId, entry.awayTeamName);
+  }
+
+  return [...teams.entries()]
+    .sort((left, right) => left[1].localeCompare(right[1]))
+    .map(([teamId, teamName]) => ({ teamId, teamName }));
+}
+
+async function ensureTeamGameLogEntries(ctx: EndpointContext, seasonType: SeasonType): Promise<GameIndexEntry[]> {
+  const structuredPath = seasonAggregatePath(ctx, seasonType, "team-game-logs.json");
+  const legacyPath = outPath(ctx, seasonType, "team-game-logs.json");
+
+  if (!fileExists(structuredPath)) {
+    promoteLegacyPath(structuredPath, legacyPath);
+  }
+
+  let payload = readJSON(structuredPath) ?? readJSON(legacyPath);
+
+  if (!payload && !ctx.dryRun) {
+    const url =
+      `${BASE_URL}/teamgamelogs?LeagueID=${ctx.leagueId}` +
+      `&Season=${ctx.seasonStr}&SeasonType=${encodeSeasonType(seasonType)}`;
+    payload = await nbaFetch(url);
+    if (payload) {
+      writeAggregatePayload(structuredPath, legacyPath, { ...(payload as object), fetchedAt: new Date().toISOString() });
+    }
+  }
+
+  return buildGameIndexFromRows(extractResultRows(payload), seasonType);
+}
+
+async function loadGameIndex(ctx: EndpointContext): Promise<GameIndexEntry[]> {
+  const allEntries: GameIndexEntry[] = [];
+
+  for (const seasonType of SEASON_TYPES) {
+    const entries = await ensureTeamGameLogEntries(ctx, seasonType);
+    allEntries.push(...entries);
+
+    if (!ctx.dryRun) {
+      const byDate = new Map<string, GameIndexEntry[]>();
+      for (const entry of entries) {
+        const items = byDate.get(entry.date) ?? [];
+        items.push(entry);
+        byDate.set(entry.date, items);
+      }
+
+      for (const [date, games] of byDate.entries()) {
+        writeJSON(datePath(ctx, seasonType, date, "games.json"), {
+          sport: ctx.sport,
+          season: ctx.seasonStr,
+          seasonType,
+          date,
+          games,
+          generatedAt: new Date().toISOString(),
+        });
+      }
+    }
+  }
+
+  if (!ctx.dryRun) {
+    writeJSON(referencePath(ctx, "game_index.json"), {
+      sport: ctx.sport,
+      season: ctx.seasonStr,
+      games: allEntries,
+      generatedAt: new Date().toISOString(),
+    });
+  }
+
+  return allEntries;
 }
 
 // ── Endpoint implementations ────────────────────────────────
@@ -178,9 +394,14 @@ async function importLeagueLeaders(ctx: EndpointContext): Promise<EndpointResult
     logger.progress("nbastats", ctx.sport, "league-leaders", `${st} — ${ctx.seasonStr}`);
     if (ctx.dryRun) continue;
 
-    const filePath = outPath(ctx, st, "league-leaders.json");
+    const filePath = seasonAggregatePath(ctx, st, "league-leaders.json");
+    const legacyPath = outPath(ctx, st, "league-leaders.json");
     if (fileExists(filePath)) {
       logger.progress("nbastats", ctx.sport, "league-leaders", `Skipping (exists) ${st}`);
+      continue;
+    }
+    if (promoteLegacyPath(filePath, legacyPath)) {
+      filesWritten++;
       continue;
     }
 
@@ -190,7 +411,7 @@ async function importLeagueLeaders(ctx: EndpointContext): Promise<EndpointResult
       continue;
     }
 
-    writeJSON(filePath, { ...data as object, fetchedAt: new Date().toISOString() });
+    writeAggregatePayload(filePath, legacyPath, { ...data as object, fetchedAt: new Date().toISOString() });
     filesWritten++;
   }
 
@@ -213,9 +434,14 @@ async function importPlayerStats(ctx: EndpointContext): Promise<EndpointResult> 
       logger.progress("nbastats", ctx.sport, label, `${st} — ${ctx.seasonStr}`);
       if (ctx.dryRun) continue;
 
-      const filePath = outPath(ctx, st, "player-stats", `${measure.toLowerCase()}.json`);
+      const filePath = seasonAggregatePath(ctx, st, "player-stats", `${measure.toLowerCase()}.json`);
+      const legacyPath = outPath(ctx, st, "player-stats", `${measure.toLowerCase()}.json`);
       if (fileExists(filePath)) {
         logger.progress("nbastats", ctx.sport, label, `Skipping (exists) ${st}`);
+        continue;
+      }
+      if (promoteLegacyPath(filePath, legacyPath)) {
+        filesWritten++;
         continue;
       }
 
@@ -225,7 +451,7 @@ async function importPlayerStats(ctx: EndpointContext): Promise<EndpointResult> 
         continue;
       }
 
-      writeJSON(filePath, { ...data as object, fetchedAt: new Date().toISOString() });
+      writeAggregatePayload(filePath, legacyPath, { ...data as object, fetchedAt: new Date().toISOString() });
       filesWritten++;
     }
   }
@@ -249,9 +475,14 @@ async function importTeamStats(ctx: EndpointContext): Promise<EndpointResult> {
       logger.progress("nbastats", ctx.sport, label, `${st} — ${ctx.seasonStr}`);
       if (ctx.dryRun) continue;
 
-      const filePath = outPath(ctx, st, "team-stats", `${measure.toLowerCase()}.json`);
+      const filePath = seasonAggregatePath(ctx, st, "team-stats", `${measure.toLowerCase()}.json`);
+      const legacyPath = outPath(ctx, st, "team-stats", `${measure.toLowerCase()}.json`);
       if (fileExists(filePath)) {
         logger.progress("nbastats", ctx.sport, label, `Skipping (exists) ${st}`);
+        continue;
+      }
+      if (promoteLegacyPath(filePath, legacyPath)) {
+        filesWritten++;
         continue;
       }
 
@@ -261,7 +492,7 @@ async function importTeamStats(ctx: EndpointContext): Promise<EndpointResult> {
         continue;
       }
 
-      writeJSON(filePath, { ...data as object, fetchedAt: new Date().toISOString() });
+      writeAggregatePayload(filePath, legacyPath, { ...data as object, fetchedAt: new Date().toISOString() });
       filesWritten++;
     }
   }
@@ -281,9 +512,14 @@ async function importPlayerGameLogs(ctx: EndpointContext): Promise<EndpointResul
     logger.progress("nbastats", ctx.sport, "player-game-logs", `${st} — ${ctx.seasonStr}`);
     if (ctx.dryRun) continue;
 
-    const filePath = outPath(ctx, st, "player-game-logs.json");
+    const filePath = seasonAggregatePath(ctx, st, "player-game-logs.json");
+    const legacyPath = outPath(ctx, st, "player-game-logs.json");
     if (fileExists(filePath)) {
       logger.progress("nbastats", ctx.sport, "player-game-logs", `Skipping (exists) ${st}`);
+      continue;
+    }
+    if (promoteLegacyPath(filePath, legacyPath)) {
+      filesWritten++;
       continue;
     }
 
@@ -293,7 +529,7 @@ async function importPlayerGameLogs(ctx: EndpointContext): Promise<EndpointResul
       continue;
     }
 
-    writeJSON(filePath, { ...data as object, fetchedAt: new Date().toISOString() });
+    writeAggregatePayload(filePath, legacyPath, { ...data as object, fetchedAt: new Date().toISOString() });
     filesWritten++;
   }
 
@@ -312,9 +548,14 @@ async function importTeamGameLogs(ctx: EndpointContext): Promise<EndpointResult>
     logger.progress("nbastats", ctx.sport, "team-game-logs", `${st} — ${ctx.seasonStr}`);
     if (ctx.dryRun) continue;
 
-    const filePath = outPath(ctx, st, "team-game-logs.json");
+    const filePath = seasonAggregatePath(ctx, st, "team-game-logs.json");
+    const legacyPath = outPath(ctx, st, "team-game-logs.json");
     if (fileExists(filePath)) {
       logger.progress("nbastats", ctx.sport, "team-game-logs", `Skipping (exists) ${st}`);
+      continue;
+    }
+    if (promoteLegacyPath(filePath, legacyPath)) {
+      filesWritten++;
       continue;
     }
 
@@ -324,7 +565,7 @@ async function importTeamGameLogs(ctx: EndpointContext): Promise<EndpointResult>
       continue;
     }
 
-    writeJSON(filePath, { ...data as object, fetchedAt: new Date().toISOString() });
+    writeAggregatePayload(filePath, legacyPath, { ...data as object, fetchedAt: new Date().toISOString() });
     filesWritten++;
   }
 
@@ -347,9 +588,14 @@ async function importShotCharts(ctx: EndpointContext): Promise<EndpointResult> {
     logger.progress("nbastats", ctx.sport, "shot-charts", `${st} — ${ctx.seasonStr}`);
     if (ctx.dryRun) continue;
 
-    const filePath = outPath(ctx, st, "shot-charts.json");
+    const filePath = seasonAggregatePath(ctx, st, "shot-charts.json");
+    const legacyPath = outPath(ctx, st, "shot-charts.json");
     if (fileExists(filePath)) {
       logger.progress("nbastats", ctx.sport, "shot-charts", `Skipping (exists) ${st}`);
+      continue;
+    }
+    if (promoteLegacyPath(filePath, legacyPath)) {
+      filesWritten++;
       continue;
     }
 
@@ -359,7 +605,7 @@ async function importShotCharts(ctx: EndpointContext): Promise<EndpointResult> {
       continue;
     }
 
-    writeJSON(filePath, { ...data as object, fetchedAt: new Date().toISOString() });
+    writeAggregatePayload(filePath, legacyPath, { ...data as object, fetchedAt: new Date().toISOString() });
     filesWritten++;
   }
 
@@ -381,9 +627,14 @@ async function importTrackingStats(ctx: EndpointContext): Promise<EndpointResult
       logger.progress("nbastats", ctx.sport, label, `${st} — ${ctx.seasonStr}`);
       if (ctx.dryRun) continue;
 
-      const filePath = outPath(ctx, st, "tracking-stats", `${ptType.toLowerCase()}.json`);
+      const filePath = seasonAggregatePath(ctx, st, "tracking-stats", `${ptType.toLowerCase()}.json`);
+      const legacyPath = outPath(ctx, st, "tracking-stats", `${ptType.toLowerCase()}.json`);
       if (fileExists(filePath)) {
         logger.progress("nbastats", ctx.sport, label, `Skipping (exists) ${st}`);
+        continue;
+      }
+      if (promoteLegacyPath(filePath, legacyPath)) {
+        filesWritten++;
         continue;
       }
 
@@ -393,8 +644,233 @@ async function importTrackingStats(ctx: EndpointContext): Promise<EndpointResult
         continue;
       }
 
-      writeJSON(filePath, { ...data as object, fetchedAt: new Date().toISOString() });
+      writeAggregatePayload(filePath, legacyPath, { ...data as object, fetchedAt: new Date().toISOString() });
       filesWritten++;
+    }
+  }
+
+  return { filesWritten, errors };
+}
+
+async function importScoreboard(ctx: EndpointContext): Promise<EndpointResult> {
+  const entries = await loadGameIndex(ctx);
+  if (ctx.dryRun) {
+    logger.info(`[dry-run] Would fetch scoreboard data for ${ctx.seasonStr}`, "nbastats");
+    return emptyResult();
+  }
+
+  let filesWritten = 0;
+  const errors: string[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of entries) {
+    const dedupeKey = `${entry.seasonType}:${entry.date}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    const filePath = datePath(ctx, entry.seasonType, entry.date, "scoreboard.json");
+    if (fileExists(filePath)) continue;
+
+    logger.progress("nbastats", ctx.sport, "scoreboard", `${entry.seasonType} ${entry.date}`);
+    const url =
+      `${BASE_URL}/scoreboardv2?DayOffset=0` +
+      `&GameDate=${encodeURIComponent(formatScoreboardDate(entry.date))}` +
+      `&LeagueID=${ctx.leagueId}`;
+    const data = await nbaFetch(url);
+    if (!data) {
+      errors.push(`${ctx.sport}/${ctx.seasonStr}/${entry.seasonType}/scoreboard/${entry.date}: no data`);
+      continue;
+    }
+
+    writeJSON(filePath, { ...data as object, fetchedAt: new Date().toISOString() });
+    filesWritten++;
+  }
+
+  return { filesWritten, errors };
+}
+
+async function importPlayers(ctx: EndpointContext): Promise<EndpointResult> {
+  const allPlayersFile = referencePath(ctx, "all_players.json");
+  let filesWritten = 0;
+  const errors: string[] = [];
+
+  logger.progress("nbastats", ctx.sport, "players", ctx.seasonStr);
+  if (ctx.dryRun) return emptyResult();
+
+  let payload = readJSON(allPlayersFile);
+  if (!payload) {
+    const url =
+      `${BASE_URL}/commonallplayers?LeagueID=${ctx.leagueId}` +
+      `&Season=${ctx.seasonStr}&IsOnlyCurrentSeason=0`;
+    payload = await nbaFetch(url);
+    if (!payload) {
+      errors.push(`${ctx.sport}/${ctx.seasonStr}/players: all players fetch failed`);
+      return { filesWritten, errors };
+    }
+    writeJSON(allPlayersFile, { ...payload as object, fetchedAt: new Date().toISOString() });
+    filesWritten++;
+  }
+
+  const playerIds = extractResultRows(payload)
+    .map((row) => String(row.PERSON_ID ?? row.PLAYER_ID ?? "").trim())
+    .filter(Boolean);
+
+  const batchSize = 10;
+  for (let index = 0; index < playerIds.length; index += batchSize) {
+    const batch = playerIds.slice(index, index + batchSize);
+    const results = await Promise.allSettled(
+      batch.map(async (playerId) => {
+        const filePath = referencePath(ctx, "players", playerId, "info.json");
+        if (fileExists(filePath)) return false;
+
+        const url = `${BASE_URL}/commonplayerinfo?LeagueID=${ctx.leagueId}&PlayerID=${playerId}`;
+        const data = await nbaFetch(url);
+        if (!data) throw new Error(`player ${playerId}: no data`);
+        writeJSON(filePath, { ...data as object, fetchedAt: new Date().toISOString() });
+        return true;
+      }),
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value) filesWritten++;
+      if (result.status === "rejected") {
+        errors.push(`${ctx.sport}/${ctx.seasonStr}/players: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+      }
+    }
+  }
+
+  return { filesWritten, errors };
+}
+
+async function importTeams(ctx: EndpointContext): Promise<EndpointResult> {
+  const entries = await loadGameIndex(ctx);
+  const teams = buildTeamIndex(entries);
+  let filesWritten = 0;
+  const errors: string[] = [];
+
+  logger.progress("nbastats", ctx.sport, "teams", `${ctx.seasonStr} — ${teams.length} teams`);
+  if (ctx.dryRun) return emptyResult();
+
+  const indexFile = referencePath(ctx, "teams", "index.json");
+  if (!fileExists(indexFile)) {
+    writeJSON(indexFile, {
+      sport: ctx.sport,
+      season: ctx.seasonStr,
+      teams,
+      generatedAt: new Date().toISOString(),
+    });
+    filesWritten++;
+  }
+
+  const batchSize = 8;
+  for (let index = 0; index < teams.length; index += batchSize) {
+    const batch = teams.slice(index, index + batchSize);
+    const results = await Promise.allSettled(
+      batch.map(async ({ teamId, teamName }) => {
+        let wrote = 0;
+        const infoFile = referencePath(ctx, "teams", teamId, "info.json");
+        const rosterFile = referencePath(ctx, "teams", teamId, "roster.json");
+
+        if (!fileExists(infoFile)) {
+          const infoUrl = `${BASE_URL}/teaminfocommon?LeagueID=${ctx.leagueId}&Season=${ctx.seasonStr}&TeamID=${teamId}`;
+          const info = await nbaFetch(infoUrl);
+          if (info) {
+            writeJSON(infoFile, { ...info as object, fetchedAt: new Date().toISOString() });
+            wrote++;
+          }
+        }
+
+        if (!fileExists(rosterFile)) {
+          const rosterUrl = `${BASE_URL}/commonteamroster?LeagueID=${ctx.leagueId}&Season=${ctx.seasonStr}&TeamID=${teamId}`;
+          const roster = await nbaFetch(rosterUrl);
+          if (roster) {
+            writeJSON(rosterFile, { ...roster as object, fetchedAt: new Date().toISOString() });
+            wrote++;
+          }
+        }
+
+        if (!fileExists(infoFile) && !fileExists(rosterFile)) {
+          throw new Error(`team ${teamId} (${teamName}): no team data`);
+        }
+
+        return wrote;
+      }),
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled") filesWritten += result.value;
+      if (result.status === "rejected") {
+        errors.push(`${ctx.sport}/${ctx.seasonStr}/teams: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+      }
+    }
+  }
+
+  return { filesWritten, errors };
+}
+
+async function importGameDetails(ctx: EndpointContext): Promise<EndpointResult> {
+  const entries = await loadGameIndex(ctx);
+  if (ctx.dryRun) {
+    logger.info(`[dry-run] Would fetch ${entries.length} game detail bundles for ${ctx.seasonStr}`, "nbastats");
+    return emptyResult();
+  }
+
+  let filesWritten = 0;
+  const errors: string[] = [];
+  const batchSize = 8;
+
+  logger.progress("nbastats", ctx.sport, "game-details", `${ctx.seasonStr} — ${entries.length} games`);
+
+  for (let index = 0; index < entries.length; index += batchSize) {
+    const batch = entries.slice(index, index + batchSize);
+    const results = await Promise.allSettled(
+      batch.map(async (entry) => {
+        const summaryFile = gamePath(ctx, entry.seasonType, entry.gameId, "summary.json");
+        const boxscoreFile = gamePath(ctx, entry.seasonType, entry.gameId, "boxscore.json");
+        const playByPlayFile = gamePath(ctx, entry.seasonType, entry.gameId, "playbyplay.json");
+
+        if (!fileExists(summaryFile)) {
+          writeJSON(summaryFile, {
+            sport: ctx.sport,
+            season: ctx.seasonStr,
+            ...entry,
+            generatedAt: new Date().toISOString(),
+          });
+        }
+
+        if (fileExists(boxscoreFile) && fileExists(playByPlayFile)) return 0;
+
+        const [boxscore, playByPlay] = await Promise.all([
+          fileExists(boxscoreFile)
+            ? Promise.resolve(readJSON(boxscoreFile))
+            : liveFetch(`${LIVE_BASE_URL}/boxscore/boxscore_${entry.gameId}.json`),
+          fileExists(playByPlayFile)
+            ? Promise.resolve(readJSON(playByPlayFile))
+            : liveFetch(`${LIVE_BASE_URL}/playbyplay/playbyplay_${entry.gameId}.json`),
+        ]);
+
+        let wrote = 0;
+        if (boxscore && !fileExists(boxscoreFile)) {
+          writeJSON(boxscoreFile, { ...boxscore as object, fetchedAt: new Date().toISOString() });
+          wrote++;
+        }
+        if (playByPlay && !fileExists(playByPlayFile)) {
+          writeJSON(playByPlayFile, { ...playByPlay as object, fetchedAt: new Date().toISOString() });
+          wrote++;
+        }
+        if (!boxscore && !playByPlay) {
+          throw new Error(`game ${entry.gameId}: no boxscore or play-by-play data`);
+        }
+
+        return wrote;
+      }),
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled") filesWritten += result.value;
+      if (result.status === "rejected") {
+        errors.push(`${ctx.sport}/${ctx.seasonStr}/game-details: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+      }
     }
   }
 
@@ -411,6 +887,10 @@ const ENDPOINT_FNS: Record<Endpoint, (ctx: EndpointContext) => Promise<EndpointR
   "team-game-logs":   importTeamGameLogs,
   "shot-charts":      importShotCharts,
   "tracking-stats":   importTrackingStats,
+  "scoreboard":       importScoreboard,
+  "game-details":     importGameDetails,
+  "players":          importPlayers,
+  "teams":            importTeams,
 };
 
 // ── Provider implementation ─────────────────────────────────

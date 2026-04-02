@@ -66,6 +66,12 @@ class Game(_Base):
     period: Optional[str] = None
     is_neutral_site: bool = False
 
+    # Temporal classification fields
+    season_type: Optional[str] = None          # preseason | regular | postseason | group_stage | knockout | final | playoff | qualifying
+    week: Optional[int] = None                 # NFL/NCAAF/NCAAB week number; None for sports without weeks
+    matchday: Optional[int] = None             # Soccer matchday (football-data.org); None for other sports
+    stage: Optional[str] = None                # Raw competition stage (e.g. REGULAR_SEASON, QUARTER_FINALS)
+
     # Quarter/period scores (basketball, football, hockey)
     home_q1: Optional[int] = None
     home_q2: Optional[int] = None
@@ -113,6 +119,10 @@ class Game(_Base):
     home_h2_score: Optional[int] = None
     away_h1_score: Optional[int] = None
     away_h2_score: Optional[int] = None
+
+    # Football-data.org half-time scores (separate from ESPN h1/h2 scores)
+    home_ht_score: Optional[int] = None
+    away_ht_score: Optional[int] = None
 
     # Per-game team stats
     home_rebounds: Optional[float] = None
@@ -286,7 +296,7 @@ class Game(_Base):
     home_red_zone_pct: Optional[float] = None
     away_red_zone_pct: Optional[float] = None
 
-    # NFL EPA (Expected Points Added) from nflfastr
+    # NFL EPA fields (reserved; unpopulated until new provider is wired)
     home_passing_epa: Optional[float] = None
     away_passing_epa: Optional[float] = None
     home_rushing_epa: Optional[float] = None
@@ -589,8 +599,11 @@ class Game(_Base):
     safety_car_count: Optional[int] = None
     red_flag_count: Optional[int] = None
     pit_stops_total: Optional[int] = None
+    lap_leader_name: Optional[str] = None
+    lead_changes: Optional[int] = None
+    unique_lap_leaders: Optional[int] = None
 
-    # FiveThirtyEight ELO ratings (NBA, NFL)
+    # Advanced rating fields
     home_elo_pre: Optional[float] = None         # Pre-game ELO rating (elo_i)
     home_elo_post: Optional[float] = None        # Post-game ELO rating (elo_n)
     away_elo_pre: Optional[float] = None
@@ -841,6 +854,86 @@ class Injury(_Base):
     _coerce_id = field_validator("player_id", "team_id", mode="before")(_coerce_str)
 
 
+# ── MLB granular game stats ─────────────────────────────
+
+class TeamGameStats(_Base):
+    game_id: str
+    sport: str
+    season: str
+    team_id: str
+    opponent_id: Optional[str] = None
+    is_home: Optional[bool] = None
+    runs: Optional[int] = None
+    hits: Optional[int] = None
+    errors: Optional[int] = None
+    at_bats: Optional[int] = None
+    home_runs: Optional[int] = None
+    walks: Optional[int] = None
+    strikeouts: Optional[int] = None
+    stolen_bases: Optional[int] = None
+    innings_pitched: Optional[float] = None
+    earned_runs: Optional[int] = None
+    pitches: Optional[int] = None
+    whip: Optional[float] = None
+    era: Optional[float] = None
+
+    _coerce_id = field_validator("game_id", "team_id", "opponent_id", mode="before")(_coerce_str)
+
+
+class BatterGameStats(_Base):
+    game_id: str
+    sport: str
+    season: str
+    player_id: str
+    team_id: Optional[str] = None
+    opponent_id: Optional[str] = None
+    is_home: Optional[bool] = None
+    position: Optional[str] = None
+    ab: Optional[int] = None
+    hits: Optional[int] = None
+    hr: Optional[int] = None
+    rbi: Optional[int] = None
+    runs: Optional[int] = None
+    bb: Optional[int] = None
+    so: Optional[int] = None
+    sb: Optional[int] = None
+    doubles: Optional[int] = None
+    triples: Optional[int] = None
+    hbp: Optional[int] = None
+    pa: Optional[int] = None
+    total_bases: Optional[int] = None
+
+    _coerce_id = field_validator("game_id", "player_id", "team_id", "opponent_id", mode="before")(_coerce_str)
+
+
+class PitcherGameStats(_Base):
+    game_id: str
+    sport: str
+    season: str
+    player_id: str
+    team_id: Optional[str] = None
+    opponent_id: Optional[str] = None
+    is_home: Optional[bool] = None
+    position: Optional[str] = None
+    innings: Optional[float] = None
+    earned_runs: Optional[int] = None
+    strikeouts: Optional[int] = None
+    walks: Optional[int] = None
+    home_runs_allowed: Optional[int] = None
+    batters_faced: Optional[int] = None
+    pitches: Optional[int] = None
+    whip: Optional[float] = None
+    era: Optional[float] = None
+    holds: Optional[int] = None
+    blown_saves: Optional[int] = None
+    wild_pitches: Optional[int] = None
+    win: Optional[bool] = None
+    loss: Optional[bool] = None
+    save: Optional[bool] = None
+
+    _coerce_id = field_validator("game_id", "player_id", "team_id", "opponent_id", mode="before")(_coerce_str)
+
+
 # ── Player Game Stats (discriminated union) ───────────────
 
 class _PlayerGameStatsBase(_Base):
@@ -887,7 +980,7 @@ class BasketballStats(_PlayerGameStatsBase):
     ts_pct: Optional[float] = None
     efg_pct: Optional[float] = None
     usg_pct: Optional[float] = None
-    # FiveThirtyEight RAPTOR / WAR
+    # Advanced rating extensions
     raptor_offense: Optional[float] = None
     raptor_defense: Optional[float] = None
     raptor_total: Optional[float] = None
@@ -1086,6 +1179,10 @@ class F1Stats(_PlayerGameStatsBase):
     status: Optional[str] = None
     interval: Optional[str] = None
     avg_speed_kph: Optional[float] = None
+    laps_led: Optional[int] = None
+    avg_running_position: Optional[float] = None
+    best_running_position: Optional[int] = None
+    worst_running_position: Optional[int] = None
     dnf: bool = False
     constructor: Optional[str] = None
     team_name: Optional[str] = None
@@ -1209,6 +1306,9 @@ ALL_SCHEMA_CLASSES: list[type[_Base]] = [
     ScheduleFatigue,
     PlayerProp,
     Injury,
+    TeamGameStats,
+    BatterGameStats,
+    PitcherGameStats,
     BasketballStats,
     FootballStats,
     BaseballStats,

@@ -112,11 +112,29 @@ class PredictionResult:
     # ── Both Teams to Score (BTTS) ────────────────────────
     # Probability that both teams score ≥1 goal/run (soccer, MLB)
     btts_prob: float | None = None  # P(home_score>0 AND away_score>0)
+    btts_over2_5_prob: float | None = None  # P(BTTS AND total > 2.5 goals)
+
+    # ── Team Goal Lines ───────────────────────────────────
+    home_over1_5_prob: float | None = None   # P(home scores 2+ goals)
+    away_over1_5_prob: float | None = None   # P(away scores 2+ goals)
+    home_win_score2plus_prob: float | None = None  # P(home wins AND scores 2+)
+    away_win_score2plus_prob: float | None = None  # P(away wins AND scores 2+)
 
     # ── Clean Sheet ───────────────────────────────────────
     # Probability that a team keeps a clean sheet (concedes 0)
     home_clean_sheet_prob: float | None = None  # P(away_score=0)
     away_clean_sheet_prob: float | None = None  # P(home_score=0)
+
+    # ── First Half Totals (soccer) ─────────────────────────
+    h1_over0_5_prob: float | None = None    # P(1+ goals in first half)
+    h1_over1_5_prob: float | None = None    # P(2+ goals in first half)
+    win_both_halves_home_prob: float | None = None  # P(home wins both H1 AND H2)
+    win_both_halves_away_prob: float | None = None  # P(away wins both H1 AND H2)
+
+    # ── Period BTTS (basketball/hockey) ──────────────────
+    btts_period1_prob: float | None = None  # P(both teams score in period 1 / Q1)
+    btts_period2_prob: float | None = None  # P(both teams score in period 2 / Q2)
+    btts_period3_prob: float | None = None  # P(both teams score in period 3 / Q3 / P3)
 
     # ── Winning Margin Buckets ────────────────────────────
     # e.g. {"1-3": 0.20, "4-6": 0.18, "7-13": 0.35, "14+": 0.27}
@@ -129,6 +147,8 @@ class PredictionResult:
     decision_prob: float | None = None        # UFC: P(goes to decision)
     ko_tko_prob: float | None = None          # UFC: P(KO/TKO)
     submission_prob: float | None = None      # UFC: P(submission)
+    early_finish_prob: float | None = None    # UFC: P(finish in rounds 1-2)
+    round1_finish_prob: float | None = None   # UFC: P(finish in round 1)
 
     # ── Winning Margin Bands ──────────────────────────────
     # Dict of band_name → probability (e.g. {"1-5": 0.28, "6-10": 0.35, ...})
@@ -187,8 +207,192 @@ class PredictionResult:
     esports_map_total: float | None = None           # predicted total maps played
     esports_map_total_over2_prob: float | None = None  # P(series goes 3+ maps)
 
+    # ── MLB First 5 Innings (F5) ──────────────────────────
+    f5_home_win_prob: float | None = None   # P(home leads after 5 innings)
+    f5_away_win_prob: float | None = None   # P(away leads after 5 innings)
+    f5_tie_prob: float | None = None        # P(tied after 5 innings)
+    f5_over4_5_prob: float | None = None    # P(total runs F5 > 4.5)
+    f5_under4_5_prob: float | None = None   # P(total runs F5 ≤ 4.5)
 
-    # ── Meta ─────────────────────────────────────────────
+    # ── Soccer Correct Score Bands ────────────────────────
+    score_nil_nil_prob: float | None = None   # P(0-0)
+    score_1_0_prob: float | None = None       # P(home wins 1-0)
+    score_0_1_prob: float | None = None       # P(away wins 0-1)
+    score_1_1_prob: float | None = None       # P(1-1 draw)
+    score_2plus_0_prob: float | None = None   # P(home wins 2-0+)
+    score_0_2plus_prob: float | None = None   # P(away wins 0-2+)
+    score_2_1_prob: float | None = None       # P(home wins 2-1)
+    score_1_2_prob: float | None = None       # P(away wins 1-2)
+    score_3plus_total_prob: float | None = None  # P(3+ total goals)
+    score_low_total_prob: float | None = None    # P(0-1 total goals)
+
+    # ── Soccer Corners Markets ────────────────────────────
+    corners_over9_5_prob: float | None = None    # P(total corners > 9.5)
+    corners_over10_5_prob: float | None = None   # P(total corners > 10.5)
+    corners_over11_5_prob: float | None = None   # P(total corners > 11.5)
+
+    # ── Soccer Cards Markets ──────────────────────────────
+    cards_over3_5_prob: float | None = None      # P(total bookings > 3.5)
+    cards_over4_5_prob: float | None = None      # P(total bookings > 4.5)
+    cards_over5_5_prob: float | None = None      # P(total bookings > 5.5)
+
+    # ── Soccer Second-Half Goals Markets ─────────────────
+    soccer_h2_over0_5_prob: float | None = None  # P(2nd half has ≥1 goal)
+    soccer_h2_over1_5_prob: float | None = None  # P(2nd half has ≥2 goals)
+    soccer_h2_over2_5_prob: float | None = None  # P(2nd half has ≥3 goals)
+
+    # ── NBA/WNBA/NCAAB Three-Pointer Markets ─────────────
+    threes_over_low_prob: float | None = None    # P(total 3PM > dynamic low line)
+    threes_over_mid_prob: float | None = None    # P(total 3PM > dynamic mid line)
+    threes_over_high_prob: float | None = None   # P(total 3PM > dynamic high line)
+    threes_low_line: float | None = None         # Dynamic low 3PM O/U line
+    threes_mid_line: float | None = None         # Dynamic mid 3PM O/U line
+    threes_high_line: float | None = None        # Dynamic high 3PM O/U line
+
+    # ── NHL Total Shots Markets ───────────────────────────
+    shots_over55_5_prob: float | None = None     # P(total shots > 55.5)
+    shots_over60_5_prob: float | None = None     # P(total shots > 60.5)
+    shots_over65_5_prob: float | None = None     # P(total shots > 65.5)
+
+    # ── MLB Total Hits Markets ────────────────────────────
+    hits_over14_5_prob: float | None = None      # P(total hits > 14.5)
+    hits_over16_5_prob: float | None = None      # P(total hits > 16.5)
+    hits_over18_5_prob: float | None = None      # P(total hits > 18.5)
+
+    # ── NBA/WNBA Total Rebounds Markets ──────────────────
+    rebounds_over_low_prob: float | None = None  # P(total rebounds > dynamic low line)
+    rebounds_over_mid_prob: float | None = None  # P(total rebounds > dynamic mid line)
+    rebounds_over_high_prob: float | None = None # P(total rebounds > dynamic high line)
+    rebounds_low_line: float | None = None
+    rebounds_mid_line: float | None = None
+    rebounds_high_line: float | None = None
+
+    # ── NBA/WNBA Total Turnovers Markets ─────────────────
+    turnovers_over_low_prob: float | None = None # P(total turnovers > dynamic low line)
+    turnovers_over_mid_prob: float | None = None # P(total turnovers > dynamic mid line)
+    turnovers_over_high_prob: float | None = None# P(total turnovers > dynamic high line)
+    turnovers_low_line: float | None = None
+    turnovers_mid_line: float | None = None
+    turnovers_high_line: float | None = None
+
+    # ── NBA/WNBA Total Assists Markets ───────────────────
+    assists_over_low_prob: float | None = None   # P(total assists > dynamic low line)
+    assists_over_mid_prob: float | None = None   # P(total assists > dynamic mid line)
+    assists_over_high_prob: float | None = None  # P(total assists > dynamic high line)
+    assists_low_line: float | None = None
+    assists_mid_line: float | None = None
+    assists_high_line: float | None = None
+
+    # ── UFC Total Rounds Markets ──────────────────────────
+    ufc_rounds_over_1_5_prob: float | None = None     # P(fight goes past round 1)
+    ufc_rounds_over_2_5_prob: float | None = None     # P(fight goes 3+ rounds)
+    ufc_rounds_over_3_5_prob: float | None = None     # P(fight goes 4+ rounds)
+
+    # ── NFL/NCAAF/NBA First Quarter Total Markets ──────────
+    q1_home_win_prob: float | None = None             # P(home wins first quarter)
+    q1_total_over_low_prob: float | None = None
+    q1_total_over_mid_prob: float | None = None
+    q1_total_over_high_prob: float | None = None
+    q1_total_low_line: float | None = None
+    q1_total_mid_line: float | None = None
+    q1_total_high_line: float | None = None
+
+    # ── Q3/Q4 Period Total Markets (basketball/football) ──
+    q3_over_low_prob: float | None = None
+    q3_over_mid_prob: float | None = None
+    q3_over_high_prob: float | None = None
+    q3_over_low_line: float | None = None
+    q3_over_mid_line: float | None = None
+    q3_over_high_line: float | None = None
+    q4_over_low_prob: float | None = None
+    q4_over_mid_prob: float | None = None
+    q4_over_high_prob: float | None = None
+    q4_over_low_line: float | None = None
+    q4_over_mid_line: float | None = None
+    q4_over_high_line: float | None = None
+
+    # ── NHL Period Goals O/U Markets ─────────────────────
+    nhl_p1_goals_over_low_prob: float | None = None    # P(P1 goals > dynamic low line)
+    nhl_p1_goals_over_mid_prob: float | None = None
+    nhl_p1_goals_over_high_prob: float | None = None
+    nhl_p2_goals_over_low_prob: float | None = None
+    nhl_p2_goals_over_mid_prob: float | None = None
+    nhl_p2_goals_over_high_prob: float | None = None
+    nhl_p3_goals_over_low_prob: float | None = None
+    nhl_p3_goals_over_mid_prob: float | None = None
+    nhl_p3_goals_over_high_prob: float | None = None
+
+    # ── Soccer Total Shots Markets ───────────────────────
+    shots_total_over_low_prob: float | None = None
+    shots_total_over_mid_prob: float | None = None
+    shots_total_over_high_prob: float | None = None
+    shots_total_low_line: float | None = None
+    shots_total_mid_line: float | None = None
+    shots_total_high_line: float | None = None
+
+    # ── NHL Shots Markets (dynamic lines) ──────────────
+    shots_over_low_prob: float | None = None
+    shots_over_mid_prob: float | None = None
+    shots_over_high_prob: float | None = None
+    shots_over_low_line: float | None = None
+    shots_over_mid_line: float | None = None
+    shots_over_high_line: float | None = None
+    home_shots_advantage_prob: float | None = None
+
+    # ── MLB Per-Inning NRFI Markets ────────────────────
+    nrfi_i1_prob: float | None = None   # P(no run in inning 1)
+    nrfi_i2_prob: float | None = None
+    nrfi_i3_prob: float | None = None
+    nrfi_i4_prob: float | None = None
+    nrfi_i5_prob: float | None = None
+    nrfi_i6_prob: float | None = None
+    nrfi_i7_prob: float | None = None
+    nrfi_i8_prob: float | None = None
+    nrfi_i9_prob: float | None = None
+    f7_home_win_prob: float | None = None    # P(home leads after 7 innings)
+    f7_over_prob: float | None = None        # P(F7 total > dynamic line)
+    f7_over_line: float | None = None        # Dynamic F7 O/U line
+    late_inning_over_prob: float | None = None  # P(innings 7-9 total > line)
+    late_inning_line: float | None = None
+
+    # ── Close Game / Blowout Markets ───────────────────
+    close_game_prob: float | None = None     # P(margin <= sport-specific threshold)
+    close_game_thresh: float | None = None   # Threshold used (e.g. 10 for NBA)
+    blowout_win_prob: float | None = None    # P(margin > blowout threshold)
+    one_score_game_prob: float | None = None # P(NFL/NCAAF margin <= 8 points)
+
+    # ── NFL Second-Half Total Markets ──────────────────
+    nfl_2h_over_low_prob: float | None = None
+    nfl_2h_over_mid_prob: float | None = None
+    nfl_2h_over_high_prob: float | None = None
+    nfl_2h_over_low_line: float | None = None
+    nfl_2h_over_mid_line: float | None = None
+    nfl_2h_over_high_line: float | None = None
+    nfl_scoring_surge_prob: float | None = None  # P(2H total > 1H total)
+
+    # ── High / Low Scoring Markets ─────────────────────
+    high_scoring_prob: float | None = None   # P(total > 90th percentile)
+    high_scoring_line: float | None = None   # 90th percentile total line
+    low_scoring_prob: float | None = None    # P(total < 10th percentile)
+    low_scoring_line: float | None = None    # 10th percentile total line
+    both_score_high_prob: float | None = None  # P(both teams score above median)
+
+    # ── BTTS + Win Combo Markets ───────────────────────
+    btts_home_win_prob: float | None = None  # P(BTTS AND home wins)
+    btts_away_win_prob: float | None = None  # P(BTTS AND away wins)
+    btts_draw_prob: float | None = None      # P(BTTS AND draw/tie)
+
+    # ── eSports Series Markets ─────────────────────────
+    home_2_0_win_prob: float | None = None   # P(home wins 2-0)
+    away_2_0_win_prob: float | None = None   # P(away wins 2-0)
+    esports_decider_map_prob: float | None = None  # P(series goes to 3 maps)
+
+    # ── Motorsport Extra Markets ───────────────────────
+    motor_podium_prob: float | None = None   # P(driver finishes top 3)
+    motor_points_prob: float | None = None   # P(driver scores points, top 10)
+    motor_dnf_prob: float | None = None      # P(driver does not finish)
+    motor_fastest_lap_prob: float | None = None  # P(driver sets fastest lap)
+
     confidence: float = 0.50  # 0.50 – 0.99
     n_models: int = 0
     consensus: float = 0.0  # fraction of models agreeing with majority

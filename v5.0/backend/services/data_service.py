@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 _ALL_KINDS = (
     "games", "teams", "standings", "players", "player_stats",
     "odds", "predictions", "injuries", "news",
+    "team_game_stats", "batter_game_stats", "pitcher_game_stats",
+    "advanced_batting", "advanced_stats", "team_stats", "transactions",
     "market_signals", "schedule_fatigue",
 )
 
@@ -488,6 +490,31 @@ class DataService:
 
         return self._get_cached(key, ttl, loader)
 
+    def get_game(self, sport: str, game_id: str, season: str | None = None) -> dict | None:
+        """Return a single game by ID (checks current season if season=None)."""
+        records = self.get_games(sport, season=season)
+        for r in records:
+            if str(r.get("id", r.get("game_id", ""))) == game_id:
+                return r
+        return None
+
+    def get_weather(self, sport: str, season: str, game_id: str) -> list[dict]:
+        """Return weather records for a specific game from the weather parquet."""
+        key = f"weather:{sport}:{season}:{game_id}"
+        ttl = self._settings.cache_ttl_games
+
+        def loader() -> list[dict]:
+            df = self._load_kind(sport, "weather", season=season)
+            if df.empty:
+                return []
+            id_col = "game_id" if "game_id" in df.columns else ("id" if "id" in df.columns else None)
+            if id_col is None:
+                return []
+            df = df[df[id_col].astype(str) == game_id]
+            return self._df_to_records(df)
+
+        return self._get_cached(key, ttl, loader)
+
     def get_news(self, sport: str, limit: int = 50) -> list[dict]:
         key = f"news:{sport}:{limit}"
         ttl = self._settings.cache_ttl_games
@@ -771,5 +798,17 @@ _instance: DataService | None = None
 def get_data_service() -> DataService:
     global _instance
     if _instance is None:
-        _instance = DataService()
+        settings = get_settings()
+        backend_reader = (settings.backend_reader or "parquet").strip().lower()
+        if backend_reader == "duckdb":
+            try:
+                from services.data_service_duckdb import DataServiceDuckDB
+
+                _instance = DataServiceDuckDB()
+                logger.info("Data service initialized with duckdb backend")
+            except Exception:
+                logger.exception("Failed to initialize duckdb backend; falling back to parquet")
+                _instance = DataService()
+        else:
+            _instance = DataService()
     return _instance

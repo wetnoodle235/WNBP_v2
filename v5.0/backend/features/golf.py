@@ -121,18 +121,28 @@ class GolfExtractor(BaseFeatureExtractor):
 
     @staticmethod
     def _fast_momentum(hist: pd.DataFrame, window: int = 5) -> dict[str, float]:
-        """Trend in recent finish positions."""
+        """Trend in recent finish positions and score-to-par trajectory."""
         if hist.empty or len(hist) < 2:
-            return {"momentum_trend": 0.0, "improving": 0.0}
+            return {"momentum_trend": 0.0, "improving": 0.0, "score_to_par_trend": 0.0}
         recent = hist.head(window)
         pos = recent["_position"].dropna()
         if len(pos) < 2:
-            return {"momentum_trend": 0.0, "improving": 0.0}
+            return {"momentum_trend": 0.0, "improving": 0.0, "score_to_par_trend": 0.0}
         # Oldest→newest for trend calculation
         vals = pos.values[::-1]
         x = np.arange(len(vals), dtype=float)
         slope = np.polyfit(x, vals, 1)[0]
-        return {"momentum_trend": float(-slope), "improving": 1.0 if slope < 0 else 0.0}
+
+        # Score-to-par trend: negative slope = improving (scoring lower)
+        stp = recent["_score_to_par"].dropna()
+        stp_trend = 0.0
+        if len(stp) >= 2:
+            stp_vals = stp.values[::-1]
+            sx = np.arange(len(stp_vals), dtype=float)
+            stp_trend = float(-np.polyfit(sx, stp_vals, 1)[0])  # positive = improving
+
+        return {"momentum_trend": float(-slope), "improving": 1.0 if slope < 0 else 0.0,
+                "score_to_par_trend": stp_trend}
 
     # ── extract_all override ──────────────────────────────
 
@@ -326,7 +336,7 @@ class GolfExtractor(BaseFeatureExtractor):
             "scoring_avg", "scoring_consistency", "best_score_to_par", "worst_score_to_par",
             "field_size", "field_avg_finish",
             "rest_days", "tournaments_last_30d",
-            "momentum_trend", "improving",
+            "momentum_trend", "improving", "score_to_par_trend",
             # World ranking / season standing (from standings data)
             "world_rank", "world_rank_inv", "season_wins",
             "season_points", "season_games_played",

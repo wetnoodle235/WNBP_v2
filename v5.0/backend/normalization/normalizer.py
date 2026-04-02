@@ -30,12 +30,15 @@ from api.models.schemas import (
     MarketSignal,
     News,
     Odds,
+    PitcherGameStats,
     Player,
     PlayerProp,
     Prediction,
+    BatterGameStats,
     ScheduleFatigue,
     Standing,
     Team,
+    TeamGameStats,
     Weather,
     _Base,
 )
@@ -51,24 +54,35 @@ LoaderFn = Callable[[Path, str, str], list[dict[str, Any]]]
 # ``data/raw/{provider}/``.
 
 SPORT_PROVIDER_DIR: dict[str, dict[str, str]] = {
-    "nba":        {"espn": "nba",        "nbastats": "nba",        "odds": "nba",  "oddsapi": "nba",  "fivethirtyeight": "nba"},
+    "nba":        {"espn": "nba",        "nbastats": "nba",        "odds": "nba",  "oddsapi": "nba"},
     "wnba":       {"espn": "wnba",       "nbastats": "wnba",       "odds": "wnba"},
     "ncaab":      {"espn": "ncaab",                                 "odds": "ncaab"},
     "ncaaw":      {"espn": "ncaaw"},
-    "nfl":        {"espn": "nfl",        "nflfastr": "nfl",        "odds": "nfl",  "oddsapi": "nfl",  "fivethirtyeight": "nfl"},
+    "nfl":        {"espn": "nfl",                           "odds": "nfl",  "oddsapi": "nfl"},
     "ncaaf":      {"espn": "ncaaf",      "cfbdata": "ncaaf",        "odds": "ncaaf"},
     "mlb":        {"espn": "mlb",        "lahman": "mlb",          "odds": "mlb",  "oddsapi": "mlb",  "mlbstats": "mlb"},
     "nhl":        {"espn": "nhl",        "nhl": "nhl",             "odds": "nhl",  "oddsapi": "nhl"},
-    "epl":        {"espn": "epl",        "statsbomb": "epl",       "odds": "epl",  "oddsapi": "epl",  "footballdata": "epl",  "fivethirtyeight": "epl"},
-    "laliga":     {"espn": "laliga",     "statsbomb": "laliga",    "odds": "laliga",  "oddsapi": "laliga",  "footballdata": "laliga",  "fivethirtyeight": "laliga"},
-    "bundesliga": {"espn": "bundesliga", "statsbomb": "bundesliga","odds": "bundesliga",  "oddsapi": "bundesliga",  "footballdata": "bundesliga",  "fivethirtyeight": "bundesliga"},
-    "seriea":     {"espn": "seriea",     "statsbomb": "seriea",    "odds": "seriea",  "oddsapi": "seriea",  "footballdata": "seriea",  "fivethirtyeight": "seriea"},
-    "ligue1":     {"espn": "ligue1",     "statsbomb": "ligue1",    "odds": "ligue1",  "oddsapi": "ligue1",  "footballdata": "ligue1",  "fivethirtyeight": "ligue1"},
-    "mls":        {"espn": "mls",        "statsbomb": "mls",       "odds": "mls",  "oddsapi": "mls",  "footballdata": "mls",  "fivethirtyeight": "mls"},
-    "ucl":        {"espn": "ucl",        "statsbomb": "ucl",       "odds": "ucl",  "oddsapi": "ucl",  "footballdata": "ucl",  "fivethirtyeight": "ucl"},
+    "epl":        {"espn": "epl",        "statsbomb": "epl",       "odds": "epl",  "oddsapi": "epl",  "footballdata": "epl",  "understat": "epl"},
+    "laliga":     {"espn": "laliga",     "statsbomb": "laliga",    "odds": "laliga",  "oddsapi": "laliga",  "footballdata": "laliga",  "understat": "laliga"},
+    "bundesliga": {"espn": "bundesliga", "statsbomb": "bundesliga","odds": "bundesliga",  "oddsapi": "bundesliga",  "footballdata": "bundesliga",  "understat": "bundesliga"},
+    "seriea":     {"espn": "seriea",     "statsbomb": "seriea",    "odds": "seriea",  "oddsapi": "seriea",  "footballdata": "seriea",  "understat": "seriea"},
+    "ligue1":     {"espn": "ligue1",     "statsbomb": "ligue1",    "odds": "ligue1",  "oddsapi": "ligue1",  "footballdata": "ligue1",  "understat": "ligue1"},
+    "mls":        {"espn": "mls",        "statsbomb": "mls",       "odds": "mls",  "oddsapi": "mls",  "footballdata": "mls"},
+    "ucl":        {"espn": "ucl",        "statsbomb": "ucl",       "odds": "ucl",  "oddsapi": "ucl",  "footballdata": "ucl"},
     "nwsl":       {"espn": "nwsl",       "statsbomb": "nwsl"},
     "ligamx":     {"espn": "ligamx"},
-    "europa":     {"espn": "europa"},
+    "europa":     {"espn": "europa",     "footballdata": "europa",  "odds": "europa",  "oddsapi": "europa"},
+    # Additional top-flight leagues
+    "eredivisie":   {"footballdata": "eredivisie",   "espn": "eredivisie",   "odds": "eredivisie",   "oddsapi": "eredivisie"},
+    "primeiraliga": {"footballdata": "primeiraliga", "espn": "primeiraliga", "odds": "primeiraliga", "oddsapi": "primeiraliga"},
+    # Second divisions
+    "championship": {"footballdata": "championship", "espn": "championship", "odds": "championship", "oddsapi": "championship"},
+    "bundesliga2":  {"footballdata": "bundesliga2",  "espn": "bundesliga2",  "odds": "bundesliga2",  "oddsapi": "bundesliga2"},
+    "serieb":       {"footballdata": "serieb",       "espn": "serieb",       "odds": "serieb",       "oddsapi": "serieb"},
+    "ligue2":       {"footballdata": "ligue2",       "espn": "ligue2",       "odds": "ligue2",       "oddsapi": "ligue2"},
+    # International tournaments (WC/EC — specific years only)
+    "worldcup":     {"footballdata": "worldcup",     "espn": "worldcup"},
+    "euros":        {"footballdata": "euros",         "espn": "euros"},
     "f1":         {"ergast": "f1",       "openf1": "f1",      "espn": "f1"},
     "indycar":    {"espn": "indycar"},
     "atp":        {"tennisabstract": "atp",  "espn": "atp",           "odds": "atp"},
@@ -110,11 +124,17 @@ def _provider_base_dir(
         season = _nbastats_season(season)
     elif provider == "lahman":
         season = "all"
-    elif provider == "fivethirtyeight":
-        season = "all"
     elif provider == "odds":
         # Odds collector stores data as raw/odds/{sport}/{date}/ — no season level
         return raw_dir / provider / sport_dir
+    elif provider in {"oddsapi", "sgo"}:
+        # Canonical odds provider namespace (with legacy fallback):
+        # raw/odds/providers/{provider}/{sport}/{season}/...
+        canonical = raw_dir / "odds" / "providers" / provider / sport_dir / season
+        legacy = raw_dir / provider / sport_dir / season
+        if canonical.exists() or not legacy.exists():
+            return canonical
+        return legacy
     return raw_dir / provider / sport_dir / season
 
 
@@ -135,6 +155,203 @@ def _load_csv(path: Path, **kwargs: Any) -> pd.DataFrame:
     compression = "gzip" if path.name.endswith(".gz") else None
     return pd.read_csv(path, compression=compression, low_memory=False, **kwargs)
 
+
+def _load_cfbdata_json_compat(base: Path, season: str, endpoint: str, filename: str) -> list[dict[str, Any]]:
+    """Load CFBData JSON with fallback from new hierarchical to old flat structure.
+    
+    Tries new structure first (by week/date), then falls back to old flat structure.
+    For split files, automatically merges all partitions into a single list.
+    
+    Args:
+        base: Season directory (e.g., `data/raw/cfbdata/ncaaf/2025`)
+        season: Season year (e.g., '2025')
+        endpoint: Endpoint name (e.g., 'games', 'plays', 'stats')
+        filename: Fallback filename in old structure (e.g., 'games.json')
+    
+    Returns:
+        Merged list of records from new or old structure, empty list if not found.
+    """
+    records: list[dict[str, Any]] = []
+    season_dir = base
+
+    # Preferred season-wide endpoint layout: {season}/{endpoint}/{filename}
+    endpoint_file = season_dir / endpoint / filename
+    endpoint_data = _load_json(endpoint_file)
+    if endpoint_data is not None:
+        if isinstance(endpoint_data, list):
+            return endpoint_data
+        if isinstance(endpoint_data, dict):
+            return [endpoint_data]
+    
+    if endpoint == "games":
+        # Endpoint-first structure: {season}/games/{seasonType}/week_xx/date/*.json
+        for season_type_dir in sorted((season_dir / "games").glob("*")):
+            if not season_type_dir.is_dir():
+                continue
+            for week_dir in sorted(season_type_dir.glob("week_*/*")):
+                if not week_dir.is_dir():
+                    continue
+                for game_file in week_dir.glob("*.json"):
+                    data = _load_json(game_file)
+                    if isinstance(data, dict):
+                        records.append(data)
+        if records:
+            return records
+
+        # Legacy transition structure: {season}/week/games/date/*.json
+        for week_dir in sorted(season_dir.glob("*/games/*")):
+            if not week_dir.is_dir():
+                continue
+            for game_file in week_dir.glob("*.json"):
+                data = _load_json(game_file)
+                if isinstance(data, dict):
+                    records.append(data)
+        if records:
+            return records
+    
+    elif endpoint == "plays":
+        # Endpoint-first structure: {season}/plays/{seasonType}/week_xx/date/*.json
+        for season_type_dir in sorted((season_dir / "plays").glob("*")):
+            if not season_type_dir.is_dir():
+                continue
+            for week_dir in sorted(season_type_dir.glob("week_*/*")):
+                if not week_dir.is_dir():
+                    continue
+                for play_file in week_dir.glob("*.json"):
+                    data = _load_json(play_file)
+                    if isinstance(data, list):
+                        records.extend(data)
+                    elif isinstance(data, dict):
+                        records.append(data)
+        if records:
+            return records
+
+        # Legacy transition structure: {season}/week/plays/date/*.json
+        for week_dir in sorted(season_dir.glob("*/plays/*")):
+            if not week_dir.is_dir():
+                continue
+            for play_file in week_dir.glob("*.json"):
+                data = _load_json(play_file)
+                if isinstance(data, list):
+                    records.extend(data)
+                elif isinstance(data, dict):
+                    records.append(data)
+        if records:
+            return records
+    
+    elif endpoint == "stats_player_season":
+        # Endpoint-first structure: {season}/stats_player_season/{seasonType}/week_xx/stats.json
+        for season_type_dir in sorted((season_dir / "stats_player_season").glob("*")):
+            if not season_type_dir.is_dir():
+                continue
+            for stat_file in sorted(season_type_dir.glob("week_*/stats.json")):
+                data = _load_json(stat_file)
+                if isinstance(data, list):
+                    records.extend(data)
+                elif isinstance(data, dict):
+                    records.append(data)
+        if records:
+            return records
+
+        # Legacy transition structure: {season}/week/stats/*.json
+        for week_dir in sorted(season_dir.glob("*/stats")):
+            if not week_dir.is_dir():
+                continue
+            for stat_file in sorted(week_dir.glob("players_*.json")):
+                data = _load_json(stat_file)
+                if isinstance(data, list):
+                    records.extend(data)
+                elif isinstance(data, dict):
+                    records.append(data)
+        if records:
+            return records
+    
+    elif endpoint == "rankings":
+        # Endpoint-first structure: {season}/rankings/{seasonType}/week_xx/rankings.json
+        for season_type_dir in sorted((season_dir / "rankings").glob("*")):
+            if not season_type_dir.is_dir():
+                continue
+            for rankings_file in sorted(season_type_dir.glob("week_*/rankings.json")):
+                data = _load_json(rankings_file)
+                if isinstance(data, list):
+                    records.extend(data)
+                elif isinstance(data, dict):
+                    records.append(data)
+        if records:
+            return records
+
+        # Legacy transition structure: {season}/reference/rankings.json
+        ref_file = season_dir / "reference" / "rankings.json"
+        data = _load_json(ref_file)
+        if data:
+            if isinstance(data, list):
+                return data
+            return [data]
+    
+    elif endpoint == "recruiting":
+        # Legacy transition structure: {season}/reference/recruiting.json
+        ref_file = season_dir / "reference" / "recruiting.json"
+        data = _load_json(ref_file)
+        if data:
+            if isinstance(data, list):
+                return data
+            return [data]
+
+    elif endpoint == "games_players":
+        for season_type_dir in sorted((season_dir / "games_players").glob("*")):
+            if not season_type_dir.is_dir():
+                continue
+            for week_dir in sorted(season_type_dir.glob("week_*/*")):
+                if not week_dir.is_dir():
+                    continue
+                for game_file in week_dir.glob("*.json"):
+                    data = _load_json(game_file)
+                    if isinstance(data, list):
+                        records.extend(data)
+                    elif isinstance(data, dict):
+                        records.append(data)
+        if records:
+            return records
+
+    elif endpoint == "lines":
+        for season_type_dir in sorted((season_dir / "lines").glob("*")):
+            if not season_type_dir.is_dir():
+                continue
+            for week_dir in sorted(season_type_dir.glob("week_*/*")):
+                if not week_dir.is_dir():
+                    continue
+                for line_file in week_dir.glob("*.json"):
+                    data = _load_json(line_file)
+                    if isinstance(data, dict):
+                        records.append(data)
+                    elif isinstance(data, list):
+                        records.extend(data)
+        if records:
+            return records
+    
+    # Fallback to old flat structure
+    old_file = season_dir / filename
+    data = _load_json(old_file)
+    if data:
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict):
+            return [data]
+    
+    return []
+
+
+def _load_cfbdata_endpoint_json(base: Path, filename: str) -> Any:
+    """Load CFBData season-wide endpoint JSON.
+
+    Preferred layout is endpoint-first: {season}/{endpoint}/{filename}
+    with fallback to legacy flat layout: {season}/{filename}.
+    """
+    endpoint = filename.replace(".json", "")
+    data = _load_json(base / endpoint / filename)
+    if data is not None:
+        return data
+    return _load_json(base / filename)
 
 def _safe_int(val: Any) -> int | None:
     if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -719,9 +936,87 @@ def _write_parquet(rows: list[dict[str, Any]], dest: Path) -> int:
 
 # ── ESPN ──────────────────────────────────────────────────
 
+def _espn_reference_path(base: Path, endpoint: str, legacy_name: str) -> Path:
+    candidate = base / "reference" / endpoint / f"{endpoint}.json"
+    if candidate.exists():
+        return candidate
+    index_candidate = base / endpoint / "index.json"
+    if index_candidate.exists():
+        return index_candidate
+    return base / legacy_name
+
+
+def _espn_team_profile_files(base: Path) -> list[Path]:
+    new_files = sorted((base / "teams").glob("*/profile.json"))
+    if new_files:
+        return new_files
+    legacy_dir = base / "teams"
+    if legacy_dir.is_dir():
+        return sorted(p for p in legacy_dir.glob("*.json") if p.name != "index.json")
+    return []
+
+
+def _espn_team_entity_files(base: Path, file_name: str, legacy_dir_name: str) -> list[Path]:
+    new_files = sorted((base / "teams").glob(f"*/{file_name}"))
+    if new_files:
+        return new_files
+    legacy_dir = base / legacy_dir_name
+    if legacy_dir.is_dir():
+        return sorted(legacy_dir.glob("*.json"))
+    return []
+
+
+def _espn_player_profile_files(base: Path) -> list[Path]:
+    new_files = sorted((base / "players").glob("*/profile.json"))
+    if new_files:
+        return new_files
+    legacy_dir = base / "players"
+    if legacy_dir.is_dir():
+        return sorted(p for p in legacy_dir.glob("*.json") if p.name not in {"index.json", "all_players.json"})
+    return []
+
+
+def _espn_athlete_profile_files(base: Path) -> list[Path]:
+    new_files = sorted((base / "athletes").glob("*/profile.json"))
+    if new_files:
+        return new_files
+    legacy_dir = base / "athletes"
+    if legacy_dir.is_dir():
+        return sorted(p for p in legacy_dir.glob("*.json") if p.name not in {"index.json", "all_athletes.json"})
+    return []
+
+
+def _espn_event_files(base: Path, file_name: str, legacy_dir_name: str, ignored_names: set[str] | None = None) -> list[Path]:
+    ignored = ignored_names or set()
+    new_files = sorted(base.glob(f"events/*/*/*/*/{file_name}"))
+    if new_files:
+        return new_files
+    legacy_dir = base / legacy_dir_name
+    if legacy_dir.is_dir():
+        return sorted(p for p in legacy_dir.glob("*.json") if p.name not in ignored)
+    return []
+
+
+def _espn_snapshot_files(base: Path, endpoint: str) -> list[Path]:
+    new_files = sorted(base.glob(f"snapshots/{endpoint}/*/*.json"))
+    if new_files:
+        return new_files
+    legacy_dir = base / endpoint
+    if legacy_dir.is_dir():
+        return sorted(legacy_dir.glob("*.json"))
+    return []
+
+
+def _espn_game_files(base: Path) -> list[Path]:
+    return _espn_event_files(base, "game.json", "games", {"all_games.json", "index.json"})
+
+
+def _espn_odds_files(base: Path) -> list[Path]:
+    return _espn_event_files(base, "odds.json", "odds", {"all_odds.json", "index.json"})
+
 def _espn_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    data = _load_json(base / "teams.json")
+    data = _load_json(_espn_reference_path(base, "teams", "teams.json"))
     if data and isinstance(data.get("teams"), list):
         for t in data["teams"]:
             rec: dict[str, Any] = {
@@ -738,29 +1033,27 @@ def _espn_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
             records.append(rec)
 
     # Enrich from individual team detail files
-    teams_dir = base / "teams"
-    if teams_dir.is_dir():
-        for p in teams_dir.glob("*.json"):
-            tdata = _load_json(p)
-            if not tdata:
-                continue
-            team = tdata.get("team", tdata)
-            tid = str(team.get("id", tdata.get("teamId", "")))
-            existing = next((r for r in records if r["id"] == tid), None)
-            if existing is None:
-                existing = {"id": tid}
-                records.append(existing)
-            existing.setdefault("name", team.get("displayName", ""))
-            existing.setdefault("abbreviation", team.get("abbreviation"))
-            existing.setdefault("city", team.get("location"))
-            existing.setdefault("color_primary", team.get("color"))
-            existing.setdefault("color_secondary", team.get("alternateColor"))
-            logos = team.get("logos", [])
-            if logos:
-                existing.setdefault("logo_url", logos[0].get("href"))
-            venue = team.get("venue")
-            if isinstance(venue, dict):
-                existing.setdefault("venue_name", venue.get("fullName"))
+    for p in _espn_team_profile_files(base):
+        tdata = _load_json(p)
+        if not tdata:
+            continue
+        team = tdata.get("team", tdata)
+        tid = str(team.get("id", tdata.get("teamId", "")))
+        existing = next((r for r in records if r["id"] == tid), None)
+        if existing is None:
+            existing = {"id": tid}
+            records.append(existing)
+        existing.setdefault("name", team.get("displayName", ""))
+        existing.setdefault("abbreviation", team.get("abbreviation"))
+        existing.setdefault("city", team.get("location"))
+        existing.setdefault("color_primary", team.get("color"))
+        existing.setdefault("color_secondary", team.get("alternateColor"))
+        logos = team.get("logos", [])
+        if logos:
+            existing.setdefault("logo_url", logos[0].get("href"))
+        venue = team.get("venue")
+        if isinstance(venue, dict):
+            existing.setdefault("venue_name", venue.get("fullName"))
     return records
 
 
@@ -848,88 +1141,75 @@ def _espn_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     records_by_id: dict[str, dict[str, Any]] = {}
 
     # 1) Individual player profile files (players/{id}.json)
-    players_dir = base / "players"
-    if players_dir.is_dir():
-        for p in players_dir.glob("*.json"):
-            data = _load_json(p)
-            if not data:
-                continue
-            athlete = data.get("athlete", data)
-            rec = _athlete_to_record(
-                athlete, team_id=data.get("teamId"),
-            )
-            if not rec["id"]:
-                rec["id"] = str(data.get("playerId", ""))
-            if rec["id"] and rec["id"] not in seen_ids:
-                records.append(rec)
-                seen_ids.add(rec["id"])
-                records_by_id[rec["id"]] = rec
+    for p in _espn_player_profile_files(base):
+        data = _load_json(p)
+        if not data:
+            continue
+        athlete = data.get("athlete", data)
+        rec = _athlete_to_record(
+            athlete, team_id=data.get("teamId"),
+        )
+        if not rec["id"]:
+            rec["id"] = str(data.get("playerId", ""))
+        if rec["id"] and rec["id"] not in seen_ids:
+            records.append(rec)
+            seen_ids.add(rec["id"])
+            records_by_id[rec["id"]] = rec
 
     # 2) Team roster files (rosters/{team_id}.json)
-    rosters_dir = base / "rosters"
-    if rosters_dir.is_dir():
-        for p in rosters_dir.glob("*.json"):
-            data = _load_json(p)
-            if not data:
-                continue
-            team_id = str(data.get("teamId", p.stem))
-            # Extract team name from roster metadata
-            roster_team_name = None
-            team_meta = data.get("team")
-            if isinstance(team_meta, dict):
-                roster_team_name = team_meta.get("displayName") or team_meta.get("name") or team_meta.get("shortDisplayName")
-            for group in data.get("athletes", []):
-                # Two ESPN roster formats:
-                #  A) Grouped: group = {position: ..., items: [athlete, ...]}
-                #  B) Flat:    group = athlete dict directly (soccer, etc.)
-                if isinstance(group, dict) and "items" in group:
-                    items = group["items"]
-                elif isinstance(group, dict) and "id" in group:
-                    items = [group]  # flat athlete object
-                else:
-                    items = []
-                for athlete in items:
-                    rec = _athlete_to_record(athlete, team_id=team_id, team_name=roster_team_name)
-                    if rec["id"] and rec["id"] not in seen_ids:
-                        records.append(rec)
-                        seen_ids.add(rec["id"])
-                        records_by_id[rec["id"]] = rec
-                    elif rec["id"] and rec["id"] in records_by_id:
-                        # Enrich existing record with non-null fields
-                        existing = records_by_id[rec["id"]]
-                        for k, v in rec.items():
-                            if v is not None and existing.get(k) is None:
-                                existing[k] = v
+    for p in _espn_team_entity_files(base, "roster.json", "rosters"):
+        data = _load_json(p)
+        if not data:
+            continue
+        team_id = str(data.get("teamId", p.parent.name if p.parent != base else p.stem))
+        roster_team_name = None
+        team_meta = data.get("team")
+        if isinstance(team_meta, dict):
+            roster_team_name = team_meta.get("displayName") or team_meta.get("name") or team_meta.get("shortDisplayName")
+        for group in data.get("athletes", []):
+            if isinstance(group, dict) and "items" in group:
+                items = group["items"]
+            elif isinstance(group, dict) and "id" in group:
+                items = [group]
+            else:
+                items = []
+            for athlete in items:
+                rec = _athlete_to_record(athlete, team_id=team_id, team_name=roster_team_name)
+                if rec["id"] and rec["id"] not in seen_ids:
+                    records.append(rec)
+                    seen_ids.add(rec["id"])
+                    records_by_id[rec["id"]] = rec
+                elif rec["id"] and rec["id"] in records_by_id:
+                    existing = records_by_id[rec["id"]]
+                    for k, v in rec.items():
+                        if v is not None and existing.get(k) is None:
+                            existing[k] = v
 
     # 3) Individual athlete detail files (athletes/{id}.json)
-    athletes_dir = base / "athletes"
-    if athletes_dir.is_dir():
-        for p in athletes_dir.glob("*.json"):
-            try:
-                data = _load_json(p)
-            except Exception:
-                continue
-            if not data or not isinstance(data, dict):
-                continue
-            athlete = data.get("athlete", data)
-            aid = str(athlete.get("id", p.stem))
-            rec = _athlete_to_record(athlete, team_id=None)
-            if aid in records_by_id:
-                # Enrich existing record
-                existing = records_by_id[aid]
-                for k, v in rec.items():
-                    if v is not None and existing.get(k) is None:
-                        existing[k] = v
-            elif aid and aid not in seen_ids:
-                # Team info from nested team object
-                team_obj = athlete.get("team")
-                if isinstance(team_obj, dict):
-                    rec["team_id"] = _safe_str(team_obj.get("id")) or rec.get("team_id")
-                    if not rec.get("team_name"):
-                        rec["team_name"] = team_obj.get("displayName") or team_obj.get("name")
-                records.append(rec)
-                seen_ids.add(aid)
-                records_by_id[aid] = rec
+    for p in _espn_athlete_profile_files(base):
+        try:
+            data = _load_json(p)
+        except Exception:
+            continue
+        if not data or not isinstance(data, dict):
+            continue
+        athlete = data.get("athlete", data)
+        aid = str(athlete.get("id", p.parent.name if p.parent != base else p.stem))
+        rec = _athlete_to_record(athlete, team_id=None)
+        if aid in records_by_id:
+            existing = records_by_id[aid]
+            for k, v in rec.items():
+                if v is not None and existing.get(k) is None:
+                    existing[k] = v
+        elif aid and aid not in seen_ids:
+            team_obj = athlete.get("team")
+            if isinstance(team_obj, dict):
+                rec["team_id"] = _safe_str(team_obj.get("id")) or rec.get("team_id")
+                if not rec.get("team_name"):
+                    rec["team_name"] = team_obj.get("displayName") or team_obj.get("name")
+            records.append(rec)
+            seen_ids.add(aid)
+            records_by_id[aid] = rec
 
     return records
 
@@ -943,14 +1223,10 @@ def _espn_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     seen_ids: set[str] = set()
 
     # 1) Game detail files (games/ directory)
-    games_dir = base / "games"
-    if games_dir.is_dir():
-        for p in games_dir.glob("*.json"):
-            if p.name == "all_games.json":
-                continue
-            data = _load_json(p)
-            if not data:
-                continue
+    for p in _espn_game_files(base):
+        data = _load_json(p)
+        if not data:
+            continue
             event_id = str(data.get("eventId", p.stem))
             summary = data.get("summary", {})
             boxscore = summary.get("boxscore", {})
@@ -1054,9 +1330,17 @@ def _espn_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
             venue_obj = game_info.get("venue")
             venue_name = venue_obj.get("fullName") if isinstance(venue_obj, dict) else None
 
+            # Season type and week from header
+            _st_code = header.get("season", {}).get("type") or 2
+            _st_map = {1: "preseason", 2: "regular", 3: "postseason", 4: "off-season"}
+            season_type_str = _st_map.get(int(_st_code), f"type_{_st_code}")
+            week_num = _safe_int(header.get("week"))
+
             rec: dict[str, Any] = {
                 "id": event_id,
                 "season": str(data.get("season", season)),
+                "season_type": season_type_str,
+                "week": week_num,
                 "date": game_date,
                 "start_time": game_start_time,
                 "status": status,
@@ -2133,14 +2417,26 @@ def _fill_boxscore_team_stats(
                     rec[f"{prefix}_punt_yards"] = _safe_int(stat_lookup["puntYards"])
 
 
+def _espn_sb_season_slug(event: dict) -> str:
+    """Safely extract season type slug from an ESPN scoreboard event."""
+    s = event.get("season")
+    if not isinstance(s, dict):
+        return ""
+    t = s.get("type")
+    if isinstance(t, dict):
+        return str(t.get("slug") or "").lower()
+    # season.slug is the readable slug; season.type is the int code
+    return str(s.get("slug") or "").lower()
+
+
 def _espn_scoreboard_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Extract games from ESPN daily scoreboard files, including quarter scores and team stats."""
-    sb_dir = base / "scoreboard"
-    if not sb_dir.is_dir():
+    sb_files = _espn_snapshot_files(base, "scoreboard")
+    if not sb_files:
         return []
     records: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
-    for sb_file in sorted(sb_dir.glob("*.json")):
+    for sb_file in sb_files:
         data = _load_json(sb_file)
         if not data:
             continue
@@ -2198,7 +2494,10 @@ def _espn_scoreboard_games(base: Path, sport: str, season: str) -> list[dict[str
                 "broadcast": _extract_broadcast(c),
                 "broadcast_url": _extract_broadcast_url(c, event),
                 "attendance": _safe_int(c.get("attendance")),
-                "season_type": None,
+                "season_type": (_sb_st_map := {"preseason": "preseason", "regular-season": "regular", "post-season": "postseason", "postseason": "postseason"}).get(
+                    _espn_sb_season_slug(event), "regular"
+                ),
+                "week": _safe_int((event.get("week") or {}).get("number") if isinstance(event.get("week"), dict) else event.get("week")),
             }
             # Normalise empty team IDs to None
             if not rec.get("home_team_id"):
@@ -2218,14 +2517,8 @@ def _espn_scoreboard_games(base: Path, sport: str, season: str) -> list[dict[str
 
 def _espn_injuries(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    data = _load_json(base / "injuries.json")
-    if not data:
-        return records
-    wrapper = data.get("injuries", data)
-    team_list: list = (
-        wrapper.get("injuries", []) if isinstance(wrapper, dict) else
-        wrapper if isinstance(wrapper, list) else []
-    )
+    top_level_files = _espn_snapshot_files(base, "injuries")
+    team_files = _espn_team_entity_files(base, "injuries.json", "injuries")
     _status_map = {
         "out": "out", "o": "out",
         "doubtful": "doubtful", "d": "doubtful",
@@ -2233,19 +2526,56 @@ def _espn_injuries(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
         "probable": "probable", "p": "probable",
         "day-to-day": "day_to_day", "dtd": "day_to_day",
     }
-    for team_entry in team_list:
-        team_id = str(team_entry.get("id", ""))
-        for inj in team_entry.get("injuries", []):
-            athlete = inj.get("athlete", {})
-            raw_status = (inj.get("status") or "unknown").lower()
-            rec: dict[str, Any] = {
-                "player_id": str(athlete.get("id", inj.get("id", ""))),
+    for injury_file in top_level_files:
+        data = _load_json(injury_file)
+        if not data:
+            continue
+        wrapper = data.get("injuries", data)
+        team_list: list = (
+            wrapper.get("injuries", []) if isinstance(wrapper, dict) else
+            wrapper if isinstance(wrapper, list) else []
+        )
+        for team_entry in team_list:
+            team_id = str(team_entry.get("id", ""))
+            for inj in team_entry.get("injuries", []):
+                athlete = inj.get("athlete", {})
+                raw_status = (inj.get("status") or "unknown").lower()
+                rec: dict[str, Any] = {
+                    "player_id": str(athlete.get("id", inj.get("id", ""))),
+                    "player_name": athlete.get("displayName", ""),
+                    "team_id": team_id,
+                    "status": _status_map.get(raw_status, raw_status),
+                    "description": inj.get("longComment") or inj.get("shortComment"),
+                }
+                details = inj.get("details")
+                if isinstance(details, dict):
+                    rec["body_part"] = details.get("type")
+                records.append(rec)
+
+    for injury_file in team_files:
+        data = _load_json(injury_file)
+        if not data:
+            continue
+        team_id = str(data.get("teamId", injury_file.parent.name if injury_file.parent != base else injury_file.stem))
+        wrapper = data.get("injuries", data)
+        if isinstance(wrapper, dict) and isinstance(wrapper.get("injuries"), list):
+            team_injuries = wrapper.get("injuries", [])
+        elif isinstance(wrapper, list):
+            team_injuries = wrapper
+        else:
+            team_injuries = []
+        for inj in team_injuries:
+            athlete = inj.get("athlete", {}) if isinstance(inj, dict) else {}
+            raw_status = (inj.get("status") if isinstance(inj, dict) else "unknown") or "unknown"
+            raw_status = str(raw_status).lower()
+            rec = {
+                "player_id": str(athlete.get("id", inj.get("id", "")) if isinstance(inj, dict) else ""),
                 "player_name": athlete.get("displayName", ""),
                 "team_id": team_id,
                 "status": _status_map.get(raw_status, raw_status),
-                "description": inj.get("longComment") or inj.get("shortComment"),
+                "description": (inj.get("longComment") or inj.get("shortComment")) if isinstance(inj, dict) else None,
             }
-            details = inj.get("details")
+            details = inj.get("details") if isinstance(inj, dict) else None
             if isinstance(details, dict):
                 rec["body_part"] = details.get("type")
             records.append(rec)
@@ -2254,10 +2584,10 @@ def _espn_injuries(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
 def _espn_news(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    news_dir = base / "news"
-    if not news_dir.is_dir():
+    news_files = _espn_snapshot_files(base, "news")
+    if not news_files:
         return records
-    for p in news_dir.glob("*.json"):
+    for p in news_files:
         data = _load_json(p)
         if not data:
             continue
@@ -2287,38 +2617,34 @@ def _espn_news(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
 def _espn_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    odds_dir = base / "odds"
-    if not odds_dir.is_dir():
+    odds_files = _espn_odds_files(base)
+    if not odds_files:
         return records
 
     # Build game_id → (home_team, away_team, date) lookup from game detail files
     team_lookup: dict[str, tuple[str, str, str]] = {}
-    games_dir = base / "games"
-    if games_dir.is_dir():
-        for gp in games_dir.glob("*.json"):
-            if gp.name == "all_games.json":
-                continue
-            gd = _load_json(gp)
-            if not gd:
-                continue
-            gid = str(gd.get("eventId", gp.stem))
-            sm = gd.get("summary", {})
-            hdr = sm.get("header", {})
-            comps = hdr.get("competitions", [{}])
-            ht = at = ""
-            game_date = ""
-            if comps:
-                game_date = _utc_to_et_date(comps[0].get("date") or "") or (comps[0].get("date") or "")[:10]
-                for c in comps[0].get("competitors", []):
-                    tn = c.get("team", {}).get("displayName", "")
-                    if c.get("homeAway") == "home":
-                        ht = tn
-                    elif c.get("homeAway") == "away":
-                        at = tn
-            if ht and at:
-                team_lookup[gid] = (ht, at, game_date)
+    for gp in _espn_game_files(base):
+        gd = _load_json(gp)
+        if not gd:
+            continue
+        gid = str(gd.get("eventId", gp.parent.name if gp.parent != base else gp.stem))
+        sm = gd.get("summary", {})
+        hdr = sm.get("header", {})
+        comps = hdr.get("competitions", [{}])
+        ht = at = ""
+        game_date = ""
+        if comps:
+            game_date = _utc_to_et_date(comps[0].get("date") or "") or (comps[0].get("date") or "")[:10]
+            for c in comps[0].get("competitors", []):
+                tn = c.get("team", {}).get("displayName", "")
+                if c.get("homeAway") == "home":
+                    ht = tn
+                elif c.get("homeAway") == "away":
+                    at = tn
+        if ht and at:
+            team_lookup[gid] = (ht, at, game_date)
 
-    for p in odds_dir.glob("*.json"):
+    for p in odds_files:
         data = _load_json(p)
         if not data:
             continue
@@ -2358,7 +2684,7 @@ def _espn_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
 def _espn_standings(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Parse ESPN v2 standings into normalized records."""
-    path = base / "standings.json"
+    path = _espn_reference_path(base, "standings", "standings.json")
     if not path.exists():
         return []
     data = _load_json(path)
@@ -2464,18 +2790,18 @@ def _espn_standings(base: Path, sport: str, season: str) -> list[dict[str, Any]]
 
 def _espn_team_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Parse ESPN per-team season statistics from ``team_stats/{teamId}.json``."""
-    ts_dir = base / "team_stats"
-    if not ts_dir.is_dir():
+    stat_files = _espn_team_entity_files(base, "statistics.json", "team_stats")
+    if not stat_files:
         return []
     records: list[dict[str, Any]] = []
-    for p in sorted(ts_dir.glob("*.json")):
+    for p in stat_files:
         try:
             data = _load_json(p)
         except Exception:
             continue
         if not data or not isinstance(data, dict):
             continue
-        team_id = _safe_str(data.get("teamId")) or p.stem
+        team_id = _safe_str(data.get("teamId")) or (p.parent.name if p.parent != base else p.stem)
         stats_obj = data.get("statistics", {})
         if not isinstance(stats_obj, dict):
             continue
@@ -2545,11 +2871,11 @@ def _espn_team_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]
 
 def _espn_transactions(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Parse ESPN transaction files from ``transactions/{date}.json``."""
-    tx_dir = base / "transactions"
-    if not tx_dir.is_dir():
+    tx_files = _espn_snapshot_files(base, "transactions")
+    if not tx_files:
         return []
     records: list[dict[str, Any]] = []
-    for p in sorted(tx_dir.glob("*.json")):
+    for p in tx_files:
         try:
             data = _load_json(p)
         except Exception:
@@ -2720,6 +3046,54 @@ def _nbastats_result_rows(data: dict | None) -> list[dict[str, Any]]:
     return rows
 
 
+def _nbastats_load_season_aggregate(base: Path, subdir: str, *segments: str) -> dict[str, Any] | None:
+    structured = base / subdir / "season_aggregates"
+    for segment in segments:
+        structured /= segment
+    data = _load_json(structured)
+    if data:
+        return data
+
+    legacy = base / subdir
+    for segment in segments:
+        legacy /= segment
+    return _load_json(legacy)
+
+
+def _nbastats_live_stat_map(entity: dict[str, Any]) -> dict[str, Any]:
+    stats: dict[str, Any] = {}
+    for item in entity.get("statistics", []) or []:
+        if not isinstance(item, dict):
+            continue
+        name = _safe_str(item.get("name") or item.get("stat"))
+        if name:
+            stats[name] = item.get("value")
+    return stats
+
+
+def _nbastats_team_name(team: dict[str, Any]) -> str:
+    city = _safe_str(team.get("teamCity"))
+    name = _safe_str(team.get("teamName"))
+    display = f"{city} {name}".strip()
+    return display or _safe_str(team.get("teamTricode")) or _safe_str(team.get("teamName"))
+
+
+def _nbastats_parse_minutes(value: Any) -> float | None:
+    text = _safe_str(value)
+    if not text:
+        return None
+    if text.startswith("PT") and text.endswith("S"):
+        minutes = 0.0
+        seconds = 0.0
+        body = text[2:-1]
+        if "M" in body:
+            minute_text, second_text = body.split("M", 1)
+            minutes = float(minute_text or 0)
+            seconds = float(second_text or 0)
+            return round(minutes + (seconds / 60.0), 2)
+    return _safe_float(value)
+
+
 def _nbastats_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Build game records from NBA Stats team-game-logs.json.
 
@@ -2728,13 +3102,73 @@ def _nbastats_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]
     (steals, blocks, turnovers, etc.) that ESPN scoreboard data lacks.
     """
     records: list[dict[str, Any]] = []
+    seen_game_ids: set[str] = set()
+
+    for subdir in ("regular-season", "playoffs"):
+        games_dir = base / subdir / "games"
+        if not games_dir.exists():
+            continue
+        for boxscore_path in sorted(games_dir.glob("*/boxscore.json")):
+            data = _load_json(boxscore_path) or {}
+            game = data.get("game") or {}
+            home = game.get("homeTeam") or {}
+            away = game.get("awayTeam") or {}
+            gid = _safe_str(game.get("gameId")) or boxscore_path.parent.name
+            if not gid or not home or not away:
+                continue
+            seen_game_ids.add(gid)
+
+            home_stats = _nbastats_live_stat_map(home)
+            away_stats = _nbastats_live_stat_map(away)
+            game_date = (
+                _safe_str(game.get("gameEt"))[:10]
+                or _safe_str(game.get("gameDateEst"))[:10]
+                or _safe_str(game.get("gameTimeUTC"))[:10]
+            )
+            game_status = _safe_str(game.get("gameStatusText")) or _safe_str(game.get("gameStatus"))
+            status = "final" if str(game.get("gameStatus")) == "3" or "final" in game_status.lower() else game_status.lower() or "scheduled"
+
+            rec: dict[str, Any] = {
+                "source": "nbastats",
+                "id": f"nba_{gid}",
+                "sport": sport,
+                "season": season,
+                "date": game_date,
+                "status": status,
+                "home_team": _nbastats_team_name(home),
+                "away_team": _nbastats_team_name(away),
+                "home_team_id": _safe_str(home.get("teamId")),
+                "away_team_id": _safe_str(away.get("teamId")),
+                "home_score": _safe_int(home.get("score")),
+                "away_score": _safe_int(away.get("score")),
+            }
+            for prefix, stat_map in (("home", home_stats), ("away", away_stats)):
+                rec[f"{prefix}_rebounds"] = _safe_int(stat_map.get("reboundsTotal") or stat_map.get("rebounds"))
+                rec[f"{prefix}_assists"] = _safe_int(stat_map.get("assists"))
+                rec[f"{prefix}_steals"] = _safe_int(stat_map.get("steals"))
+                rec[f"{prefix}_blocks"] = _safe_int(stat_map.get("blocks"))
+                rec[f"{prefix}_turnovers"] = _safe_int(stat_map.get("turnovers"))
+                rec[f"{prefix}_fouls"] = _safe_int(stat_map.get("foulsPersonal") or stat_map.get("fouls"))
+                rec[f"{prefix}_fgm"] = _safe_int(stat_map.get("fieldGoalsMade"))
+                rec[f"{prefix}_fga"] = _safe_int(stat_map.get("fieldGoalsAttempted"))
+                rec[f"{prefix}_fg_pct"] = _safe_float(stat_map.get("fieldGoalsPercentage"))
+                rec[f"{prefix}_three_m"] = _safe_int(stat_map.get("threePointersMade"))
+                rec[f"{prefix}_three_a"] = _safe_int(stat_map.get("threePointersAttempted"))
+                rec[f"{prefix}_three_pct"] = _safe_float(stat_map.get("threePointersPercentage"))
+                rec[f"{prefix}_ftm"] = _safe_int(stat_map.get("freeThrowsMade"))
+                rec[f"{prefix}_fta"] = _safe_int(stat_map.get("freeThrowsAttempted"))
+                rec[f"{prefix}_ft_pct"] = _safe_float(stat_map.get("freeThrowsPercentage"))
+                rec[f"{prefix}_offensive_rebounds"] = _safe_int(stat_map.get("reboundsOffensive"))
+                rec[f"{prefix}_defensive_rebounds"] = _safe_int(stat_map.get("reboundsDefensive"))
+            records.append(rec)
+
     game_teams: dict[str, dict[str, dict[str, Any]]] = {}  # gid -> {home/away -> row}
 
     for subdir in ("regular-season", "playoffs"):
-        path = base / subdir / "team-game-logs.json"
-        for rd in _nbastats_result_rows(_load_json(path)):
+        path_data = _nbastats_load_season_aggregate(base, subdir, "team-game-logs.json")
+        for rd in _nbastats_result_rows(path_data):
             gid = str(rd.get("GAME_ID", ""))
-            if not gid:
+            if not gid or gid in seen_game_ids:
                 continue
             matchup = rd.get("MATCHUP", "")
             # "MEM vs. DAL" = home game, "MEM @ DAL" = away game
@@ -2788,9 +3222,22 @@ def _nbastats_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]
 def _nbastats_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     seen: set[str] = set()
     records: list[dict[str, Any]] = []
+
+    for rd in _nbastats_result_rows(_load_json(base / "reference" / "all_players.json")):
+        pid = str(rd.get("PERSON_ID", rd.get("PLAYER_ID", "")))
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        records.append({
+            "id": pid,
+            "name": rd.get("DISPLAY_FIRST_LAST", rd.get("PLAYER_NAME", "")),
+            "team_id": _safe_str(rd.get("TEAM_ID")),
+            "team_abbreviation": rd.get("TEAM_ABBREVIATION"),
+        })
+
     for subdir in ("regular-season", "playoffs"):
-        path = base / subdir / "player-stats" / "base.json"
-        for rd in _nbastats_result_rows(_load_json(path)):
+        data = _nbastats_load_season_aggregate(base, subdir, "player-stats", "base.json")
+        for rd in _nbastats_result_rows(data):
             pid = str(rd.get("PLAYER_ID", ""))
             if not pid or pid in seen:
                 continue
@@ -2808,27 +3255,98 @@ def _nbastats_player_stats(
     base: Path, sport: str, season: str,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
     for subdir in ("regular-season", "playoffs"):
         # Build per-player advanced-stats lookup from split stat files
         adv_lookup: dict[str, dict[str, Any]] = {}
         for stat_file in ("advanced", "usage", "defense", "scoring"):
-            path = base / subdir / "player-stats" / f"{stat_file}.json"
-            for rd in _nbastats_result_rows(_load_json(path)):
+            data = _nbastats_load_season_aggregate(base, subdir, "player-stats", f"{stat_file}.json")
+            for rd in _nbastats_result_rows(data):
                 pid = str(rd.get("PLAYER_ID", ""))
                 if pid:
                     adv_lookup.setdefault(pid, {}).update(rd)
 
+        games_dir = base / subdir / "games"
+        if games_dir.exists():
+            for boxscore_path in sorted(games_dir.glob("*/boxscore.json")):
+                data = _load_json(boxscore_path) or {}
+                game = data.get("game") or {}
+                game_id = _safe_str(game.get("gameId")) or boxscore_path.parent.name
+                for team in (game.get("homeTeam") or {}, game.get("awayTeam") or {}):
+                    team_id = _safe_str(team.get("teamId"))
+                    for player in team.get("players", []) or []:
+                        if not isinstance(player, dict):
+                            continue
+                        pid = _safe_str(player.get("personId") or player.get("playerId"))
+                        if not pid:
+                            continue
+                        key = (game_id, pid)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        stat_map = _nbastats_live_stat_map(player)
+                        adv = adv_lookup.get(pid, {})
+                        player_name = (
+                            _safe_str(player.get("name"))
+                            or f"{_safe_str(player.get('firstName'))} {_safe_str(player.get('familyName'))}".strip()
+                        )
+                        records.append({
+                            "game_id": game_id,
+                            "player_id": pid,
+                            "player_name": player_name,
+                            "team_id": team_id,
+                            "season": season,
+                            "category": "basketball",
+                            "pts": _safe_int(stat_map.get("points")),
+                            "reb": _safe_int(stat_map.get("reboundsTotal") or stat_map.get("rebounds")),
+                            "ast": _safe_int(stat_map.get("assists")),
+                            "stl": _safe_int(stat_map.get("steals")),
+                            "blk": _safe_int(stat_map.get("blocks")),
+                            "to": _safe_int(stat_map.get("turnovers")),
+                            "fgm": _safe_int(stat_map.get("fieldGoalsMade")),
+                            "fga": _safe_int(stat_map.get("fieldGoalsAttempted")),
+                            "fg_pct": _safe_float(stat_map.get("fieldGoalsPercentage")),
+                            "ftm": _safe_int(stat_map.get("freeThrowsMade")),
+                            "fta": _safe_int(stat_map.get("freeThrowsAttempted")),
+                            "ft_pct": _safe_float(stat_map.get("freeThrowsPercentage")),
+                            "three_m": _safe_int(stat_map.get("threePointersMade")),
+                            "three_a": _safe_int(stat_map.get("threePointersAttempted")),
+                            "three_pct": _safe_float(stat_map.get("threePointersPercentage")),
+                            "oreb": _safe_int(stat_map.get("reboundsOffensive")),
+                            "dreb": _safe_int(stat_map.get("reboundsDefensive")),
+                            "pf": _safe_int(stat_map.get("foulsPersonal") or stat_map.get("fouls")),
+                            "plus_minus": _safe_int(player.get("plusMinusPoints") or stat_map.get("plusMinusPoints")),
+                            "min": _nbastats_parse_minutes(stat_map.get("minutes")),
+                            "off_rating": _safe_float(adv.get("OFF_RATING")),
+                            "def_rating": _safe_float(adv.get("DEF_RATING")),
+                            "net_rating": _safe_float(adv.get("NET_RATING")),
+                            "ast_pct": _safe_float(adv.get("AST_PCT")),
+                            "ast_to": _safe_float(adv.get("AST_TO")),
+                            "ts_pct": _safe_float(adv.get("TS_PCT")),
+                            "efg_pct": _safe_float(adv.get("EFG_PCT")),
+                            "usg_pct": _safe_float(adv.get("USG_PCT")),
+                            "pace": _safe_float(adv.get("PACE")),
+                            "pie": _safe_float(adv.get("PIE")),
+                            "def_ws": _safe_float(adv.get("DEF_WS")),
+                            "pct_pts_fb": _safe_float(adv.get("PCT_PTS_FB")),
+                            "pct_pts_paint": _safe_float(adv.get("PCT_PTS_PAINT")),
+                            "pct_pts_ft": _safe_float(adv.get("PCT_PTS_FT")),
+                            "pct_ast_fgm": _safe_float(adv.get("PCT_AST_FGM")),
+                        })
+
         # Prefer game-level logs, fall back to aggregated leaders
-        path = base / subdir / "player-game-logs.json"
-        data = _load_json(path)
+        data = _nbastats_load_season_aggregate(base, subdir, "player-game-logs.json")
         if not data:
-            path = base / subdir / "league-leaders.json"
-            data = _load_json(path)
+            data = _nbastats_load_season_aggregate(base, subdir, "league-leaders.json")
         for rd in _nbastats_result_rows(data):
             pid = str(rd.get("PLAYER_ID", ""))
             gid = str(rd.get("GAME_ID", f"{pid}_{season}_{subdir}"))
             if not pid:
                 continue
+            key = (gid, pid)
+            if key in seen:
+                continue
+            seen.add(key)
             adv = adv_lookup.get(pid, {})
             records.append({
                 "game_id": gid,
@@ -2878,194 +3396,6 @@ def _nbastats_player_stats(
             })
     return records
 
-
-# ── NFL FaSTR ─────────────────────────────────────────────
-
-def _nflfastr_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    df = _load_csv(base / "rosters.csv")
-    if df.empty:
-        return []
-    records: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
-        pid = _safe_str(row.get("gsis_id")) or _safe_str(row.get("espn_id"))
-        if not pid:
-            continue
-        ht = row.get("height")
-        height_str: str | None = None
-        if pd.notna(ht):
-            h = _safe_int(ht)
-            if h:
-                height_str = f"{h // 12}'{h % 12}\""
-        records.append({
-            "id": pid,
-            "name": _safe_str(row.get("full_name")) or "",
-            "team_id": _safe_str(row.get("team")),
-            "position": _safe_str(row.get("position")),
-            "jersey_number": _safe_int(row.get("jersey_number")),
-            "height": height_str,
-            "weight": _safe_int(row.get("weight")),
-            "headshot_url": _safe_str(row.get("headshot_url")),
-        })
-    return records
-
-
-def _nflfastr_player_stats(
-    base: Path, sport: str, season: str,
-) -> list[dict[str, Any]]:
-    df = _load_csv(base / "player_stats.csv")
-    if df.empty:
-        return []
-    records: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
-        pid = _safe_str(row.get("player_id")) or _safe_str(row.get("gsis_id"))
-        if not pid:
-            continue
-        team = _safe_str(row.get("recent_team")) or ""
-        week = _safe_str(row.get("week")) or ""
-        records.append({
-            "game_id": f"{team}_{season}_w{week}",
-            "player_id": pid,
-            "player_name": _safe_str(row.get("player_display_name")) or "",
-            "team_id": _safe_str(row.get("recent_team")),
-            "season": season,
-            "category": "football",
-            "pass_yds": _safe_int(row.get("passing_yards")),
-            "pass_td": _safe_int(row.get("passing_tds")),
-            "pass_att": _safe_int(row.get("attempts")),
-            "pass_cmp": _safe_int(row.get("completions")),
-            "pass_int": _safe_int(row.get("interceptions")),
-            "rush_yds": _safe_int(row.get("rushing_yards")),
-            "rush_td": _safe_int(row.get("rushing_tds")),
-            "rush_att": _safe_int(row.get("carries")),
-            "rec_yds": _safe_int(row.get("receiving_yards")),
-            "rec_td": _safe_int(row.get("receiving_tds")),
-            "receptions": _safe_int(row.get("receptions")),
-            "targets": _safe_int(row.get("targets")),
-            "sacks": _safe_float(row.get("sacks")),
-            "fumbles": _safe_int(row.get("rushing_fumbles")),
-            "fumbles_lost": _safe_int(row.get("rushing_fumbles_lost")),
-        })
-    return records
-
-
-def _nflfastr_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    """Extract game results + EPA stats from NFL FaSTR data."""
-    pbp = base / f"play_by_play_{season}.csv.gz"
-    if not pbp.exists():
-        pbp = base / f"play_by_play_{season}.csv"
-    if not pbp.exists():
-        pbp = base / "play_by_play.csv.gz"
-    if not pbp.exists():
-        pbp = base / "play_by_play.csv"
-    if not pbp.exists():
-        return []
-
-    try:
-        df = pd.read_csv(pbp, usecols=["game_id", "game_date", "home_team", "away_team",
-                                        "home_score", "away_score", "season_type"],
-                         low_memory=False)
-    except Exception:
-        return []
-
-    games = df.groupby("game_id").first().reset_index()
-
-    # Aggregate EPA from player_stats.csv (per team per week)
-    epa_by_team_week: dict[tuple[str, str], dict[str, float]] = {}
-    ps_path = base / "player_stats.csv"
-    if ps_path.exists():
-        try:
-            ps = pd.read_csv(ps_path, usecols=[
-                "recent_team", "week", "opponent_team",
-                "passing_epa", "rushing_epa", "receiving_epa",
-                "passing_yards", "rushing_yards", "receiving_yards",
-                "passing_air_yards", "passing_yards_after_catch",
-                "passing_first_downs", "rushing_first_downs", "receiving_first_downs",
-            ], low_memory=False)
-            for col in ["passing_epa", "rushing_epa", "receiving_epa",
-                        "passing_yards", "rushing_yards", "receiving_yards",
-                        "passing_air_yards", "passing_yards_after_catch",
-                        "passing_first_downs", "rushing_first_downs", "receiving_first_downs"]:
-                ps[col] = pd.to_numeric(ps[col], errors="coerce").fillna(0.0)
-            agg = ps.groupby(["recent_team", "week"]).agg(
-                passing_epa=("passing_epa", "sum"),
-                rushing_epa=("rushing_epa", "sum"),
-                receiving_epa=("receiving_epa", "sum"),
-                total_epa=("passing_epa", lambda x: x.sum()),
-                air_yards=("passing_air_yards", "sum"),
-                yac=("passing_yards_after_catch", "sum"),
-                first_downs_pass=("passing_first_downs", "sum"),
-                first_downs_rush=("rushing_first_downs", "sum"),
-                first_downs_rec=("receiving_first_downs", "sum"),
-            ).reset_index()
-            # total_epa = passing + rushing + receiving
-            agg["total_epa"] = agg["passing_epa"] + agg["rushing_epa"] + agg["receiving_epa"]
-            for _, row in agg.iterrows():
-                key = (str(row["recent_team"]), str(int(row["week"])))
-                epa_by_team_week[key] = {
-                    "passing_epa": round(float(row["passing_epa"]), 2),
-                    "rushing_epa": round(float(row["rushing_epa"]), 2),
-                    "total_epa": round(float(row["total_epa"]), 2),
-                    "air_yards": round(float(row["air_yards"]), 1),
-                    "yac": round(float(row["yac"]), 1),
-                }
-        except Exception as exc:
-            logger.debug("nflfastr EPA aggregation failed: %s", exc)
-
-    # Build game-id → week mapping from PBP
-    game_week: dict[str, str] = {}
-    if "week" not in df.columns:
-        # Extract week from game_id (format: YYYY_WW_AWAY_HOME)
-        for gid in games["game_id"]:
-            parts = str(gid).split("_")
-            if len(parts) >= 2:
-                game_week[str(gid)] = parts[1]
-    else:
-        for _, g in games.iterrows():
-            game_week[str(g["game_id"])] = str(int(g["week"])) if pd.notna(g.get("week")) else ""
-
-    rows: list[dict[str, Any]] = []
-    for _, g in games.iterrows():
-        gid = str(g["game_id"])
-        ht = _safe_str(g.get("home_team")) or ""
-        at = _safe_str(g.get("away_team")) or ""
-        week = game_week.get(gid, "")
-
-        rec: dict[str, Any] = {
-            "source": "nflfastr",
-            "id": gid,
-            "sport": sport,
-            "season": season,
-            "date": _safe_str(g.get("game_date")),
-            "status": "final",
-            "home_team": ht,
-            "away_team": at,
-            "home_score": _safe_int(g.get("home_score")),
-            "away_score": _safe_int(g.get("away_score")),
-            "venue": None,
-            "broadcast": None,
-            "broadcast_url": None,
-            "attendance": None,
-            "season_type": _safe_str(g.get("season_type")),
-        }
-
-        # Merge team EPA stats
-        h_epa = epa_by_team_week.get((ht, week), {})
-        a_epa = epa_by_team_week.get((at, week), {})
-        if h_epa:
-            rec["home_passing_epa"] = h_epa.get("passing_epa")
-            rec["home_rushing_epa"] = h_epa.get("rushing_epa")
-            rec["home_total_epa"] = h_epa.get("total_epa")
-            rec["home_air_yards"] = h_epa.get("air_yards")
-            rec["home_yac"] = h_epa.get("yac")
-        if a_epa:
-            rec["away_passing_epa"] = a_epa.get("passing_epa")
-            rec["away_rushing_epa"] = a_epa.get("rushing_epa")
-            rec["away_total_epa"] = a_epa.get("total_epa")
-            rec["away_air_yards"] = a_epa.get("air_yards")
-            rec["away_yac"] = a_epa.get("yac")
-
-        rows.append(rec)
-    return rows
 
 
 # ── Soccer team name canonicalization ─────────────────────
@@ -3324,10 +3654,24 @@ def _nhl_normalize_team_name(name: str) -> str:
 
 
 def _nhl_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    data = _load_json(base / "schedule.json")
-    if not data:
-        return []
-    games: list = data if isinstance(data, list) else data.get("games", [data])
+    # Prefer new organized schedule layout, but keep legacy fallback.
+    regular = _load_json(base / "schedule" / "regular.json")
+    playoffs = _load_json(base / "schedule" / "playoffs.json")
+    games: list[dict[str, Any]] = []
+    for payload in (regular, playoffs):
+        if isinstance(payload, list):
+            games.extend(payload)
+        elif isinstance(payload, dict):
+            items = payload.get("games")
+            if isinstance(items, list):
+                games.extend(items)
+            else:
+                games.append(payload)
+    if not games:
+        data = _load_json(base / "schedule.json")
+        if not data:
+            return []
+        games = data if isinstance(data, list) else data.get("games", [data])
 
     # Build period-score lookup from scores/ directory (goals per period)
     period_scores: dict[str, dict[str, list[int]]] = {}  # gid -> {home: [p1,p2,p3], away: [p1,p2,p3]}
@@ -3362,10 +3706,16 @@ def _nhl_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
                 }
 
     # Build game-detail lookup from games/ directory for SOG, penalties, period scores
+    # Supports both legacy flat files and new nested game directories.
     game_details: dict[str, dict] = {}
     games_dir = base / "games"
     if games_dir.is_dir():
-        for gf in games_dir.glob("*.json"):
+        game_files: list[Path] = list(games_dir.glob("*.json"))
+        for gt in ("regular", "playoffs"):
+            gt_dir = games_dir / gt
+            if gt_dir.is_dir():
+                game_files.extend(gt_dir.glob("*/*.json"))
+        for gf in game_files:
             gd = _load_json(gf)
             if not gd:
                 continue
@@ -3429,7 +3779,12 @@ def _nhl_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
     # Build team-stat aggregates from boxscore files (PP goals, hits, blocked, faceoffs)
     if games_dir.is_dir():
-        for bf in games_dir.glob("*_boxscore.json"):
+        boxscore_files: list[Path] = list(games_dir.glob("*_boxscore.json"))
+        for gt in ("regular", "playoffs"):
+            gt_dir = games_dir / gt
+            if gt_dir.is_dir():
+                boxscore_files.extend(gt_dir.glob("*/boxscore.json"))
+        for bf in boxscore_files:
             bd = _load_json(bf)
             if not bd:
                 continue
@@ -3685,8 +4040,63 @@ def _nhl_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
 # ── StatsBomb ─────────────────────────────────────────────
 
+def _statsbomb_load_matches(base: Path) -> list[dict[str, Any]]:
+    for candidate in (base / "matches" / "index.json", base / "matches.json"):
+        data = _load_json(candidate)
+        if data and isinstance(data, list):
+            return data
+
+    by_comp = base / "matches" / "by_competition"
+    if by_comp.is_dir():
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for fp in sorted(by_comp.glob("**/*.json")):
+            chunk = _load_json(fp)
+            if not chunk or not isinstance(chunk, list):
+                continue
+            for match in chunk:
+                mid = str(match.get("match_id", ""))
+                if not mid or mid in seen:
+                    continue
+                seen.add(mid)
+                rows.append(match)
+        if rows:
+            return rows
+    return []
+
+
+def _statsbomb_event_files(base: Path) -> list[Path]:
+    matches_dir = base / "matches"
+    match_scoped = sorted(matches_dir.glob("*/events.json")) if matches_dir.is_dir() else []
+    if match_scoped:
+        return match_scoped
+
+    legacy_events = base / "events"
+    if legacy_events.is_dir():
+        return sorted(legacy_events.glob("*.json"))
+    return []
+
+
+def _statsbomb_lineup_files(base: Path) -> list[Path]:
+    matches_dir = base / "matches"
+    match_scoped = sorted(matches_dir.glob("*/lineups.json")) if matches_dir.is_dir() else []
+    if match_scoped:
+        return match_scoped
+
+    legacy_lineups = base / "lineups"
+    if legacy_lineups.is_dir():
+        return sorted(legacy_lineups.glob("*.json"))
+    return []
+
+
+def _statsbomb_lineup_file(base: Path, match_id: str) -> Path:
+    match_scoped = base / "matches" / match_id / "lineups.json"
+    if match_scoped.exists():
+        return match_scoped
+    return base / "lineups" / f"{match_id}.json"
+
 def _statsbomb_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    data = _load_json(base / "matches.json")
+    data = _statsbomb_load_matches(base)
     if not data or not isinstance(data, list):
         return []
     records: list[dict[str, Any]] = []
@@ -3712,11 +4122,11 @@ def _statsbomb_games(base: Path, sport: str, season: str) -> list[dict[str, Any]
 
 def _statsbomb_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Extract unique players from StatsBomb lineup files."""
-    lineups_dir = base / "lineups"
-    if not lineups_dir.is_dir():
+    lineup_files = _statsbomb_lineup_files(base)
+    if not lineup_files:
         return []
     seen: dict[str, dict[str, Any]] = {}
-    for fp in sorted(lineups_dir.glob("*.json")):
+    for fp in lineup_files:
         data = _load_json(fp)
         if not data or not isinstance(data, list):
             continue
@@ -3744,28 +4154,27 @@ def _statsbomb_players(base: Path, sport: str, season: str) -> list[dict[str, An
 
 def _statsbomb_player_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Aggregate per-player per-match stats from StatsBomb events & lineups."""
-    # Match dates from matches.json
-    matches_data = _load_json(base / "matches.json")
+    # Match dates from matches index (or legacy matches.json).
+    matches_data = _statsbomb_load_matches(base)
     match_dates: dict[str, str | None] = {}
     if matches_data and isinstance(matches_data, list):
         for m in matches_data:
             match_dates[str(m.get("match_id", ""))] = m.get("match_date")
 
-    events_dir = base / "events"
-    lineups_dir = base / "lineups"
-    if not events_dir.is_dir():
+    event_files = _statsbomb_event_files(base)
+    if not event_files:
         return []
 
     records: list[dict[str, Any]] = []
-    for events_file in sorted(events_dir.glob("*.json")):
-        match_id = events_file.stem
+    for events_file in event_files:
+        match_id = events_file.parent.name if events_file.name == "events.json" else events_file.stem
         events = _load_json(events_file)
         if not events or not isinstance(events, list):
             continue
 
         # Minutes played from lineup positions
         minutes_map: dict[int, int] = {}
-        lineup_data = _load_json(lineups_dir / f"{match_id}.json") if lineups_dir.is_dir() else None
+        lineup_data = _load_json(_statsbomb_lineup_file(base, match_id))
         if lineup_data and isinstance(lineup_data, list):
             for team_block in lineup_data:
                 for pl in team_block.get("lineup", []):
@@ -3890,8 +4299,102 @@ def _ergast_unwrap(data: Any) -> dict:
     return {}
 
 
+_ERGAST_REFERENCE_ENDPOINTS = {"drivers", "constructors", "circuits"}
+_ERGAST_STANDINGS_ENDPOINTS = {"driver_standings", "constructor_standings"}
+_ERGAST_ROUND_FILE_NAMES = {
+    "races": "race.json",
+    "results": "results.json",
+    "qualifying": "qualifying.json",
+    "sprint": "sprint.json",
+    "laps": "laps.json",
+    "pitstops": "pitstops.json",
+}
+
+
+def _ergast_round_dir(base: Path, round_num: Any) -> Path | None:
+    round_id = _safe_int(round_num)
+    if round_id is None or round_id <= 0:
+        return None
+    return base / "rounds" / f"round_{round_id:02d}"
+
+
+def _ergast_round_file(base: Path, endpoint: str, round_num: Any) -> Path:
+    round_dir = _ergast_round_dir(base, round_num)
+    if round_dir is not None:
+        candidate = round_dir / _ERGAST_ROUND_FILE_NAMES[endpoint]
+        if candidate.exists():
+            return candidate
+
+    round_id = _safe_int(round_num)
+    if round_id is None:
+        return base / "__missing__"
+    return base / endpoint / f"round_{round_id}.json"
+
+
+def _ergast_round_files(base: Path, endpoint: str) -> list[Path]:
+    file_name = _ERGAST_ROUND_FILE_NAMES[endpoint]
+    rounds_dir = base / "rounds"
+    files: list[Path] = []
+
+    if rounds_dir.is_dir():
+        for round_dir in sorted(rounds_dir.iterdir()):
+            if not round_dir.is_dir():
+                continue
+            round_file = round_dir / file_name
+            if round_file.exists():
+                files.append(round_file)
+        if files:
+            return files
+
+    legacy_dir = base / endpoint
+    if legacy_dir.is_dir():
+        return sorted(legacy_dir.glob("round_*.json"))
+    return []
+
+
+def _ergast_load_endpoint_compat(base: Path, endpoint: str) -> Any:
+    if endpoint in _ERGAST_REFERENCE_ENDPOINTS:
+        ref_file = base / "reference" / f"{endpoint}.json"
+        data = _load_json(ref_file)
+        if data is not None:
+            return data
+
+    if endpoint in _ERGAST_STANDINGS_ENDPOINTS:
+        standings_file = base / "standings" / f"{endpoint}.json"
+        data = _load_json(standings_file)
+        if data is not None:
+            return data
+
+    if endpoint in _ERGAST_ROUND_FILE_NAMES:
+        merged_rows: list[dict[str, Any]] = []
+        merged_template: dict[str, Any] | None = None
+        for round_file in _ergast_round_files(base, endpoint):
+            data = _load_json(round_file)
+            if data is None:
+                continue
+            unwrapped = _ergast_unwrap(data)
+            race_table = unwrapped.get("RaceTable", {})
+            races = race_table.get("Races", [])
+            if not isinstance(races, list) or not races:
+                continue
+            merged_rows.extend(race for race in races if isinstance(race, dict))
+            if merged_template is None:
+                merged_template = unwrapped
+
+        if merged_rows and merged_template is not None:
+            race_table = dict(merged_template.get("RaceTable", {}))
+            race_table["season"] = race_table.get("season", str(base.name))
+            race_table["Races"] = merged_rows
+            merged = dict(merged_template)
+            merged["RaceTable"] = race_table
+            merged["total"] = str(len(merged_rows))
+            return {"MRData": merged}
+
+    return _load_json(base / f"{endpoint}.json")
+
+
 def _ergast_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    data = _ergast_unwrap(_load_json(base / "drivers.json"))
+    data = _ergast_unwrap(_ergast_load_endpoint_compat(base, "drivers"))
     records: list[dict[str, Any]] = []
     for d in data.get("DriverTable", {}).get("Drivers", []):
         rec: dict[str, Any] = {
@@ -3907,7 +4410,7 @@ def _ergast_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]
 
 
 def _ergast_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    data = _ergast_unwrap(_load_json(base / "constructors.json"))
+    data = _ergast_unwrap(_ergast_load_endpoint_compat(base, "constructors"))
     return [
         {"id": c.get("constructorId", ""), "name": c.get("name", "")}
         for c in data.get("ConstructorTable", {}).get("Constructors", [])
@@ -3916,12 +4419,12 @@ def _ergast_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
 def _ergast_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     data = _ergast_unwrap(
-        _load_json(base / "results.json") or _load_json(base / "races.json")
+        _ergast_load_endpoint_compat(base, "results") or _ergast_load_endpoint_compat(base, "races")
     )
     records: list[dict[str, Any]] = []
 
     qualifying_pole_by_round: dict[int, str] = {}
-    q_data = _ergast_unwrap(_load_json(base / "qualifying.json"))
+    q_data = _ergast_unwrap(_ergast_load_endpoint_compat(base, "qualifying"))
     for race in q_data.get("RaceTable", {}).get("Races", []):
         round_num = _safe_int(race.get("round"))
         if round_num is None:
@@ -3933,7 +4436,7 @@ def _ergast_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
                 break
 
     sprint_winner_by_round: dict[int, tuple[str, str]] = {}
-    sprint_data = _ergast_unwrap(_load_json(base / "sprint.json"))
+    sprint_data = _ergast_unwrap(_ergast_load_endpoint_compat(base, "sprint"))
     for race in sprint_data.get("RaceTable", {}).get("Races", []):
         round_num = _safe_int(race.get("round"))
         if round_num is None:
@@ -3997,18 +4500,50 @@ def _ergast_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
                     fastest_lap_num = _safe_int(fl.get("lap"))
 
         # Load pitstop data for total pit stops
-        pit_file = base / "pitstops" / f"round_{round_num}.json"
+        pit_file = _ergast_round_file(base, "pitstops", round_num)
         pit_data = _ergast_unwrap(_load_json(pit_file))
-        pit_total = len(pit_data.get("RaceTable", {}).get("Races", [{}])[0].get("PitStops", []))
+        pit_races = pit_data.get("RaceTable", {}).get("Races", [])
+        pit_total = len(pit_races[0].get("PitStops", [])) if pit_races else 0
 
-        if not total_laps and round_num is not None:
-            lap_file = base / "laps" / f"round_{round_num}.json"
+        lap_leader_name = None
+        lead_changes = 0
+        unique_lap_leaders = 0
+        if round_num is not None:
+            lap_file = _ergast_round_file(base, "laps", round_num)
             lap_data = _ergast_unwrap(_load_json(lap_file))
-            laps_arr = lap_data.get("RaceTable", {}).get("Races", [{}])[0].get("Laps", [])
+            lap_races = lap_data.get("RaceTable", {}).get("Races", [])
+            laps_arr = lap_races[0].get("Laps", []) if lap_races else []
             lap_numbers = [_safe_int(l.get("number")) for l in laps_arr if isinstance(l, dict)]
             lap_numbers = [n for n in lap_numbers if n is not None]
-            if lap_numbers:
+            if lap_numbers and not total_laps:
                 total_laps = max(lap_numbers)
+
+            driver_name_by_id: dict[str, str] = {}
+            for res in results:
+                drv = res.get("Driver", {}) if isinstance(res, dict) else {}
+                driver_id = _safe_str(drv.get("driverId"))
+                if not driver_id:
+                    continue
+                driver_name_by_id[driver_id] = f"{drv.get('givenName', '')} {drv.get('familyName', '')}".strip()
+
+            leaders: list[str] = []
+            for lap in laps_arr:
+                if not isinstance(lap, dict):
+                    continue
+                timings = lap.get("Timings", [])
+                if not isinstance(timings, list):
+                    continue
+                leader = next(
+                    (_safe_str(t.get("driverId")) for t in timings if isinstance(t, dict) and str(t.get("position", "")) == "1"),
+                    None,
+                )
+                if leader:
+                    leaders.append(leader)
+
+            if leaders:
+                unique_lap_leaders = len(set(leaders))
+                lead_changes = sum(1 for i in range(1, len(leaders)) if leaders[i] != leaders[i - 1])
+                lap_leader_name = driver_name_by_id.get(leaders[-1]) or leaders[-1]
 
         sprint_winner_name = None
         sprint_winner_team = None
@@ -4050,6 +4585,9 @@ def _ergast_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
             "sprint_winner_team": sprint_winner_team,
             "dnf_count": dnf_count or None,
             "pit_stops_total": pit_total or None,
+            "lap_leader_name": lap_leader_name,
+            "lead_changes": lead_changes or None,
+            "unique_lap_leaders": unique_lap_leaders or None,
         })
     return records
 
@@ -4057,7 +4595,7 @@ def _ergast_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 def _ergast_standings(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     # Driver standings
-    data = _ergast_unwrap(_load_json(base / "driver_standings.json"))
+    data = _ergast_unwrap(_ergast_load_endpoint_compat(base, "driver_standings"))
     for sl in data.get("StandingsTable", {}).get("StandingsLists", []):
         for ds in sl.get("DriverStandings", []):
             driver = ds.get("Driver", {})
@@ -4077,7 +4615,7 @@ def _ergast_standings(base: Path, sport: str, season: str) -> list[dict[str, Any
                 "group": "Drivers Championship",
             })
     # Constructor standings
-    cdata = _ergast_unwrap(_load_json(base / "constructor_standings.json"))
+    cdata = _ergast_unwrap(_ergast_load_endpoint_compat(base, "constructor_standings"))
     for sl in cdata.get("StandingsTable", {}).get("StandingsLists", []):
         for cs in sl.get("ConstructorStandings", []):
             cons = cs.get("Constructor", {})
@@ -4097,12 +4635,12 @@ def _ergast_standings(base: Path, sport: str, season: str) -> list[dict[str, Any
 def _ergast_player_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Extract per-driver per-race results from Ergast results.json."""
     data = _ergast_unwrap(
-        _load_json(base / "results.json") or _load_json(base / "races.json")
+        _ergast_load_endpoint_compat(base, "results") or _ergast_load_endpoint_compat(base, "races")
     )
     records: list[dict[str, Any]] = []
 
     qualifying_pos: dict[tuple[str, str], int] = {}
-    q_data = _ergast_unwrap(_load_json(base / "qualifying.json"))
+    q_data = _ergast_unwrap(_ergast_load_endpoint_compat(base, "qualifying"))
     for race in q_data.get("RaceTable", {}).get("Races", []):
         round_num = _safe_str(race.get("round"))
         if not round_num:
@@ -4116,7 +4654,7 @@ def _ergast_player_stats(base: Path, sport: str, season: str) -> list[dict[str, 
 
     sprint_pos: dict[tuple[str, str], int] = {}
     sprint_pts: dict[tuple[str, str], float] = {}
-    sprint_data = _ergast_unwrap(_load_json(base / "sprint.json"))
+    sprint_data = _ergast_unwrap(_ergast_load_endpoint_compat(base, "sprint"))
     for race in sprint_data.get("RaceTable", {}).get("Races", []):
         round_num = _safe_str(race.get("round"))
         if not round_num:
@@ -4134,20 +4672,56 @@ def _ergast_player_stats(base: Path, sport: str, season: str) -> list[dict[str, 
                 sprint_pts[(round_num, driver_id)] = pts
 
     pit_stops_by_driver_round: dict[tuple[str, str], int] = {}
-    pit_dir = base / "pitstops"
-    if pit_dir.is_dir():
-        for pit_file in pit_dir.glob("round_*.json"):
-            pit_data = _ergast_unwrap(_load_json(pit_file))
-            race = pit_data.get("RaceTable", {}).get("Races", [{}])[0]
-            round_num = _safe_str(race.get("round"))
-            if not round_num:
+    for pit_file in _ergast_round_files(base, "pitstops"):
+        pit_data = _ergast_unwrap(_load_json(pit_file))
+        pit_races = pit_data.get("RaceTable", {}).get("Races", [])
+        if not pit_races:
+            continue
+        race = pit_races[0]
+        round_num = _safe_str(race.get("round"))
+        if not round_num:
+            continue
+        for stop in race.get("PitStops", []):
+            driver_id = _safe_str(stop.get("driverId"))
+            if not driver_id:
                 continue
-            for stop in race.get("PitStops", []):
-                driver_id = _safe_str(stop.get("driverId"))
-                if not driver_id:
+            key = (round_num, driver_id)
+            pit_stops_by_driver_round[key] = pit_stops_by_driver_round.get(key, 0) + 1
+
+    lap_metrics_by_driver_round: dict[tuple[str, str], dict[str, float | int]] = {}
+    for lap_file in _ergast_round_files(base, "laps"):
+        lap_data = _ergast_unwrap(_load_json(lap_file))
+        lap_races = lap_data.get("RaceTable", {}).get("Races", [])
+        if not lap_races:
+            continue
+        race = lap_races[0]
+        round_num = _safe_str(race.get("round"))
+        if not round_num:
+            continue
+        for lap in race.get("Laps", []):
+            if not isinstance(lap, dict):
+                continue
+            for timing in lap.get("Timings", []):
+                if not isinstance(timing, dict):
+                    continue
+                driver_id = _safe_str(timing.get("driverId"))
+                pos = _safe_int(timing.get("position"))
+                if not driver_id or pos is None:
                     continue
                 key = (round_num, driver_id)
-                pit_stops_by_driver_round[key] = pit_stops_by_driver_round.get(key, 0) + 1
+                metric = lap_metrics_by_driver_round.setdefault(key, {
+                    "laps_led": 0,
+                    "position_sum": 0,
+                    "position_count": 0,
+                    "best_running_position": 999,
+                    "worst_running_position": 0,
+                })
+                metric["position_sum"] = int(metric["position_sum"]) + pos
+                metric["position_count"] = int(metric["position_count"]) + 1
+                metric["best_running_position"] = min(int(metric["best_running_position"]), pos)
+                metric["worst_running_position"] = max(int(metric["worst_running_position"]), pos)
+                if pos == 1:
+                    metric["laps_led"] = int(metric["laps_led"]) + 1
 
     for r in data.get("RaceTable", {}).get("Races", []):
         round_num = r.get("round", "")
@@ -4172,8 +4746,15 @@ def _ergast_player_stats(base: Path, sport: str, season: str) -> list[dict[str, 
                 asp = fl.get("AverageSpeed", {})
                 fl_speed = _safe_float(asp.get("speed")) if isinstance(asp, dict) else None
 
+            driver_id = _safe_str(drv.get("driverId"))
+            lap_metrics = lap_metrics_by_driver_round.get((str(round_num), driver_id), {})
+            position_count = int(lap_metrics.get("position_count", 0) or 0)
+            avg_running_position = None
+            if position_count > 0:
+                avg_running_position = round(float(lap_metrics.get("position_sum", 0)) / position_count, 2)
+
             records.append({
-                "player_id": drv.get("driverId", ""),
+                "player_id": driver_id,
                 "player_name": name,
                 "team_id": cons.get("constructorId", ""),
                 "team_name": cons.get("name", ""),
@@ -4183,17 +4764,24 @@ def _ergast_player_stats(base: Path, sport: str, season: str) -> list[dict[str, 
                 "season": season,
                 "source": "ergast",
                 "category": "motorsport",
-                "qualifying_position": qualifying_pos.get((str(round_num), drv.get("driverId", ""))),
+                "qualifying_position": qualifying_pos.get((str(round_num), driver_id)),
                 "points": _f1_position_points(finish),
-                "sprint_position": sprint_pos.get((str(round_num), drv.get("driverId", ""))),
-                "sprint_points": sprint_pts.get((str(round_num), drv.get("driverId", ""))),
+                "sprint_position": sprint_pos.get((str(round_num), driver_id)),
+                "sprint_points": sprint_pts.get((str(round_num), driver_id)),
                 "finish_position": finish,
                 "grid_position": grid,
                 "laps": laps,
-                "pit_stops": pit_stops_by_driver_round.get((str(round_num), drv.get("driverId", ""))),
+                "pit_stops": pit_stops_by_driver_round.get((str(round_num), driver_id)),
                 "status": status,
                 "fastest_lap": fl_time,
                 "avg_speed_kph": fl_speed,
+                "laps_led": int(lap_metrics.get("laps_led", 0)) or None,
+                "avg_running_position": avg_running_position,
+                "best_running_position": (
+                    int(lap_metrics.get("best_running_position", 999))
+                    if int(lap_metrics.get("best_running_position", 999)) != 999 else None
+                ),
+                "worst_running_position": int(lap_metrics.get("worst_running_position", 0)) or None,
                 "dnf": status not in ("Finished", "+1 Lap", "+2 Laps", "+3 Laps", ""),
                 "constructor": cons.get("name", ""),
             })
@@ -4202,11 +4790,48 @@ def _ergast_player_stats(base: Path, sport: str, season: str) -> list[dict[str, 
 
 # ── OpenF1 ────────────────────────────────────────────────
 
+def _openf1_sessions_data(base: Path) -> list[dict[str, Any]]:
+    for candidate in (base / "reference" / "sessions.json", base / "sessions.json"):
+        data = _load_json(candidate)
+        if isinstance(data, list):
+            return data
+    return []
+
+
+def _openf1_session_dirs(base: Path) -> dict[int, Path]:
+    session_dirs: dict[int, Path] = {}
+
+    structured_root = base / "season_phases"
+    if structured_root.exists():
+        for session_dir in sorted(structured_root.glob("*/meetings/*/sessions/session_*")):
+            if not session_dir.is_dir():
+                continue
+            match = re.match(r"session_(\d+)$", session_dir.name)
+            if not match:
+                continue
+            session_dirs[int(match.group(1))] = session_dir
+        if session_dirs:
+            return session_dirs
+
+    for session_dir in sorted(base.iterdir()):
+        if session_dir.is_dir() and session_dir.name.isdigit():
+            session_dirs[int(session_dir.name)] = session_dir
+
+    return session_dirs
+
+
+def _openf1_session_file(session_dirs: dict[int, Path], session_key: Any, file_name: str) -> Path | None:
+    sk = _safe_int(session_key)
+    if sk is None:
+        return None
+    session_dir = session_dirs.get(sk)
+    if session_dir is None:
+        return None
+    return session_dir / file_name
+
 def _openf1_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     seen: dict[str, dict[str, Any]] = {}
-    for session_dir in sorted(base.iterdir()):
-        if not session_dir.is_dir():
-            continue
+    for session_dir in _openf1_session_dirs(base).values():
         data = _load_json(session_dir / "drivers.json")
         if not data or not isinstance(data, list):
             continue
@@ -4226,15 +4851,15 @@ def _openf1_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]
 
 def _openf1_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Normalize OpenF1 race sessions → Game records with racing fields."""
-    sessions_file = base / "sessions.json"
-    sessions_data = _load_json(sessions_file)
-    if not sessions_data or not isinstance(sessions_data, list):
+    sessions_data = _openf1_sessions_data(base)
+    if not sessions_data:
         return []
 
     races = [s for s in sessions_data if s.get("session_type") == "Race"]
     # Sort by date to derive round numbers (F1 rounds are sequential by date)
     races.sort(key=lambda s: s.get("date_start", ""))
     records: list[dict[str, Any]] = []
+    session_dirs = _openf1_session_dirs(base)
 
     for round_idx, race in enumerate(races, start=1):
         sk = race.get("session_key")
@@ -4248,41 +4873,91 @@ def _openf1_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
         circuit = race.get("circuit_short_name", "")
         country = race.get("country_name", "")
         location = race.get("location", "")
-        session_dir = base / str(sk)
+        session_dir = session_dirs.get(_safe_int(sk) or -1)
+        drivers_data = _load_json(session_dir / "drivers.json") if session_dir else []
+        driver_map = {}
+        for drv in drivers_data or []:
+            driver_map[drv.get("driver_number")] = drv
 
-        # Load position data to find winner + DNFs
-        pos_data = _load_json(session_dir / "position.json")
+        # Use official session results when available; fall back to last known position snapshots.
+        result_data = _load_json(_openf1_session_file(session_dirs, sk, "session_result.json")) or []
+        grid_data = _load_json(_openf1_session_file(session_dirs, sk, "starting_grid.json")) or []
+        pos_data = _load_json(session_dir / "position.json") if session_dir else None
         winner_name = winner_team = None
+        winner_time = None
+        pole_position_driver = None
         final_pos: dict[int, int] = {}
+        dnf_count = 0
+        if isinstance(result_data, list):
+            for row in result_data:
+                driver_number = row.get("driver_number")
+                position = _safe_int(row.get("position"))
+                if driver_number is not None and position is not None:
+                    final_pos[driver_number] = position
+                if row.get("dnf"):
+                    dnf_count += 1
+                if position == 1 and driver_number in driver_map:
+                    drv = driver_map[driver_number]
+                    winner_name = drv.get("full_name") or drv.get("broadcast_name")
+                    winner_team = drv.get("team_name", "")
+                    winner_duration = row.get("duration")
+                    winner_time = str(winner_duration) if winner_duration is not None else None
+
         if pos_data and isinstance(pos_data, list):
             for p in pos_data:
                 dn = p.get("driver_number")
                 pos = p.get("position")
-                if dn and pos:
+                if dn and pos and dn not in final_pos:
                     final_pos[dn] = pos
             winner_num = min(final_pos, key=final_pos.get) if final_pos else None
-            drivers_data = _load_json(session_dir / "drivers.json") or []
-            driver_map = {}
-            for drv in drivers_data:
-                driver_map[drv.get("driver_number")] = drv
-            if winner_num and winner_num in driver_map:
+            if not winner_name and winner_num and winner_num in driver_map:
                 drv = driver_map[winner_num]
                 winner_name = drv.get("full_name") or drv.get("broadcast_name")
                 winner_team = drv.get("team_name", "")
 
+        if isinstance(grid_data, list):
+            for row in grid_data:
+                if _safe_int(row.get("position")) != 1:
+                    continue
+                driver_number = row.get("driver_number")
+                if driver_number in driver_map:
+                    drv = driver_map[driver_number]
+                    pole_position_driver = drv.get("full_name") or drv.get("broadcast_name")
+                break
+
         # Lap counts for total laps and pit stops
-        laps_data = _load_json(session_dir / "laps.json") or []
+        laps_data = (_load_json(session_dir / "laps.json") if session_dir else None) or []
         max_laps = 0
+        fastest_lap_time = None
+        fastest_lap_driver = None
+        fastest_lap_number = None
+        fastest_driver_number = None
         for lap in laps_data:
             ln = _safe_int(lap.get("lap_number"))
             if ln and ln > max_laps:
                 max_laps = ln
+            dur = _safe_float(lap.get("lap_duration"))
+            driver_number = lap.get("driver_number")
+            if dur is not None and driver_number is not None and (fastest_lap_time is None or dur < fastest_lap_time):
+                fastest_lap_time = dur
+                fastest_lap_number = ln
+                fastest_driver_number = driver_number
 
-        pit_data = _load_json(session_dir / "pit.json") or []
+        if fastest_driver_number in driver_map:
+            drv = driver_map[fastest_driver_number]
+            fastest_lap_driver = drv.get("full_name") or drv.get("broadcast_name")
+
+        fastest_lap_time_str = None
+        if fastest_lap_time is not None:
+            mins = int(fastest_lap_time // 60)
+            secs = fastest_lap_time % 60
+            fastest_lap_time_str = f"{mins}:{secs:06.3f}" if mins else f"{secs:.3f}"
+
+        pit_data = (_load_json(session_dir / "pit.json") if session_dir else None) or []
         pit_total = len(pit_data)
 
         # Race control events for safety cars and red flags
-        rc_data = _load_json(session_dir / "race_control.json") or []
+        rc_data = (_load_json(session_dir / "race_control.json") if session_dir else None) or []
         sc_count = sum(1 for e in rc_data if "SAFETY CAR" in str(e.get("message", "")).upper() and "DEPLOYED" in str(e.get("message", "")).upper())
         rf_count = sum(1 for e in rc_data if "RED FLAG" in str(e.get("message", "")).upper())
 
@@ -4314,12 +4989,12 @@ def _openf1_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
             "total_laps": max_laps or None,
             "winner_name": winner_name,
             "winner_team": winner_team,
-            "winner_time": None,
-            "fastest_lap_driver": None,
-            "fastest_lap_time": None,
-            "fastest_lap_number": None,
-            "pole_position_driver": None,
-            "dnf_count": None,
+            "winner_time": winner_time,
+            "fastest_lap_driver": fastest_lap_driver,
+            "fastest_lap_time": fastest_lap_time_str,
+            "fastest_lap_number": fastest_lap_number,
+            "pole_position_driver": pole_position_driver,
+            "dnf_count": dnf_count or None,
             "pit_stops_total": pit_total or None,
             "safety_car_count": sc_count or None,
             "red_flag_count": rf_count or None,
@@ -4329,13 +5004,13 @@ def _openf1_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
 def _openf1_player_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Normalize OpenF1 race data → per-driver stats per race using proper F1 fields."""
-    sessions_file = base / "sessions.json"
-    sessions_data = _load_json(sessions_file)
-    if not sessions_data or not isinstance(sessions_data, list):
+    sessions_data = _openf1_sessions_data(base)
+    if not sessions_data:
         return []
 
     races = [s for s in sessions_data if s.get("session_type") == "Race"]
     records: list[dict[str, Any]] = []
+    session_dirs = _openf1_session_dirs(base)
 
     for race in races:
         sk = race.get("session_key")
@@ -4346,8 +5021,8 @@ def _openf1_player_stats(base: Path, sport: str, season: str) -> list[dict[str, 
         country = race.get("country_name", "")
         game_id = f"openf1_{sk}"
 
-        session_dir = base / str(sk)
-        if not session_dir.is_dir():
+        session_dir = session_dirs.get(_safe_int(sk) or -1)
+        if session_dir is None or not session_dir.is_dir():
             continue
 
         drivers_data = _load_json(session_dir / "drivers.json")
@@ -4363,12 +5038,26 @@ def _openf1_player_stats(base: Path, sport: str, season: str) -> list[dict[str, 
                 }
 
         # Final positions
+        result_data = _load_json(session_dir / "session_result.json") or []
         pos_data = _load_json(session_dir / "position.json") or []
         final_pos: dict[int, int] = {}
+        laps_completed: dict[int, int] = {}
+        result_status: dict[int, dict[str, Any]] = {}
+        if isinstance(result_data, list):
+            for row in result_data:
+                dn = row.get("driver_number")
+                pos = _safe_int(row.get("position"))
+                if dn is not None and pos is not None:
+                    final_pos[dn] = pos
+                if dn is not None:
+                    result_status[dn] = row
+                    laps_value = _safe_int(row.get("number_of_laps"))
+                    if laps_value is not None:
+                        laps_completed[dn] = laps_value
         for p in pos_data:
             dn = p.get("driver_number")
             pos = p.get("position")
-            if dn and pos:
+            if dn and pos and dn not in final_pos:
                 final_pos[dn] = pos
 
         # Lap counts and fastest lap per driver
@@ -4403,8 +5092,9 @@ def _openf1_player_stats(base: Path, sport: str, season: str) -> list[dict[str, 
         max_laps = max(lap_counts.values()) if lap_counts else 0
         for dn, info in driver_map.items():
             finish = final_pos.get(dn)
-            driver_laps = lap_counts.get(dn, 0)
-            is_dnf = finish is None or (max_laps > 0 and driver_laps < max_laps - 2)
+            driver_laps = laps_completed.get(dn, lap_counts.get(dn, 0))
+            result_row = result_status.get(dn, {})
+            is_dnf = bool(result_row.get("dnf")) if result_row else (finish is None or (max_laps > 0 and driver_laps < max_laps - 2))
             fl = fastest_laps.get(dn)
             fl_str = None
             if fl:
@@ -4427,6 +5117,9 @@ def _openf1_player_stats(base: Path, sport: str, season: str) -> list[dict[str, 
                 "laps": driver_laps,
                 "pit_stops": pit_counts.get(dn, 0),
                 "fastest_lap": fl_str,
+                "status": (
+                    "DSQ" if result_row.get("dsq") else "DNS" if result_row.get("dns") else "DNF" if is_dnf else "Finished"
+                ),
                 "dnf": is_dnf,
                 "constructor": info.get("team", ""),
             })
@@ -4443,13 +5136,11 @@ def _f1_position_points(pos: int | None) -> int:
 
 def _espn_f1_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Extract unique F1 drivers from ESPN game files."""
-    games_dir = base / "games"
-    if not games_dir.is_dir():
+    game_files = _espn_game_files(base)
+    if not game_files:
         return []
     seen: dict[str, dict[str, Any]] = {}
-    for p in sorted(games_dir.glob("*.json")):
-        if p.name == "all_games.json":
-            continue
+    for p in game_files:
         data = _load_json(p)
         if not data:
             continue
@@ -4481,17 +5172,15 @@ def _espn_f1_players(base: Path, sport: str, season: str) -> list[dict[str, Any]
 
 def _espn_f1_player_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Extract per-race driver results from ESPN F1 game files."""
-    games_dir = base / "games"
-    if not games_dir.is_dir():
+    game_files = _espn_game_files(base)
+    if not game_files:
         return []
     records: list[dict[str, Any]] = []
-    for p in sorted(games_dir.glob("*.json")):
-        if p.name == "all_games.json":
-            continue
+    for p in game_files:
         data = _load_json(p)
         if not data:
             continue
-        event_id = str(data.get("eventId", p.stem))
+        event_id = str(data.get("eventId", p.parent.name if p.parent != base else p.stem))
         sb = data.get("scoreboard", {})
         race_name = sb.get("name") or sb.get("shortName") or ""
         circuit = sb.get("circuit", {})
@@ -4563,12 +5252,16 @@ def _lahman_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
             "league": _safe_str(row.get("lgID")),
             "division": _safe_str(row.get("divID")),
             "venue_name": _safe_str(row.get("park")),
+            "franchise_id": _safe_str(row.get("franchID")),
         })
     return records
 
 
 def _lahman_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    df = _load_csv(base / "People.csv")
+    people_csv = base / "People.csv"
+    if not people_csv.exists():
+        people_csv = base / "Master.csv"
+    df = _load_csv(people_csv)
     if df.empty:
         return []
     records: list[dict[str, Any]] = []
@@ -4582,11 +5275,21 @@ def _lahman_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]
             bm = _safe_int(row.get("birthMonth")) or 1
             bd = _safe_int(row.get("birthDay")) or 1
             bdate = f"{by}-{bm:02d}-{bd:02d}"
+        birth_parts = [
+            _safe_str(row.get("birthCity")),
+            _safe_str(row.get("birthState")),
+            _safe_str(row.get("birthCountry")),
+        ]
+        birth_place = ", ".join([p for p in birth_parts if p]) or None
         records.append({
             "id": pid,
             "name": f"{_safe_str(row.get('nameFirst')) or ''} {_safe_str(row.get('nameLast')) or ''}".strip(),
             "weight": _safe_int(row.get("weight")),
+            "height": _safe_int(row.get("height")),
+            "bats_hand": _safe_str(row.get("bats")),
+            "throws_hand": _safe_str(row.get("throws")),
             "birth_date": bdate,
+            "birth_place": birth_place,
             "nationality": _safe_str(row.get("birthCountry")),
         })
     return records
@@ -4595,36 +5298,150 @@ def _lahman_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]
 def _lahman_player_stats(
     base: Path, sport: str, season: str,
 ) -> list[dict[str, Any]]:
-    df = _load_csv(base / "Batting.csv")
-    if df.empty:
+    batting = _load_csv(base / "Batting.csv")
+    if batting.empty:
         return []
+
+    pitching = _load_csv(base / "Pitching.csv")
     try:
-        df = df[df["yearID"] == int(season)]
+        batting = batting[batting["yearID"] == int(season)]
+        if not pitching.empty and "yearID" in pitching.columns:
+            pitching = pitching[pitching["yearID"] == int(season)]
     except (ValueError, KeyError):
         pass
+
+    pitching_lookup: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    if not pitching.empty:
+        for _, prow in pitching.iterrows():
+            p_pid = _safe_str(prow.get("playerID")) or ""
+            p_year = _safe_str(prow.get("yearID")) or str(season)
+            p_team = _safe_str(prow.get("teamID")) or ""
+            p_stint = _safe_str(prow.get("stint")) or "1"
+            if not p_pid:
+                continue
+            pitching_lookup[(p_pid, p_year, p_team, p_stint)] = {
+                "era": _safe_float(prow.get("ERA")),
+                "strikeouts": _safe_int(prow.get("SO")),
+                "walks": _safe_int(prow.get("BB")),
+                "earned_runs": _safe_int(prow.get("ER")),
+                "wins": (_safe_int(prow.get("W")) or 0) > 0,
+                "losses": (_safe_int(prow.get("L")) or 0) > 0,
+                "saves": (_safe_int(prow.get("SV")) or 0) > 0,
+                "innings": (
+                    round((_safe_int(prow.get("IPouts")) or 0) / 3.0, 3)
+                    if _safe_int(prow.get("IPouts")) is not None
+                    else None
+                ),
+                "whip": (
+                    round(
+                        ((_safe_int(prow.get("H")) or 0) + (_safe_int(prow.get("BB")) or 0))
+                        / ((_safe_int(prow.get("IPouts")) or 0) / 3.0),
+                        3,
+                    )
+                    if (_safe_int(prow.get("IPouts")) or 0) > 0
+                    else None
+                ),
+                "games_pitched": _safe_int(prow.get("G")),
+                "games_started": _safe_int(prow.get("GS")),
+                "complete_games": _safe_int(prow.get("CG")),
+                "shutouts": _safe_int(prow.get("SHO")),
+                "ibb_pitcher": _safe_int(prow.get("IBB")),
+                "wp": _safe_int(prow.get("WP")),
+            }
+
     records: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
+    for _, row in batting.iterrows():
         pid = _safe_str(row.get("playerID")) or ""
+        if not pid:
+            continue
+        year = _safe_str(row.get("yearID")) or str(season)
+        team_id = _safe_str(row.get("teamID")) or ""
+        stint = _safe_str(row.get("stint")) or "1"
+        ab = _safe_int(row.get("AB"))
+        hits = _safe_int(row.get("H"))
+        doubles = _safe_int(row.get("2B"))
+        triples = _safe_int(row.get("3B"))
+        hr = _safe_int(row.get("HR"))
+        bb = _safe_int(row.get("BB"))
+        hbp = _safe_int(row.get("HBP"))
+        sf = _safe_int(row.get("SF"))
+        sh = _safe_int(row.get("SH"))
+
+        ab_val = ab or 0
+        hits_val = hits or 0
+        doubles_val = doubles or 0
+        triples_val = triples or 0
+        hr_val = hr or 0
+        bb_val = bb or 0
+        hbp_val = hbp or 0
+        sf_val = sf or 0
+        sh_val = sh or 0
+        singles_val = max(hits_val - doubles_val - triples_val - hr_val, 0)
+
+        avg = round(hits_val / ab_val, 3) if ab_val > 0 else None
+        obp_den = ab_val + bb_val + hbp_val + sf_val
+        obp = round((hits_val + bb_val + hbp_val) / obp_den, 3) if obp_den > 0 else None
+        total_bases = singles_val + (2 * doubles_val) + (3 * triples_val) + (4 * hr_val)
+        slg = round(total_bases / ab_val, 3) if ab_val > 0 else None
+        ops = round((obp or 0.0) + (slg or 0.0), 3) if obp is not None and slg is not None else None
+        pa = ab_val + bb_val + hbp_val + sf_val + sh_val
+
+        pitch = pitching_lookup.get((pid, year, team_id, stint), {})
+
         records.append({
-            "game_id": f"{pid}_{row.get('yearID', season)}_{row.get('stint', '')}",
+            "game_id": f"lahman-{year}-{pid}-{team_id}-{stint}",
             "player_id": pid,
-            "team_id": _safe_str(row.get("teamID")),
-            "season": str(row.get("yearID", season)),
+            "team_id": team_id,
+            "season": year,
             "category": "baseball",
-            "ab": _safe_int(row.get("AB")),
-            "hits": _safe_int(row.get("H")),
-            "hr": _safe_int(row.get("HR")),
+            "games": _safe_int(row.get("G")),
+            "ab": ab,
+            "hits": hits,
+            "hr": hr,
             "rbi": _safe_int(row.get("RBI")),
             "sb": _safe_int(row.get("SB")),
             "runs": _safe_int(row.get("R")),
-            "bb": _safe_int(row.get("BB")),
+            "bb": bb,
+            "ibb": _safe_int(row.get("IBB")),
             "so": _safe_int(row.get("SO")),
+            "doubles": doubles,
+            "triples": triples,
+            "pa": pa,
+            "cs": _safe_int(row.get("CS")),
+            "hbp": hbp,
+            "sac_flies": sf,
+            "sac_bunts": sh,
+            "gidp": _safe_int(row.get("GIDP")),
+            "total_bases": total_bases,
+            "avg": avg,
+            "obp": obp,
+            "slg": slg,
+            "ops": ops,
+            "era": pitch.get("era"),
+            "strikeouts": pitch.get("strikeouts"),
+            "walks": pitch.get("walks"),
+            "innings": pitch.get("innings"),
+            "earned_runs": pitch.get("earned_runs"),
+            "whip": pitch.get("whip"),
+            "win": pitch.get("wins"),
+            "loss": pitch.get("losses"),
+            "save": pitch.get("saves"),
+            "games_pitched": pitch.get("games_pitched"),
+            "games_started": pitch.get("games_started"),
+            "complete_games": pitch.get("complete_games"),
+            "shutouts": pitch.get("shutouts"),
+            "ibb_pitcher": pitch.get("ibb_pitcher"),
+            "wp": pitch.get("wp"),
         })
     return records
 
 
 def _lahman_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    """Extract team season records from Lahman Teams.csv."""
+    """Lahman does not provide per-game schedule/results in Teams.csv."""
+    return []
+
+
+def _lahman_standings(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     teams_csv = base / "Teams.csv"
     if not teams_csv.exists():
         return []
@@ -4633,24 +5450,32 @@ def _lahman_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
         df = df[df["yearID"] == int(season)]
     except (ValueError, KeyError):
         return []
+
     rows: list[dict[str, Any]] = []
     for _, t in df.iterrows():
+        wins = _safe_int(t.get("W"))
+        losses = _safe_int(t.get("L"))
+        gp = _safe_int(t.get("G"))
+        pct = round((wins / gp), 3) if wins is not None and gp not in (None, 0) else None
         rows.append({
-            "source": "lahman",
-            "id": f"lahman-{season}-{t.get('teamID', '')}",
+            "team_id": _safe_str(t.get("teamID")) or "",
+            "team_name": _safe_str(t.get("name")),
             "sport": sport,
-            "season": season,
-            "date": f"{season}-04-01",
-            "status": "final",
-            "home_team": _safe_str(t.get("name")),
-            "away_team": None,
-            "home_score": _safe_int(t.get("W")),
-            "away_score": _safe_int(t.get("L")),
-            "venue": _safe_str(t.get("park")),
-            "broadcast": None,
-            "broadcast_url": None,
+            "season": str(season),
+            "wins": wins,
+            "losses": losses,
+            "pct": pct,
+            "games_played": gp,
+            "rank": _safe_int(t.get("Rank")),
+            "division": _safe_str(t.get("divID")),
+            "group": _safe_str(t.get("lgID")),
+            "div_winner": _safe_str(t.get("DivWin")) == "Y",
+            "wildcard": _safe_str(t.get("WCWin")) == "Y",
+            "league_winner": _safe_str(t.get("LgWin")) == "Y",
+            "ws_winner": _safe_str(t.get("WSWin")) == "Y",
+            "runs_scored": _safe_int(t.get("R")),
+            "runs_allowed": _safe_int(t.get("RA")),
             "attendance": _safe_int(t.get("attendance")),
-            "season_type": "regular",
         })
     return rows
 
@@ -4925,44 +5750,139 @@ def _parse_ufc_date(raw: str) -> str | None:
     return None
 
 
+def _ufcstats_fight_bundle_files(base: Path) -> list[Path]:
+    files: list[Path] = []
+    legacy_dir = base / "fights"
+    if legacy_dir.is_dir():
+        files.extend(sorted(legacy_dir.glob("*.json")))
+
+    files.extend(sorted((base / "season_types").glob("**/events/*/fights.json")))
+    dedup: dict[str, Path] = {}
+    for fp in files:
+        dedup[str(fp)] = fp
+    return list(dedup.values())
+
+
+def _ufcstats_fighter_stats_files(base: Path) -> list[Path]:
+    files: list[Path] = []
+    legacy_dir = base / "fighter_stats"
+    if legacy_dir.is_dir():
+        files.extend(sorted(legacy_dir.glob("*.json")))
+
+    files.extend(sorted((base / "season_types").glob("**/events/*/fighter_stats/*.json")))
+    dedup: dict[str, Path] = {}
+    for fp in files:
+        dedup[str(fp)] = fp
+    return list(dedup.values())
+
+
+def _ufcstats_path_context(path: Path) -> tuple[str | None, int | None, str | None]:
+    parts = path.parts
+    season_type: str | None = None
+    week_num: int | None = None
+    event_date: str | None = None
+
+    if "season_types" in parts:
+        idx = parts.index("season_types")
+        if idx + 1 < len(parts):
+            season_type = parts[idx + 1]
+    if "weeks" in parts:
+        idx = parts.index("weeks")
+        if idx + 1 < len(parts):
+            wk = parts[idx + 1]
+            m = re.match(r"week_(\d+)", wk)
+            if m:
+                week_num = int(m.group(1))
+    if "dates" in parts:
+        idx = parts.index("dates")
+        if idx + 1 < len(parts):
+            dt = parts[idx + 1]
+            if re.match(r"\d{4}-\d{2}-\d{2}", dt):
+                event_date = dt
+
+    return season_type, week_num, event_date
+
+
+def _parse_ufc_inches(raw: Any) -> float | None:
+    if not raw or not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    m = re.match(r"(\d+)'\s*(\d+)", text)
+    if m:
+        return float(int(m.group(1)) * 12 + int(m.group(2)))
+    m2 = re.match(r"(\d+)", text)
+    if m2:
+        return float(int(m2.group(1)))
+    return None
+
+
+def _parse_ufc_weight_lbs(raw: Any) -> int | None:
+    if not raw or not isinstance(raw, str):
+        return None
+    m = re.search(r"(\d+)", raw)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _ufcstats_profile_lookup(base: Path) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    prof_dir = base / "reference" / "fighters"
+    if not prof_dir.is_dir():
+        return lookup
+
+    for fp in sorted(prof_dir.glob("*.json")):
+        prof = _load_json(fp)
+        if not prof or not isinstance(prof, dict):
+            continue
+        nm = _safe_str(prof.get("name", "")).lower()
+        if nm:
+            lookup[nm] = prof
+    return lookup
+
+
 def _ufcstats_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     import hashlib
 
     records: list[dict[str, Any]] = []
-    fights_dir = base / "fights"
-    if not fights_dir.is_dir():
+    fight_files = _ufcstats_fight_bundle_files(base)
+    if not fight_files:
         return records
 
     # Build fighter_stats lookup: fight_id -> {fighter_name -> totals}
     fighter_stats_lookup: dict[str, dict[str, dict[str, Any]]] = {}
-    stats_dir = base / "fighter_stats"
-    if stats_dir.is_dir():
-        for sp in stats_dir.glob("*.json"):
-            sd = _load_json(sp)
-            if not sd or not isinstance(sd, dict):
-                continue
-            fid = str(sd.get("id", sp.stem))
-            fighters = sd.get("fighters", [])
-            totals_list = sd.get("totals", [])
-            if not fighters or not totals_list:
-                continue
-            # totals is alternating: fighter1 total, fighter2 total, fighter1 r1, fighter2 r1, ...
-            # First two entries are overall totals per fighter
-            f_names = [f.get("name", "") if isinstance(f, dict) else str(f) for f in fighters]
-            by_name: dict[str, dict[str, Any]] = {}
-            if len(totals_list) >= 2:
-                for i, fname in enumerate(f_names[:2]):
-                    if i < len(totals_list) and isinstance(totals_list[i], dict):
-                        by_name[fname] = totals_list[i]
-            if by_name:
-                fighter_stats_lookup[fid] = by_name
+    for sp in _ufcstats_fighter_stats_files(base):
+        sd = _load_json(sp)
+        if not sd or not isinstance(sd, dict):
+            continue
+        fid = str(sd.get("id", sp.stem))
+        fighters = sd.get("fighters", [])
+        totals_list = sd.get("totals", [])
+        if not fighters or not totals_list:
+            continue
+        # totals is alternating: fighter1 total, fighter2 total, fighter1 r1, fighter2 r1, ...
+        # First two entries are overall totals per fighter
+        f_names = [f.get("name", "") if isinstance(f, dict) else str(f) for f in fighters]
+        by_name: dict[str, dict[str, Any]] = {}
+        if len(totals_list) >= 2:
+            for i, fname in enumerate(f_names[:2]):
+                if i < len(totals_list) and isinstance(totals_list[i], dict):
+                    by_name[fname] = totals_list[i]
+        if by_name:
+            fighter_stats_lookup[fid] = by_name
 
-    for p in fights_dir.glob("*.json"):
+    profile_lookup = _ufcstats_profile_lookup(base)
+
+    for p in fight_files:
         data = _load_json(p)
         if not data:
             continue
         event = data.get("event", {})
-        event_date = _parse_ufc_date(event.get("date", ""))
+        path_season_type, path_week, path_date = _ufcstats_path_context(p)
+        event_date = _parse_ufc_date(event.get("date", "")) or path_date
         for fight in data.get("fights", []):
             fighters = fight.get("fighters", [])
             fight_id = str(fight.get("id", p.stem))
@@ -4998,6 +5918,7 @@ def _ufcstats_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]
                 "season": season,
                 "date": event_date,
                 "status": "final",
+                "season_type": path_season_type or "regular",
                 "home_team": home,
                 "away_team": away,
                 "home_score": home_score,
@@ -5006,6 +5927,8 @@ def _ufcstats_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]
                 "away_team_id": away_fighter_id,
                 "venue": event.get("location", ""),
             }
+            if path_week is not None:
+                rec["week"] = path_week
 
             # Merge fighter stats
             fstats = fighter_stats_lookup.get(fight_id, {})
@@ -5044,6 +5967,30 @@ def _ufcstats_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]
                 if finish_round is not None:
                     rec[f"{prefix}_finish_round"] = finish_round
 
+            # Merge fighter profile traits used by combat feature extraction
+            for prefix, fname in [("home", home), ("away", away)]:
+                prof = profile_lookup.get(str(fname).lower())
+                if not prof:
+                    continue
+                reach = _parse_ufc_inches(prof.get("reach"))
+                if reach is not None:
+                    rec[f"{prefix}_reach"] = reach
+                height = _parse_ufc_inches(prof.get("height"))
+                if height is not None:
+                    rec[f"{prefix}_height"] = height
+
+                if event_date and isinstance(prof.get("dob"), str):
+                    dob = _parse_ufc_date(prof.get("dob", ""))
+                    if dob:
+                        try:
+                            event_dt = datetime.strptime(event_date, "%Y-%m-%d").date()
+                            dob_dt = datetime.strptime(dob, "%Y-%m-%d").date()
+                            age = event_dt.year - dob_dt.year - ((event_dt.month, event_dt.day) < (dob_dt.month, dob_dt.day))
+                            if age > 0:
+                                rec[f"{prefix}_age"] = float(age)
+                        except ValueError:
+                            pass
+
             records.append(rec)
     return records
 
@@ -5074,33 +6021,13 @@ def _parse_ctrl_time(val: Any) -> int:
 def _ufcstats_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Extract unique fighters from UFC fights and fighter_stats files."""
     seen: dict[str, dict[str, Any]] = {}
-    fights_dir = base / "fights"
-    if fights_dir.is_dir():
-        for fp in sorted(fights_dir.glob("*.json")):
-            data = _load_json(fp)
-            if not data:
-                continue
-            for fight in data.get("fights", []):
-                weight_class = fight.get("weightClass", "")
-                for fname in fight.get("fighters", []):
-                    if not fname:
-                        continue
-                    pid = fname.replace(" ", "_").lower()
-                    if pid not in seen:
-                        seen[pid] = {
-                            "id": pid,
-                            "name": fname,
-                            "weight_class": weight_class,
-                        }
-    stats_dir = base / "fighter_stats"
-    if stats_dir.is_dir():
-        for fp in sorted(stats_dir.glob("*.json")):
-            data = _load_json(fp)
-            if not data:
-                continue
-            weight_class = data.get("weightClass", "")
-            for f in data.get("fighters", []):
-                fname = f.get("name", "")
+    for fp in _ufcstats_fight_bundle_files(base):
+        data = _load_json(fp)
+        if not data:
+            continue
+        for fight in data.get("fights", []):
+            weight_class = fight.get("weightClass", "")
+            for fname in fight.get("fighters", []):
                 if not fname:
                     continue
                 pid = fname.replace(" ", "_").lower()
@@ -5110,30 +6037,65 @@ def _ufcstats_players(base: Path, sport: str, season: str) -> list[dict[str, Any
                         "name": fname,
                         "weight_class": weight_class,
                     }
+    for fp in _ufcstats_fighter_stats_files(base):
+        data = _load_json(fp)
+        if not data:
+            continue
+        weight_class = data.get("weightClass", "")
+        for f in data.get("fighters", []):
+            fname = f.get("name", "")
+            if not fname:
+                continue
+            pid = fname.replace(" ", "_").lower()
+            if pid not in seen:
+                seen[pid] = {
+                    "id": pid,
+                    "name": fname,
+                    "weight_class": weight_class,
+                }
+
+    for prof in _ufcstats_profile_lookup(base).values():
+        name = _safe_str(prof.get("name", ""))
+        if not name:
+            continue
+        pid = name.replace(" ", "_").lower()
+        row = seen.setdefault(pid, {"id": pid, "name": name, "weight_class": ""})
+        if _safe_str(row.get("name", "")) == "":
+            row["name"] = name
+        if _safe_str(prof.get("height", "")):
+            row["height"] = _safe_str(prof.get("height", ""))
+        w = _parse_ufc_weight_lbs(prof.get("weight"))
+        if w is not None:
+            row["weight"] = w
+        dob = _parse_ufc_date(_safe_str(prof.get("dob", "")))
+        if dob:
+            row["birth_date"] = dob
+        stance = _safe_str(prof.get("stance", ""))
+        if stance:
+            row["position"] = stance
     return list(seen.values())
 
 
 def _ufcstats_player_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Per-fighter per-fight stats from UFC fighter_stats files."""
-    stats_dir = base / "fighter_stats"
-    if not stats_dir.is_dir():
+    stat_files = _ufcstats_fighter_stats_files(base)
+    if not stat_files:
         return []
 
     # Build event-date lookup from fights directory
-    fights_dir = base / "fights"
     event_dates: dict[str, str | None] = {}
-    if fights_dir.is_dir():
-        for fp in fights_dir.glob("*.json"):
-            data = _load_json(fp)
-            if not data:
-                continue
-            event = data.get("event", {})
-            event_date = _parse_ufc_date(event.get("date", ""))
-            for fight in data.get("fights", []):
-                event_dates[str(fight.get("id", ""))] = event_date
+    for fp in _ufcstats_fight_bundle_files(base):
+        data = _load_json(fp)
+        if not data:
+            continue
+        event = data.get("event", {})
+        _, _, path_date = _ufcstats_path_context(fp)
+        event_date = _parse_ufc_date(event.get("date", "")) or path_date
+        for fight in data.get("fights", []):
+            event_dates[str(fight.get("id", ""))] = event_date
 
     records: list[dict[str, Any]] = []
-    for fp in sorted(stats_dir.glob("*.json")):
+    for fp in stat_files:
         data = _load_json(fp)
         if not data:
             continue
@@ -5186,7 +6148,8 @@ def _ufcstats_player_stats(base: Path, sport: str, season: str) -> list[dict[str
             agg["reversals"] += _safe_int(entry.get("Rev.")) or 0
             agg["control_time_secs"] += _parse_ctrl_time(entry.get("Ctrl"))
 
-        fight_date = event_dates.get(fight_id)
+        _, _, path_date = _ufcstats_path_context(fp)
+        fight_date = event_dates.get(fight_id) or path_date
         for fname, agg in fighter_agg.items():
             pid = fname.replace(" ", "_").lower()
             records.append({
@@ -5220,7 +6183,9 @@ def _ufcstats_player_stats(base: Path, sport: str, season: str) -> list[dict[str
 
 def _opendota_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Load OpenDota ``teams.json`` → Team schema records."""
-    data = _load_json(base / "teams.json")
+    data = _load_json(base / "reference" / "teams.json")
+    if data is None:
+        data = _load_json(base / "teams.json")
     if not data or not isinstance(data, list):
         return []
     return [
@@ -5238,7 +6203,9 @@ def _opendota_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]
 
 def _opendota_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Load OpenDota ``pro_players.json`` → Player schema records."""
-    data = _load_json(base / "pro_players.json")
+    data = _load_json(base / "reference" / "pro_players.json")
+    if data is None:
+        data = _load_json(base / "pro_players.json")
     if not data or not isinstance(data, list):
         return []
     return [
@@ -5264,12 +6231,18 @@ def _opendota_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]
     """
     from datetime import datetime, timezone
 
-    matches_dir = base / "matches"
-    if not matches_dir.is_dir():
+    match_files = sorted((base / "season_types").glob("*/weeks/week_*/dates/*/matches/*.json"))
+    if not match_files:
+        matches_dir = base / "matches"
+        if not matches_dir.is_dir():
+            return []
+        match_files = sorted(matches_dir.glob("*.json"))
+
+    if not match_files:
         return []
 
     records: list[dict[str, Any]] = []
-    for fpath in matches_dir.glob("*.json"):
+    for fpath in match_files:
         m = _load_json(fpath)
         if not m or not isinstance(m, dict):
             continue
@@ -5357,12 +6330,18 @@ def _opendota_player_stats(base: Path, sport: str, season: str) -> list[dict[str
     """
     from datetime import datetime, timezone
 
-    matches_dir = base / "matches"
-    if not matches_dir.is_dir():
+    match_files = sorted((base / "season_types").glob("*/weeks/week_*/dates/*/matches/*.json"))
+    if not match_files:
+        matches_dir = base / "matches"
+        if not matches_dir.is_dir():
+            return []
+        match_files = sorted(matches_dir.glob("*.json"))
+
+    if not match_files:
         return []
 
     records: list[dict[str, Any]] = []
-    for fpath in matches_dir.glob("*.json"):
+    for fpath in match_files:
         m = _load_json(fpath)
         if not m or not isinstance(m, dict):
             continue
@@ -5434,7 +6413,11 @@ def _opendota_player_stats(base: Path, sport: str, season: str) -> list[dict[str
     return records
 
 def _oddsapi_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    """Load odds from ``data/raw/oddsapi/{sport}/{season}/odds/{date}/``."""
+    """Load OddsAPI odds from ``.../odds/{date}/`` under the resolved provider base.
+
+    Preferred path is ``data/raw/odds/providers/oddsapi/{sport}/{season}/``
+    with fallback to legacy ``data/raw/oddsapi/{sport}/{season}/``.
+    """
     records: list[dict[str, Any]] = []
     odds_dir = base / "odds"
     if not odds_dir.is_dir():
@@ -5505,7 +6488,10 @@ def _oddsapi_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
 
 def _sgo_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    """Load odds from ``data/raw/sgo/{sport}/{season}/odds/{date}/``.
+    """Load SGO odds from ``.../odds/{date}/`` under the resolved provider base.
+
+    Preferred path is ``data/raw/odds/providers/sgo/{sport}/{season}/``
+    with fallback to legacy ``data/raw/sgo/{sport}/{season}/``.
 
     SGO files contain a ``records`` list of per-bookmaker odds rows written by
     the v5.0 SGO TypeScript provider.  The ``game_id`` field is the SGO event
@@ -5555,7 +6541,7 @@ def _sgo_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 # ── CFBData (CollegeFootballData.com) ─────────────────────
 
 def _cfbdata_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    data = _load_json(base / "games.json")
+    data = _load_cfbdata_json_compat(base, season, "games", "games.json")
     if not data or not isinstance(data, list):
         return []
     records: list[dict[str, Any]] = []
@@ -5577,6 +6563,11 @@ def _cfbdata_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
             "venue": g.get("venue"),
             "attendance": _safe_int(g.get("attendance")),
         }
+        # Season type & week number are embedded in the source JSON
+        _cfb_st_raw = (g.get("seasonType") or "regular").lower()
+        _cfb_st_map = {"regular": "regular", "postseason": "postseason", "bowl": "postseason", "spring": "preseason"}
+        rec["season_type"] = _cfb_st_map.get(_cfb_st_raw, _cfb_st_raw)
+        rec["week"] = _safe_int(g.get("week"))
         # Extract quarter scores from CFBData homeLineScores/awayLineScores
         for prefix, key in [("home", "homeLineScores"), ("away", "awayLineScores")]:
             ls = g.get(key)
@@ -5601,13 +6592,15 @@ def _cfbdata_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
 def _cfbdata_standings(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Build standings-like records from CFBData rankings polls."""
-    data = _load_json(base / "rankings.json")
+    data = _load_cfbdata_json_compat(base, season, "rankings", "rankings.json")
     if not data or not isinstance(data, list):
         return []
-    records: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    # Use the latest poll week available
-    for poll_week in reversed(data):
+    best_records: list[dict[str, Any]] = []
+    # Choose the poll week with the richest unique-team coverage. This is more
+    # stable than relying on file order after repartitioning by seasonType/week.
+    for poll_week in data:
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
         for poll in poll_week.get("polls", []):
             for entry in poll.get("ranks", []):
                 tid = str(entry.get("teamId", ""))
@@ -5621,16 +6614,16 @@ def _cfbdata_standings(base: Path, sport: str, season: str) -> list[dict[str, An
                     "rank": _safe_int(entry.get("rank")),
                     "season": season,
                 })
-        if records:
-            break  # Use only the latest week
-    return records
+        if len(records) > len(best_records):
+            best_records = records
+    return best_records
 
 
 def _cfbdata_team_stats(
     base: Path, sport: str, season: str,
 ) -> list[dict[str, Any]]:
     """Pivot CFBData season stats (one-row-per-stat) into one-row-per-team."""
-    data = _load_json(base / "stats_season.json")
+    data = _load_cfbdata_endpoint_json(base, "stats_season.json")
     teams: dict[str, dict[str, Any]] = {}
     if data and isinstance(data, list):
         for entry in data:
@@ -5649,7 +6642,7 @@ def _cfbdata_team_stats(
                 teams[team][stat_name] = _safe_float(entry.get("statValue"))
 
     # Enrich with advanced stats (offense/defense top-level metrics)
-    adv_data = _load_json(base / "stats_advanced.json")
+    adv_data = _load_cfbdata_endpoint_json(base, "stats_advanced.json")
     if adv_data and isinstance(adv_data, list):
         for entry in adv_data:
             team = entry.get("team", "")
@@ -5675,7 +6668,7 @@ def _cfbdata_team_stats(
 
 
 def _cfbdata_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    data = _load_json(base / "teams.json")
+    data = _load_cfbdata_endpoint_json(base, "teams.json")
     if not data or not isinstance(data, list):
         return []
 
@@ -5700,7 +6693,33 @@ def _cfbdata_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 def _cfbdata_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     players: dict[str, dict[str, Any]] = {}
 
-    roster = _load_json(base / "roster.json")
+    def _fallback_pid(name: str, team: str | None = None) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+        team_slug = re.sub(r"[^a-z0-9]+", "_", (team or "").lower()).strip("_")
+        if team_slug:
+            return f"cfb_{season}_{team_slug}_{slug}"
+        return f"cfb_{season}_{slug}"
+
+    def _upsert_player(
+        pid: str | None,
+        name: str | None,
+        team_id: str | None = None,
+        position: str | None = None,
+    ) -> None:
+        if not name:
+            return
+        final_pid = pid or _fallback_pid(name, team_id)
+        rec = players.setdefault(final_pid, {
+            "id": final_pid,
+            "name": name,
+            "source": "cfbdata",
+        })
+        if team_id:
+            rec.setdefault("team_id", team_id)
+        if position:
+            rec.setdefault("position", position)
+
+    roster = _load_cfbdata_endpoint_json(base, "roster.json")
     if roster and isinstance(roster, list):
         for p in roster:
             pid = _safe_str(p.get("id")) or _safe_str(p.get("playerId"))
@@ -5711,44 +6730,93 @@ def _cfbdata_players(base: Path, sport: str, season: str) -> list[dict[str, Any]
                 if _safe_str(p.get("firstName")) and _safe_str(p.get("lastName"))
                 else _safe_str(p.get("name")) or ""
             )
-            players.setdefault(pid, {
-                "id": pid,
-                "name": full_name,
-                "team_id": _safe_str(p.get("team")) or _safe_str(p.get("school")),
-                "position": _safe_str(p.get("position")),
-                "height": _safe_str(p.get("height")),
-                "weight": _safe_float(p.get("weight")),
-                "class_year": _safe_str(p.get("year")),
-                "source": "cfbdata",
-            })
+            _upsert_player(
+                pid=pid,
+                name=full_name,
+                team_id=_safe_str(p.get("team")) or _safe_str(p.get("school")),
+                position=_safe_str(p.get("position")),
+            )
+            if pid in players:
+                players[pid].setdefault("height", _safe_str(p.get("height")))
+                players[pid].setdefault("weight", _safe_float(p.get("weight")))
+                players[pid].setdefault("class_year", _safe_str(p.get("year")))
 
-    portal = _load_json(base / "player_portal.json")
+    portal = _load_cfbdata_endpoint_json(base, "player_portal.json")
     if portal and isinstance(portal, list):
         for p in portal:
             pid = _safe_str(p.get("playerId")) or _safe_str(p.get("id"))
             name = _safe_str(p.get("player")) or _safe_str(p.get("name"))
             if not pid or not name:
                 continue
-            rec = players.setdefault(pid, {"id": pid, "name": name, "source": "cfbdata"})
+            _upsert_player(
+                pid=pid,
+                name=name,
+                team_id=_safe_str(p.get("destination")) or _safe_str(p.get("school")),
+                position=_safe_str(p.get("position")),
+            )
+            rec = players[pid]
             rec.setdefault("position", _safe_str(p.get("position")))
             rec.setdefault("team_id", _safe_str(p.get("destination")) or _safe_str(p.get("school")))
 
-    returning = _load_json(base / "player_returning.json")
+    returning = _load_cfbdata_endpoint_json(base, "player_returning.json")
     if returning and isinstance(returning, list):
         for p in returning:
             pid = _safe_str(p.get("playerId")) or _safe_str(p.get("id"))
             name = _safe_str(p.get("name"))
             if not pid or not name:
                 continue
-            rec = players.setdefault(pid, {"id": pid, "name": name, "source": "cfbdata"})
+            _upsert_player(
+                pid=pid,
+                name=name,
+                team_id=_safe_str(p.get("team")),
+                position=_safe_str(p.get("position")),
+            )
+            rec = players[pid]
             rec.setdefault("position", _safe_str(p.get("position")))
             rec.setdefault("team_id", _safe_str(p.get("team")))
+
+    # Fallback for seasons where roster endpoints were not imported yet.
+    # stats_player_season is often available and includes player/team names.
+    stats_player = _load_cfbdata_json_compat(base, season, "stats_player_season", "stats_player_season.json")
+    if stats_player and isinstance(stats_player, list):
+        for p in stats_player:
+            name = _safe_str(p.get("player")) or _safe_str(p.get("name"))
+            team = _safe_str(p.get("team")) or _safe_str(p.get("school"))
+            pid = _safe_str(p.get("playerId")) or _safe_str(p.get("id"))
+            _upsert_player(pid=pid, name=name, team_id=team)
+
+    # Additional fallback from game-level player stats payloads.
+    games_players = _load_cfbdata_json_compat(base, season, "games_players", "games_players.json")
+    if games_players and isinstance(games_players, list):
+        for game in games_players:
+            teams = game.get("teams") if isinstance(game, dict) else None
+            if not isinstance(teams, list):
+                continue
+            for t in teams:
+                team_name = _safe_str(t.get("team")) if isinstance(t, dict) else None
+                categories = t.get("categories") if isinstance(t, dict) else None
+                if not isinstance(categories, list):
+                    continue
+                for cat in categories:
+                    stats = cat.get("types") if isinstance(cat, dict) else None
+                    if not isinstance(stats, list):
+                        continue
+                    for s in stats:
+                        athletes = s.get("athletes") if isinstance(s, dict) else None
+                        if not isinstance(athletes, list):
+                            continue
+                        for a in athletes:
+                            if not isinstance(a, dict):
+                                continue
+                            pid = _safe_str(a.get("id")) or _safe_str(a.get("playerId"))
+                            name = _safe_str(a.get("name")) or _safe_str(a.get("player"))
+                            _upsert_player(pid=pid, name=name, team_id=team_name)
 
     return [r for r in players.values() if r.get("id") and r.get("name")]
 
 
 def _cfbdata_player_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    data = _load_json(base / "stats_player_season.json")
+    data = _load_cfbdata_json_compat(base, season, "stats_player_season", "stats_player_season.json")
     if not data or not isinstance(data, list):
         return []
 
@@ -5774,7 +6842,7 @@ def _cfbdata_player_stats(base: Path, sport: str, season: str) -> list[dict[str,
         if stat_name and stat_val is not None:
             rec[stat_name] = stat_val
 
-    usage = _load_json(base / "player_usage.json")
+    usage = _load_cfbdata_endpoint_json(base, "player_usage.json")
     if usage and isinstance(usage, list):
         for entry in usage:
             pid = _safe_str(entry.get("playerId")) or _safe_str(entry.get("id"))
@@ -5798,7 +6866,7 @@ def _cfbdata_player_stats(base: Path, sport: str, season: str) -> list[dict[str,
 
 
 def _cfbdata_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
-    data = _load_json(base / "lines.json")
+    data = _load_cfbdata_json_compat(base, season, "lines", "lines.json")
     if not data or not isinstance(data, list):
         return []
 
@@ -5832,24 +6900,72 @@ def _cfbdata_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 def _footballdata_games(
     base: Path, sport: str, season: str,
 ) -> list[dict[str, Any]]:
-    data = _load_json(base / "games" / "all.json")
-    if not data:
-        return []
-    matches = data.get("matches", data) if isinstance(data, dict) else data
-    if not isinstance(matches, list):
-        return []
-    records: list[dict[str, Any]] = []
-    for m in matches:
-        mid = str(m.get("id", ""))
-        if not mid:
+    """Load football-data.org matches.
+
+    Supports two layouts:
+    - Legacy: ``games/all.json`` (single bulk file)
+    - New:    ``games/matchday_{NN}/matches.json`` (per-matchday splits)
+    """
+    games_dir = base / "games"
+    # Collect raw match dicts from all available sources (deduplicated by id)
+    all_matches: dict[str, dict] = {}
+
+    # New layout: per-matchday split files
+    matchday_files = sorted(games_dir.glob("matchday_*/matches.json"))
+    stage_files = sorted(games_dir.glob("stage_*/matches.json"))
+    for mf in matchday_files + stage_files:
+        chunk = _load_json(mf)
+        if not chunk:
             continue
+        for m in (chunk.get("matches", chunk) if isinstance(chunk, dict) else chunk):
+            mid = str(m.get("id", ""))
+            if mid:
+                all_matches[mid] = m
+
+    # Legacy bulk file (always read; deduplicates with new layout if both exist)
+    bulk = _load_json(games_dir / "all.json")
+    if bulk:
+        for m in (bulk.get("matches", bulk) if isinstance(bulk, dict) else bulk):
+            mid = str(m.get("id", ""))
+            if mid and mid not in all_matches:
+                all_matches[mid] = m
+
+    if not all_matches:
+        return []
+
+    # Stage → season_type mapping for cups/tournaments
+    _stage_to_type: dict[str, str] = {
+        "REGULAR_SEASON": "regular",
+        "GROUP_STAGE": "group_stage",
+        "ROUND_OF_16": "knockout",
+        "ROUND_OF_8": "knockout",
+        "QUARTER_FINALS": "knockout",
+        "SEMI_FINALS": "knockout",
+        "FINAL": "final",
+        "THIRD_PLACE": "knockout",
+        "PLAY_OFF_ROUND": "playoff",
+        "PRELIMINARY_ROUND": "qualifying",
+        "LEAGUE_PHASE": "group_stage",
+        "KNOCKOUT_PHASE_PLAY_OFFS": "knockout",
+    }
+
+    records: list[dict[str, Any]] = []
+    for m in all_matches.values():
+        mid = str(m.get("id", ""))
         home = m.get("homeTeam", {})
         away = m.get("awayTeam", {})
         ft = m.get("score", {}).get("fullTime", {})
+        ht = m.get("score", {}).get("halfTime", {})
         status_raw = m.get("status", "")
+        stage = (m.get("stage") or "REGULAR_SEASON").upper()
+        matchday = _safe_int(m.get("matchday"))
+        season_type = _stage_to_type.get(stage, "regular")
         records.append({
             "id": mid,
             "season": season,
+            "season_type": season_type,
+            "matchday": matchday,
+            "stage": stage,
             "date": (m.get("utcDate") or "")[:10] or None,
             "status": "final" if status_raw == "FINISHED" else "scheduled",
             "home_team": home.get("shortName") or home.get("name", ""),
@@ -5858,6 +6974,8 @@ def _footballdata_games(
             "away_team_id": str(away.get("id", "")),
             "home_score": _safe_int(ft.get("home")),
             "away_score": _safe_int(ft.get("away")),
+            "home_ht_score": _safe_int(ht.get("home")),
+            "away_ht_score": _safe_int(ht.get("away")),
             "venue": None,
         })
     return records
@@ -5917,6 +7035,191 @@ def _footballdata_players(
     return records
 
 
+def _footballdata_teams(
+    base: Path, sport: str, season: str,
+) -> list[dict[str, Any]]:
+    """Extract team records from football-data.org teams/all.json."""
+    data = _load_json(base / "teams" / "all.json")
+    if not data:
+        return []
+    teams = data.get("teams", [])
+    records: list[dict[str, Any]] = []
+    for t in teams:
+        tid = str(t.get("id", ""))
+        if not tid:
+            continue
+        area = t.get("area", {})
+        records.append({
+            "id": tid,
+            "name": t.get("name", ""),
+            "abbreviation": t.get("tla") or t.get("shortName"),
+            "city": area.get("name"),
+            "venue_name": t.get("venue"),
+            "founded_year": _safe_int(t.get("founded")),
+        })
+    return records
+
+
+# ── Understat (soccer xG) ─────────────────────────────────
+
+def _understat_games(
+    base: Path, sport: str, season: str,
+) -> list[dict[str, Any]]:
+    """Load Understat match records, contributing home_xg / away_xg.
+
+    Walks ``matches/season_type/{type}/week_NN/{date}/{match_id}/match.json``
+    and falls back to the root ``league_matches.json`` bulk file when the
+    structured layout is absent.
+    """
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    matches_root = base / "matches" / "season_type"
+    if matches_root.is_dir():
+        for st_dir in sorted(matches_root.iterdir()):
+            season_type = st_dir.name
+            for week_dir in sorted(st_dir.iterdir()):
+                for date_dir in sorted(week_dir.iterdir()):
+                    for match_dir in sorted(date_dir.iterdir()):
+                        mf = match_dir / "match.json"
+                        if not mf.exists():
+                            continue
+                        m = _load_json(mf)
+                        if not m or not isinstance(m, dict):
+                            continue
+                        mid = str(m.get("id", ""))
+                        if not mid or mid in seen:
+                            continue
+                        seen.add(mid)
+                        h = m.get("h", {})
+                        a = m.get("a", {})
+                        xg = m.get("xG", {})
+                        goals = m.get("goals", {})
+                        is_result = bool(m.get("isResult"))
+                        dt = (m.get("datetime") or "")[:10] or None
+                        records.append({
+                            "id": mid,
+                            "season": season,
+                            "season_type": season_type,
+                            "date": dt,
+                            "status": "final" if is_result else "scheduled",
+                            "home_team": h.get("title", ""),
+                            "away_team": a.get("title", ""),
+                            "home_team_id": str(h.get("id", "")),
+                            "away_team_id": str(a.get("id", "")),
+                            "home_score": _safe_int(goals.get("h")) if is_result else None,
+                            "away_score": _safe_int(goals.get("a")) if is_result else None,
+                            "home_xg": _safe_float(xg.get("h")),
+                            "away_xg": _safe_float(xg.get("a")),
+                        })
+
+    # Fallback: root league_matches.json bulk file
+    if not records:
+        bulk = _load_json(base / "league_matches.json")
+        if bulk and isinstance(bulk, list):
+            for m in bulk:
+                mid = str(m.get("id", ""))
+                if not mid or mid in seen:
+                    continue
+                seen.add(mid)
+                h = m.get("h", {})
+                a = m.get("a", {})
+                xg = m.get("xG", {})
+                goals = m.get("goals", {})
+                is_result = bool(m.get("isResult"))
+                dt = (m.get("datetime") or "")[:10] or None
+                records.append({
+                    "id": mid,
+                    "season": season,
+                    "season_type": "regular",
+                    "date": dt,
+                    "status": "final" if is_result else "scheduled",
+                    "home_team": h.get("title", ""),
+                    "away_team": a.get("title", ""),
+                    "home_team_id": str(h.get("id", "")),
+                    "away_team_id": str(a.get("id", "")),
+                    "home_score": _safe_int(goals.get("h")) if is_result else None,
+                    "away_score": _safe_int(goals.get("a")) if is_result else None,
+                    "home_xg": _safe_float(xg.get("h")),
+                    "away_xg": _safe_float(xg.get("a")),
+                })
+
+    return records
+
+
+def _understat_player_stats(
+    base: Path, sport: str, season: str,
+) -> list[dict[str, Any]]:
+    """Aggregate per-player per-match xG stats from Understat shots.json files.
+
+    Each shots.json at ``matches/season_type/{type}/week_NN/{date}/{match_id}/shots.json``
+    contains ``{"h": [...shots], "a": [...shots]}``.  Shots are aggregated by
+    player_id × match_id to produce SoccerStats-compatible records.
+    """
+    # Collect all shots.json paths
+    shot_files: list[Path] = []
+    matches_root = base / "matches" / "season_type"
+    if matches_root.is_dir():
+        shot_files = sorted(matches_root.rglob("shots.json"))
+
+    if not shot_files:
+        return []
+
+    records: list[dict[str, Any]] = []
+    for sf in shot_files:
+        data = _load_json(sf)
+        if not data or not isinstance(data, dict):
+            continue
+        # Combine home and away shot lists
+        all_shots: list[dict] = []
+        for side in ("h", "a"):
+            side_shots = data.get(side)
+            if isinstance(side_shots, list):
+                all_shots.extend(side_shots)
+
+        # Aggregate per player within this match
+        player_agg: dict[str, dict[str, Any]] = {}
+        for shot in all_shots:
+            pid = str(shot.get("player_id", ""))
+            if not pid:
+                continue
+            if pid not in player_agg:
+                player_agg[pid] = {
+                    "player_name": shot.get("player", ""),
+                    "team": shot.get("h_team", "") if shot.get("h_a") == "h" else shot.get("a_team", ""),
+                    "match_id": str(shot.get("match_id", "")),
+                    "date": (shot.get("date") or "")[:10] or None,
+                    "xg": 0.0,
+                    "shots": 0,
+                    "goals": 0,
+                }
+            pa = player_agg[pid]
+            pa["shots"] += 1
+            xg_val = _safe_float(shot.get("xG"))
+            if xg_val is not None:
+                pa["xg"] += xg_val
+            if (shot.get("result") or "").lower() == "goal":
+                pa["goals"] += 1
+
+        match_id_dir = sf.parent.name  # directory is the match_id
+        for pid, pa in player_agg.items():
+            mid = pa["match_id"] or match_id_dir
+            records.append({
+                "id": f"{mid}_{pid}",
+                "player_id": pid,
+                "player_name": pa["player_name"],
+                "team_name": pa["team"],
+                "game_id": mid,
+                "season": season,
+                "date": pa["date"],
+                "xg": round(pa["xg"], 4),
+                "shots": pa["shots"],
+                "goals": pa["goals"],
+            })
+
+    return records
+
+
 # ── NHL player stats from boxscores ──────────────────────
 
 def _nhl_player_stats(
@@ -5927,7 +7230,12 @@ def _nhl_player_stats(
     games_dir = base / "games"
     if not games_dir.is_dir():
         return records
-    for fp in games_dir.glob("*_boxscore.json"):
+    boxscore_files: list[Path] = list(games_dir.glob("*_boxscore.json"))
+    for gt in ("regular", "playoffs"):
+        gt_dir = games_dir / gt
+        if gt_dir.is_dir():
+            boxscore_files.extend(gt_dir.glob("*/boxscore.json"))
+    for fp in boxscore_files:
         data = _load_json(fp)
         if not data:
             continue
@@ -6012,18 +7320,16 @@ def _espn_mlb_player_stats(
 ) -> list[dict[str, Any]]:
     """Extract per-player batting and pitching stats from ESPN MLB boxscore JSON."""
     records: list[dict[str, Any]] = []
-    games_dir = base / "games"
-    if not games_dir.is_dir():
+    game_files = _espn_game_files(base)
+    if not game_files:
         return records
 
-    for fp in games_dir.glob("*.json"):
-        if fp.name == "all_games.json":
-            continue
+    for fp in game_files:
         data = _load_json(fp)
         if not data:
             continue
 
-        event_id = str(data.get("eventId", fp.stem))
+        event_id = str(data.get("eventId", fp.parent.name if fp.parent != base else fp.stem))
         summary = data.get("summary", {})
         header = summary.get("header", {})
         boxscore = summary.get("boxscore", {})
@@ -6117,8 +7423,8 @@ def _espn_basketball_player_stats(
     Works for NBA, WNBA, NCAAB, and NCAAW.
     """
     records: list[dict[str, Any]] = []
-    games_dir = base / "games"
-    if not games_dir.is_dir():
+    game_files = _espn_game_files(base)
+    if not game_files:
         return records
 
     def _split_made_att(val: str | None) -> tuple[int | None, int | None]:
@@ -6128,14 +7434,12 @@ def _espn_basketball_player_stats(
         parts = str(val).split("-", 1)
         return _safe_int(parts[0]), _safe_int(parts[1])
 
-    for fp in games_dir.glob("*.json"):
-        if fp.name == "all_games.json":
-            continue
+    for fp in game_files:
         data = _load_json(fp)
         if not data:
             continue
 
-        event_id = str(data.get("eventId", fp.stem))
+        event_id = str(data.get("eventId", fp.parent.name if fp.parent != base else fp.stem))
         summary = data.get("summary", {})
         header = summary.get("header", {})
         boxscore = summary.get("boxscore", {})
@@ -6219,8 +7523,8 @@ def _espn_football_player_stats(
     receiving, etc.) produces separate records tagged with ``stat_type``.
     """
     records: list[dict[str, Any]] = []
-    games_dir = base / "games"
-    if not games_dir.is_dir():
+    game_files = _espn_game_files(base)
+    if not game_files:
         return records
 
     def _split_made_att(val: Any) -> tuple[int | None, int | None]:
@@ -6235,14 +7539,12 @@ def _espn_football_player_stats(
             return None, None
         return _safe_int(parts[0]), _safe_int(parts[1])
 
-    for fp in games_dir.glob("*.json"):
-        if fp.name == "all_games.json":
-            continue
+    for fp in game_files:
         data = _load_json(fp)
         if not data:
             continue
 
-        event_id = str(data.get("eventId", fp.stem))
+        event_id = str(data.get("eventId", fp.parent.name if fp.parent != base else fp.stem))
         summary = data.get("summary", {})
         header = summary.get("header", {})
         boxscore = summary.get("boxscore", {})
@@ -6394,18 +7696,16 @@ def _espn_hockey_player_stats(
 ) -> list[dict[str, Any]]:
     """Extract per-player hockey stats from ESPN boxscore JSON (NHL)."""
     records: list[dict[str, Any]] = []
-    games_dir = base / "games"
-    if not games_dir.is_dir():
+    game_files = _espn_game_files(base)
+    if not game_files:
         return records
 
-    for fp in games_dir.glob("*.json"):
-        if fp.name == "all_games.json":
-            continue
+    for fp in game_files:
         data = _load_json(fp)
         if not data:
             continue
 
-        event_id = str(data.get("eventId", fp.stem))
+        event_id = str(data.get("eventId", fp.parent.name if fp.parent != base else fp.stem))
         summary = data.get("summary", {})
         header = summary.get("header", {})
         boxscore = summary.get("boxscore", {})
@@ -6504,18 +7804,16 @@ def _espn_soccer_player_stats(
     store rosters at root level.
     """
     records: list[dict[str, Any]] = []
-    games_dir = base / "games"
-    if not games_dir.is_dir():
+    game_files = _espn_game_files(base)
+    if not game_files:
         return records
 
-    for fp in games_dir.glob("*.json"):
-        if fp.name == "all_games.json":
-            continue
+    for fp in game_files:
         data = _load_json(fp)
         if not data:
             continue
 
-        event_id = str(data.get("eventId", fp.stem))
+        event_id = str(data.get("eventId", fp.parent.name if fp.parent != base else fp.stem))
         summary = data.get("summary", {})
         # Try root-level first (UCL, NWSL, MLS), fall back to summary (EPL)
         header = data.get("header") or summary.get("header", {})
@@ -6617,13 +7915,11 @@ def _espn_player_stats(base: Path, sport: str, season: str) -> list[dict[str, An
 
 def _espn_golf_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Extract unique golfers from ESPN tournament game files."""
-    games_dir = base / "games"
-    if not games_dir.is_dir():
+    game_files = _espn_game_files(base)
+    if not game_files:
         return []
     seen: dict[str, dict[str, Any]] = {}
-    for p in sorted(games_dir.glob("*.json")):
-        if p.name == "all_games.json":
-            continue
+    for p in game_files:
         data = _load_json(p)
         if not data:
             continue
@@ -6658,17 +7954,15 @@ def _espn_golf_players(base: Path, sport: str, season: str) -> list[dict[str, An
 
 def _espn_golf_player_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Extract per-tournament performance for each golfer."""
-    games_dir = base / "games"
-    if not games_dir.is_dir():
+    game_files = _espn_game_files(base)
+    if not game_files:
         return []
     records: list[dict[str, Any]] = []
-    for p in sorted(games_dir.glob("*.json")):
-        if p.name == "all_games.json":
-            continue
+    for p in game_files:
         data = _load_json(p)
         if not data:
             continue
-        game_id = str(data.get("eventId", p.stem))
+        game_id = str(data.get("eventId", p.parent.name if p.parent != base else p.stem))
         sb = data.get("scoreboard", {})
         game_date = sb.get("date", "")[:10]
         for comp in sb.get("competitions", []):
@@ -6716,17 +8010,12 @@ def _espn_golf_player_stats(base: Path, sport: str, season: str) -> list[dict[st
 
 def _espn_tennis_load_matches(base: Path) -> list[dict[str, Any]]:
     """Batch-load all match_*.json from games/ directory efficiently."""
-    import os as _os
-    games_dir = base / "games"
-    if not games_dir.is_dir():
-        return []
-    gd = str(games_dir)
     matches: list[dict[str, Any]] = []
-    for name in _os.listdir(gd):
-        if not name.startswith("match_"):
+    for game_file in _espn_game_files(base):
+        if not game_file.name.startswith("match_"):
             continue
         try:
-            with open(_os.path.join(gd, name), "r") as fh:
+            with open(game_file, "r") as fh:
                 matches.append(json.load(fh))
         except Exception:
             continue
@@ -6941,14 +8230,63 @@ _PANDASCORE_STATUS_MAP: dict[str, str] = {
 }
 
 
+def _pandascore_load_records(base: Path, endpoint: str) -> list[dict[str, Any]]:
+    """Load PandaScore records from flat and hierarchical layouts.
+
+    Supports legacy files (``{endpoint}.json``) and the new partitioned layout:
+    ``season_types/{type}/weeks/week_xx/YYYY-MM-DD/{endpoint}/*.json``.
+    """
+    records: list[dict[str, Any]] = []
+
+    # Legacy flat file
+    flat = _load_json(base / f"{endpoint}.json")
+    if isinstance(flat, list):
+        records.extend([row for row in flat if isinstance(row, dict)])
+    elif isinstance(flat, dict):
+        records.append(flat)
+
+    # New hierarchical event files
+    season_types_dir = base / "season_types"
+    if season_types_dir.is_dir():
+        pattern = f"*/weeks/week_*/*/{endpoint}/*.json"
+        for fp in sorted(season_types_dir.glob(pattern)):
+            payload = _load_json(fp)
+            if isinstance(payload, dict):
+                records.append(payload)
+            elif isinstance(payload, list):
+                records.extend([row for row in payload if isinstance(row, dict)])
+
+    return records
+
+
+def _pandascore_matches(base: Path) -> list[dict[str, Any]]:
+    """Load and deduplicate PandaScore match-family endpoints by match id."""
+    merged: dict[str, dict[str, Any]] = {}
+    order = ("matches", "matches_past", "matches_running", "matches_upcoming")
+    for endpoint in order:
+        for row in _pandascore_load_records(base, endpoint):
+            rid = _safe_str(row.get("id"))
+            if not rid:
+                continue
+            existing = merged.get(rid)
+            if existing is None:
+                merged[rid] = row
+                continue
+            # Keep richer payload when duplicate ids appear across endpoints.
+            if len(row.keys()) > len(existing.keys()):
+                merged[rid] = row
+
+    return list(merged.values())
+
+
 def _pandascore_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Load PandaScore ``matches.json`` → Game schema records.
 
     Falls back to extracting matches embedded in ``tournaments.json``
     when ``matches.json`` is empty (common for 2024 data).
     """
-    data = _load_json(base / "matches.json")
-    if data and isinstance(data, list):
+    data = _pandascore_matches(base)
+    if data:
         return _pandascore_games_from_matches(data, season)
 
     # Fallback: extract matches from tournaments.json
@@ -7050,9 +8388,30 @@ def _pandascore_games_from_tournaments(
 
 def _pandascore_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Load PandaScore ``players.json`` → Player schema records."""
-    data = _load_json(base / "players.json")
-    if not data or not isinstance(data, list):
-        return []
+    data = _pandascore_load_records(base, "players")
+    if not data:
+        # Fallback for throttled seasons: derive a stable player list from
+        # match participation rows produced by `_pandascore_player_stats`.
+        derived_stats = _pandascore_player_stats(base, sport, season)
+        if not derived_stats:
+            return []
+        by_player: dict[str, dict[str, Any]] = {}
+        for row in derived_stats:
+            pid = _safe_str(row.get("player_id"))
+            if not pid:
+                continue
+            if pid not in by_player:
+                by_player[pid] = {
+                    "id": pid,
+                    "name": row.get("player_name") or pid,
+                    "team_id": _safe_str(row.get("team_id")),
+                    "position": None,
+                    "nationality": None,
+                    "headshot_url": None,
+                    "status": "active",
+                    "source": "pandascore",
+                }
+        return list(by_player.values())
     records: list[dict[str, Any]] = []
     for p in data:
         pid = p.get("id")
@@ -7079,8 +8438,8 @@ def _pandascore_players(base: Path, sport: str, season: str) -> list[dict[str, A
 
 def _pandascore_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Load PandaScore ``teams.json`` → Team schema records."""
-    data = _load_json(base / "teams.json")
-    if not data or not isinstance(data, list):
+    data = _pandascore_load_records(base, "teams")
+    if not data:
         return []
     records: list[dict[str, Any]] = []
     for t in data:
@@ -7105,11 +8464,8 @@ def _pandascore_standings(base: Path, sport: str, season: str) -> list[dict[str,
     seasons where matches are embedded in tournament objects.
     """
     # Collect all finished matches with a winner
-    matches: list[dict[str, Any]] = []
-    data = _load_json(base / "matches.json")
-    if data and isinstance(data, list):
-        matches = data
-    else:
+    matches = _pandascore_matches(base)
+    if not matches:
         tournaments = _load_json(base / "tournaments.json")
         if tournaments and isinstance(tournaments, list):
             for t in tournaments:
@@ -7174,7 +8530,7 @@ def _pandascore_player_stats(base: Path, sport: str, season: str) -> list[dict[s
     with match outcome data.  This gives ML models player-team-game context.
     """
     # Build team → players mapping from players.json
-    players_data = _load_json(base / "players.json")
+    players_data = _pandascore_load_records(base, "players")
     team_players: dict[str, list[dict[str, Any]]] = {}  # team_id → [player, ...]
     player_team: dict[str, str] = {}  # player_id → team_id
 
@@ -7190,8 +8546,8 @@ def _pandascore_player_stats(base: Path, sport: str, season: str) -> list[dict[s
                 team_players.setdefault(tid_str, []).append(p)
 
     # Load matches
-    matches_data = _load_json(base / "matches.json")
-    if not matches_data or not isinstance(matches_data, list):
+    matches_data = _pandascore_matches(base)
+    if not matches_data:
         return []
 
     records: list[dict[str, Any]] = []
@@ -7270,7 +8626,9 @@ def _pandascore_player_stats(base: Path, sport: str, season: str) -> list[dict[s
 
 def _opendota_standings(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Generate standings from OpenDota ``teams.json`` wins/losses/rating."""
-    data = _load_json(base / "teams.json")
+    data = _load_json(base / "reference" / "teams.json")
+    if data is None:
+        data = _load_json(base / "teams.json")
     if not data or not isinstance(data, list):
         return []
     records: list[dict[str, Any]] = []
@@ -7296,6 +8654,163 @@ def _opendota_standings(base: Path, sport: str, season: str) -> list[dict[str, A
 
 
 # ── MLB Stats API ─────────────────────────────────────────
+
+
+def _mlbstats_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_json(base / "teams.json")
+    if not data:
+        return []
+
+    records: list[dict[str, Any]] = []
+    for team in data.get("teams", []):
+        tid = _safe_str(team.get("id"))
+        if not tid:
+            continue
+
+        division = team.get("division", {}) if isinstance(team.get("division"), dict) else {}
+        league = team.get("league", {}) if isinstance(team.get("league"), dict) else {}
+        venue = team.get("venue", {}) if isinstance(team.get("venue"), dict) else {}
+
+        records.append({
+            "source": "mlbstats",
+            "sport": sport,
+            "id": tid,
+            "name": _safe_str(team.get("name")) or _safe_str(team.get("teamName")) or tid,
+            "abbreviation": _safe_str(team.get("abbreviation")) or None,
+            "city": _safe_str(team.get("locationName")) or None,
+            "division": _safe_str(division.get("name")) or None,
+            "league": _safe_str(league.get("name")) or "MLB",
+            "venue_name": _safe_str(venue.get("name")) or None,
+            "founded_year": _safe_int(team.get("firstYearOfPlay")),
+        })
+
+    return records
+
+
+def _mlbstats_standings(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_json(base / "standings.json")
+    if not data:
+        return []
+
+    records: list[dict[str, Any]] = []
+    for block in data.get("records", []):
+        division_name = _safe_str((block.get("division") or {}).get("name")) or None
+        league_name = _safe_str((block.get("league") or {}).get("name")) or "MLB"
+
+        for row in block.get("teamRecords", []):
+            team = row.get("team", {}) if isinstance(row.get("team"), dict) else {}
+            team_id = _safe_str(team.get("id"))
+            if not team_id:
+                continue
+
+            home_record: str | None = None
+            away_record: str | None = None
+            last_ten: str | None = None
+            for rec_group in row.get("records", []):
+                for split in rec_group.get("splitRecords", []):
+                    stype = _safe_str(split.get("type")).lower()
+                    w = _safe_int(split.get("wins"))
+                    l = _safe_int(split.get("losses"))
+                    if w is None or l is None:
+                        continue
+                    value = f"{w}-{l}"
+                    if stype == "home":
+                        home_record = value
+                    elif stype == "away":
+                        away_record = value
+                    elif stype in ("lastten", "last_10", "last 10"):
+                        last_ten = value
+
+            records.append({
+                "source": "mlbstats",
+                "sport": sport,
+                "season": season,
+                "team_id": team_id,
+                "team_name": _safe_str(team.get("name")) or None,
+                "wins": _safe_int(row.get("wins")) or 0,
+                "losses": _safe_int(row.get("losses")) or 0,
+                "pct": _safe_float(row.get("winningPercentage")),
+                "games_played": _safe_int(row.get("gamesPlayed")),
+                "rank": _safe_int(row.get("leagueRank")),
+                "group": division_name,
+                "conference": league_name,
+                "division": division_name,
+                "division_rank": _safe_int(row.get("divisionRank")),
+                "overall_rank": _safe_int(row.get("sportRank")),
+                "streak": _safe_str((row.get("streak") or {}).get("streakCode")) or None,
+                "last_ten": last_ten,
+                "home_record": home_record,
+                "away_record": away_record,
+            })
+
+    return records
+
+
+def _mlbstats_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    rosters_dir = base / "rosters"
+    if not rosters_dir.is_dir():
+        return []
+
+    people_dir = base / "people"
+    people_by_id: dict[str, dict[str, Any]] = {}
+    if people_dir.is_dir():
+        for pf in people_dir.glob("*.json"):
+            pdata = _load_json(pf)
+            if not pdata:
+                continue
+            people = pdata.get("people", [])
+            if isinstance(people, list) and people:
+                person = people[0] if isinstance(people[0], dict) else {}
+                pid = _safe_str(person.get("id"))
+                if pid:
+                    people_by_id[pid] = person
+
+    records: list[dict[str, Any]] = []
+    for rf in sorted(rosters_dir.glob("*.json")):
+        data = _load_json(rf)
+        if not data:
+            continue
+
+        team_obj = data.get("team", {}) if isinstance(data.get("team"), dict) else {}
+        team_name = _safe_str(team_obj.get("name")) or None
+        team_id = _safe_str(team_obj.get("id")) or _safe_str(rf.stem)
+
+        for row in data.get("roster", []):
+            person = row.get("person", {}) if isinstance(row.get("person"), dict) else {}
+            pid = _safe_str(person.get("id"))
+            if not pid:
+                continue
+
+            profile = people_by_id.get(pid, {})
+            status_raw = _safe_str((row.get("status") or {}).get("code")).upper()
+            status = "injured" if status_raw in {"IL", "INJ"} else "active"
+            if _safe_str(profile.get("active")).lower() == "false":
+                status = "inactive"
+
+            birth_city = _safe_str(profile.get("birthCity"))
+            birth_state = _safe_str(profile.get("birthStateProvince"))
+            birth_country = _safe_str(profile.get("birthCountry"))
+            birth_parts = [p for p in (birth_city, birth_state, birth_country) if p]
+
+            records.append({
+                "source": "mlbstats",
+                "sport": sport,
+                "id": pid,
+                "name": _safe_str(person.get("fullName")) or _safe_str(profile.get("fullName")) or pid,
+                "team_id": team_id or None,
+                "team_name": team_name,
+                "position": _safe_str((row.get("position") or {}).get("abbreviation")) or None,
+                "jersey_number": _safe_int(row.get("jerseyNumber")),
+                "height": _safe_str(profile.get("height")) or None,
+                "weight": _safe_int(profile.get("weight")),
+                "birth_date": _safe_str(profile.get("birthDate")) or None,
+                "birth_place": ", ".join(birth_parts) if birth_parts else None,
+                "nationality": birth_country or None,
+                "age": _safe_int(profile.get("currentAge")),
+                "status": status,
+            })
+
+    return records
 
 
 def _mlbstats_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
@@ -7552,256 +9067,265 @@ def _mlbstats_player_stats(base: Path, sport: str, season: str) -> list[dict[str
     return records
 
 
-def _fivethirtyeight_nba_player_stats(
-    base: Path, sport: str, season: str,
-) -> list[dict[str, Any]]:
-    """Load FiveThirtyEight RAPTOR player metrics as basketball player_stats."""
-
-    data = _load_json(base / "nba-raptor-player.json")
-    if not data:
-        return []
-    rows = data.get("data") if isinstance(data, dict) else data
-    if not isinstance(rows, list):
+def _mlbstats_team_game_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    games_dir = base / "games"
+    if not games_dir.is_dir():
         return []
 
     records: list[dict[str, Any]] = []
-    for row in rows:
-        if not isinstance(row, dict):
+    for gf in sorted(games_dir.glob("*.json")):
+        data = _load_json(gf)
+        if not data:
             continue
 
-        row_season = _safe_str(row.get("season"))
-        if row_season != season:
-            continue
-
-        player_id = _safe_str(row.get("player_id")) or _safe_str(row.get("player_name"))
-        if not player_id:
-            continue
-
-        rec: dict[str, Any] = {
-            "source": "fivethirtyeight",
-            "game_id": f"raptor_{player_id}_{season}",
-            "player_id": player_id,
-            "season": season,
-            "category": "basketball",
-            "raptor_offense": _safe_float(row.get("raptor_offense")),
-            "raptor_defense": _safe_float(row.get("raptor_defense")),
-            "raptor_total": _safe_float(row.get("raptor_total")),
-            "war_total": _safe_float(row.get("war_total")),
-            "war_reg_season": _safe_float(row.get("war_reg_season")),
-            "war_playoffs": _safe_float(row.get("war_playoffs")),
-            "pace_impact": _safe_float(row.get("pace_impact")),
-            "poss": _safe_int(row.get("poss")),
-            "min": _safe_float(row.get("mp")),
-        }
-
-        if rec["raptor_offense"] is None:
-            rec["raptor_offense"] = _safe_float(row.get("raptor_box_offense"))
-        if rec["raptor_defense"] is None:
-            rec["raptor_defense"] = _safe_float(row.get("raptor_box_defense"))
-        if rec["raptor_total"] is None:
-            rec["raptor_total"] = _safe_float(row.get("raptor_box_total"))
-
-        records.append(rec)
-
-    return records
-
-
-def _fivethirtyeight_nfl_elo_games(
-    base: Path, sport: str, season: str,
-) -> list[dict[str, Any]]:
-    """Load FiveThirtyEight NFL ELO ratings as game records.
-    
-    Maps ELO metrics to game-level strength/quality indicators:
-    - elo_i / elo_n: team strength ratings (pre/post-game)
-    - win_equiv: season accumulation of quality wins
-    - forecast: pre-game win probability
-    """
-
-    data = _load_json(base / "nfl-elo.json")
-    if not data:
-        return []
-    rows = data.get("data") if isinstance(data, dict) else data
-    if not isinstance(rows, list):
-        return []
-
-    records: list[dict[str, Any]] = []
-    # Group by game_id to pair home/away records
-    games_dict: dict[str, list[dict]] = {}
-
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-
-        row_season = _safe_str(row.get("year_id"))
-        if row_season != season:
-            continue
-
-        game_id = _safe_str(row.get("game_id"))
+        game_id = _safe_str(data.get("gamePk"))
         if not game_id:
             continue
 
-        if game_id not in games_dict:
-            games_dict[game_id] = []
-        games_dict[game_id].append(row)
+        boxscore = data.get("boxscore", {})
+        linescore = data.get("linescore", {})
+        teams = boxscore.get("teams", {}) if isinstance(boxscore, dict) else {}
+        ls_teams = linescore.get("teams", {}) if isinstance(linescore, dict) else {}
 
-    # Process paired home/away records
-    for game_id, team_records in games_dict.items():
-        if len(team_records) < 2:
-            continue
+        for side in ("home", "away"):
+            other = "away" if side == "home" else "home"
+            team_box = teams.get(side, {}) if isinstance(teams, dict) else {}
+            opp_box = teams.get(other, {}) if isinstance(teams, dict) else {}
 
-        # Determine home/away
-        home_rec = None
-        away_rec = None
-        for tr in team_records:
-            loc = _safe_str(tr.get("game_location"))
-            if loc == "H":
-                home_rec = tr
-            elif loc == "A":
-                away_rec = tr
-
-        if not home_rec or not away_rec:
-            continue
-
-        # Parse game date
-        date_str = _safe_str(home_rec.get("date_game"))
-        try:
-            if date_str:
-                game_date = dt.datetime.strptime(date_str, "%Y-%m-%d").date()
-            else:
+            team_id = _safe_str((team_box.get("team") or {}).get("id"))
+            if not team_id:
                 continue
-        except (ValueError, TypeError):
-            continue
 
-        rec: dict[str, Any] = {
-            "id": game_id,
-            "sport": sport,
-            "season": season,
-            "date": game_date,
-            "status": "final",
-            "home_team": _safe_str(home_rec.get("fran_id")) or _safe_str(home_rec.get("team_id")),
-            "away_team": _safe_str(away_rec.get("fran_id")) or _safe_str(away_rec.get("team_id")),
-            "home_score": _safe_int(home_rec.get("pts")),
-            "away_score": _safe_int(away_rec.get("pts")),
-            "source": "fivethirtyeight",
-            # ELO ratings
-            "home_elo_pre": _safe_float(home_rec.get("elo_i")),
-            "home_elo_post": _safe_float(home_rec.get("elo_n")),
-            "away_elo_pre": _safe_float(away_rec.get("elo_i")),
-            "away_elo_post": _safe_float(away_rec.get("elo_n")),
-            # Win equivalency (season accumulation of quality)
-            "home_win_equiv": _safe_float(home_rec.get("win_equiv")),
-            "away_win_equiv": _safe_float(away_rec.get("win_equiv")),
-            # Pre-game forecast
-            "home_forecast": _safe_float(home_rec.get("forecast")),
-            "away_forecast": _safe_float(away_rec.get("forecast")),
-        }
+            opponent_id = _safe_str((opp_box.get("team") or {}).get("id")) or None
+            team_stats = team_box.get("teamStats", {}) if isinstance(team_box, dict) else {}
+            batting = team_stats.get("batting", {}) if isinstance(team_stats, dict) else {}
+            pitching = team_stats.get("pitching", {}) if isinstance(team_stats, dict) else {}
+            fielding = team_stats.get("fielding", {}) if isinstance(team_stats, dict) else {}
+            ls_side = ls_teams.get(side, {}) if isinstance(ls_teams, dict) else {}
 
-        records.append(rec)
+            records.append({
+                "source": "mlbstats",
+                "sport": sport,
+                "season": season,
+                "game_id": game_id,
+                "team_id": team_id,
+                "opponent_id": opponent_id,
+                "is_home": side == "home",
+                "runs": _safe_int(ls_side.get("runs")) if isinstance(ls_side, dict) else _safe_int(batting.get("runs")),
+                "hits": _safe_int(batting.get("hits")),
+                "errors": _safe_int(fielding.get("errors")),
+                "at_bats": _safe_int(batting.get("atBats")),
+                "home_runs": _safe_int(batting.get("homeRuns")),
+                "walks": _safe_int(batting.get("baseOnBalls")),
+                "strikeouts": _safe_int(batting.get("strikeOuts")),
+                "stolen_bases": _safe_int(batting.get("stolenBases")),
+                "innings_pitched": _safe_float(pitching.get("inningsPitched")),
+                "earned_runs": _safe_int(pitching.get("earnedRuns")),
+                "pitches": _safe_int(pitching.get("numberOfPitches")),
+                "whip": _safe_float(pitching.get("whip")),
+                "era": _safe_float(pitching.get("era")),
+            })
 
     return records
 
 
-def _fivethirtyeight_nba_elo_games(
-    base: Path, sport: str, season: str,
-) -> list[dict[str, Any]]:
-    """Load FiveThirtyEight NBA ELO ratings as game records.
-    
-    Maps ELO metrics to game-level strength/quality indicators.
-    """
-
-    data = _load_json(base / "nba-elo.json")
-    if not data:
-        return []
-    rows = data.get("data") if isinstance(data, dict) else data
-    if not isinstance(rows, list):
+def _mlbstats_batter_game_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    games_dir = base / "games"
+    if not games_dir.is_dir():
         return []
 
     records: list[dict[str, Any]] = []
-    # Group by game_id to pair home/away records
-    games_dict: dict[str, list[dict]] = {}
-
-    for row in rows:
-        if not isinstance(row, dict):
+    for gf in sorted(games_dir.glob("*.json")):
+        data = _load_json(gf)
+        if not data:
             continue
 
-        row_season = _safe_str(row.get("season"))
-        if row_season != season:
-            continue
-
-        game_id = _safe_str(row.get("game_id"))
+        game_id = _safe_str(data.get("gamePk"))
         if not game_id:
             continue
 
-        if game_id not in games_dict:
-            games_dict[game_id] = []
-        games_dict[game_id].append(row)
-
-    # Process paired home/away records
-    for game_id, team_records in games_dict.items():
-        if len(team_records) < 2:
-            continue
-
-        # Determine home/away
-        home_rec = None
-        away_rec = None
-        for tr in team_records:
-            loc = _safe_str(tr.get("game_location"))
-            if loc == "H":
-                home_rec = tr
-            elif loc == "A":
-                away_rec = tr
-
-        if not home_rec or not away_rec:
-            continue
-
-        # Parse game date
-        date_str = _safe_str(home_rec.get("date_game"))
-        try:
-            if date_str:
-                game_date = dt.datetime.strptime(date_str, "%Y-%m-%d").date()
-            else:
+        teams = (data.get("boxscore") or {}).get("teams", {})
+        for side in ("home", "away"):
+            other = "away" if side == "home" else "home"
+            team_box = teams.get(side, {}) if isinstance(teams, dict) else {}
+            opp_box = teams.get(other, {}) if isinstance(teams, dict) else {}
+            team_id = _safe_str((team_box.get("team") or {}).get("id")) or None
+            opponent_id = _safe_str((opp_box.get("team") or {}).get("id")) or None
+            players = team_box.get("players", {}) if isinstance(team_box, dict) else {}
+            if not isinstance(players, dict):
                 continue
-        except (ValueError, TypeError):
-            continue
 
-        rec: dict[str, Any] = {
-            "id": game_id,
-            "sport": sport,
-            "season": season,
-            "date": game_date,
-            "status": "final",
-            "home_team": _safe_str(home_rec.get("fran_id")) or _safe_str(home_rec.get("team_id")),
-            "away_team": _safe_str(away_rec.get("fran_id")) or _safe_str(away_rec.get("team_id")),
-            "home_score": _safe_int(home_rec.get("pts")),
-            "away_score": _safe_int(away_rec.get("pts")),
-            "source": "fivethirtyeight",
-            # ELO ratings
-            "home_elo_pre": _safe_float(home_rec.get("elo_i")),
-            "home_elo_post": _safe_float(home_rec.get("elo_n")),
-            "away_elo_pre": _safe_float(away_rec.get("elo_i")),
-            "away_elo_post": _safe_float(away_rec.get("elo_n")),
-            # Win equivalency (season accumulation of quality)
-            "home_win_equiv": _safe_float(home_rec.get("win_equiv")),
-            "away_win_equiv": _safe_float(away_rec.get("win_equiv")),
-            # Pre-game forecast
-            "home_forecast": _safe_float(home_rec.get("forecast")),
-            "away_forecast": _safe_float(away_rec.get("forecast")),
-        }
+            for player in players.values():
+                person = player.get("person", {}) if isinstance(player, dict) else {}
+                player_id = _safe_str(person.get("id"))
+                if not player_id:
+                    continue
+                stats = player.get("stats", {}) if isinstance(player, dict) else {}
+                batting = stats.get("batting", {}) if isinstance(stats, dict) else {}
+                if not batting:
+                    continue
 
-        records.append(rec)
+                records.append({
+                    "source": "mlbstats",
+                    "sport": sport,
+                    "season": season,
+                    "game_id": game_id,
+                    "player_id": player_id,
+                    "team_id": team_id,
+                    "opponent_id": opponent_id,
+                    "is_home": side == "home",
+                    "position": _safe_str((player.get("position") or {}).get("abbreviation")) or None,
+                    "ab": _safe_int(batting.get("atBats")),
+                    "hits": _safe_int(batting.get("hits")),
+                    "hr": _safe_int(batting.get("homeRuns")),
+                    "rbi": _safe_int(batting.get("rbi")),
+                    "runs": _safe_int(batting.get("runs")),
+                    "bb": _safe_int(batting.get("baseOnBalls")),
+                    "so": _safe_int(batting.get("strikeOuts")),
+                    "sb": _safe_int(batting.get("stolenBases")),
+                    "doubles": _safe_int(batting.get("doubles")),
+                    "triples": _safe_int(batting.get("triples")),
+                    "hbp": _safe_int(batting.get("hitByPitch")),
+                    "pa": _safe_int(batting.get("plateAppearances")),
+                    "total_bases": _safe_int(batting.get("totalBases")),
+                })
 
     return records
 
 
-def _fivethirtyeight_elo_games(
-    base: Path, sport: str, season: str,
-) -> list[dict[str, Any]]:
-    """Load FiveThirtyEight ELO games (dispatch by sport)."""
-    if sport == "nfl":
-        return _fivethirtyeight_nfl_elo_games(base, sport, season)
-    elif sport == "nba":
-        return _fivethirtyeight_nba_elo_games(base, sport, season)
-    return []
+def _mlbstats_pitcher_game_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    games_dir = base / "games"
+    if not games_dir.is_dir():
+        return []
+
+    records: list[dict[str, Any]] = []
+    for gf in sorted(games_dir.glob("*.json")):
+        data = _load_json(gf)
+        if not data:
+            continue
+
+        game_id = _safe_str(data.get("gamePk"))
+        if not game_id:
+            continue
+
+        teams = (data.get("boxscore") or {}).get("teams", {})
+        for side in ("home", "away"):
+            other = "away" if side == "home" else "home"
+            team_box = teams.get(side, {}) if isinstance(teams, dict) else {}
+            opp_box = teams.get(other, {}) if isinstance(teams, dict) else {}
+            team_id = _safe_str((team_box.get("team") or {}).get("id")) or None
+            opponent_id = _safe_str((opp_box.get("team") or {}).get("id")) or None
+            players = team_box.get("players", {}) if isinstance(team_box, dict) else {}
+            if not isinstance(players, dict):
+                continue
+
+            for player in players.values():
+                person = player.get("person", {}) if isinstance(player, dict) else {}
+                player_id = _safe_str(person.get("id"))
+                if not player_id:
+                    continue
+                stats = player.get("stats", {}) if isinstance(player, dict) else {}
+                pitching = stats.get("pitching", {}) if isinstance(stats, dict) else {}
+                if not pitching:
+                    continue
+
+                wins = _safe_int(pitching.get("wins"))
+                losses = _safe_int(pitching.get("losses"))
+                saves = _safe_int(pitching.get("saves"))
+
+                records.append({
+                    "source": "mlbstats",
+                    "sport": sport,
+                    "season": season,
+                    "game_id": game_id,
+                    "player_id": player_id,
+                    "team_id": team_id,
+                    "opponent_id": opponent_id,
+                    "is_home": side == "home",
+                    "position": _safe_str((player.get("position") or {}).get("abbreviation")) or None,
+                    "innings": _safe_float(pitching.get("inningsPitched")),
+                    "earned_runs": _safe_int(pitching.get("earnedRuns")),
+                    "strikeouts": _safe_int(pitching.get("strikeOuts")),
+                    "walks": _safe_int(pitching.get("baseOnBalls")),
+                    "home_runs_allowed": _safe_int(pitching.get("homeRuns")),
+                    "batters_faced": _safe_int(pitching.get("battersFaced")),
+                    "pitches": _safe_int(pitching.get("numberOfPitches")),
+                    "whip": _safe_float(pitching.get("whip")),
+                    "era": _safe_float(pitching.get("era")),
+                    "holds": _safe_int(pitching.get("holds")),
+                    "blown_saves": _safe_int(pitching.get("blownSaves")),
+                    "wild_pitches": _safe_int(pitching.get("wildPitches")),
+                    "win": True if wins and wins > 0 else None,
+                    "loss": True if losses and losses > 0 else None,
+                    "save": True if saves and saves > 0 else None,
+                })
+
+    return records
+
+
+def _weather_game_records(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Load weather records from game-scoped weather raw files.
+
+    Preferred layout:
+      {season}/dates/{YYYY-MM-DD}/games/{game_id}.json
+    """
+    records: list[dict[str, Any]] = []
+
+    for path in sorted((base / "dates").glob("*/games/*.json")):
+        payload = _load_json(path)
+        if not isinstance(payload, dict):
+            continue
+
+        game_id = _safe_str(payload.get("game_id") or payload.get("id") or path.stem)
+        if not game_id:
+            continue
+
+        records.append({
+            "source": _safe_str(payload.get("source")) or "weather",
+            "sport": _safe_str(payload.get("sport")) or sport,
+            "season": _safe_str(payload.get("season")) or season,
+            "game_id": game_id,
+            "temp_f": _safe_float(payload.get("temp_f")),
+            "wind_mph": _safe_float(payload.get("wind_mph")),
+            "wind_direction": _safe_str(payload.get("wind_direction")),
+            "humidity_pct": _safe_float(payload.get("humidity_pct")),
+            "precipitation": _safe_float(payload.get("precipitation")),
+            "condition": _safe_str(payload.get("condition")),
+            "dome": bool(payload.get("dome") or False),
+        })
+
+    # Legacy fallback: include any JSON under season dir that looks game-scoped.
+    if records:
+        return records
+
+    for path in sorted(base.glob("**/*.json")):
+        if "cities" in path.parts:
+            continue
+        payload = _load_json(path)
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("game_id") is None and payload.get("id") is None:
+            continue
+
+        game_id = _safe_str(payload.get("game_id") or payload.get("id") or path.stem)
+        if not game_id:
+            continue
+
+        records.append({
+            "source": _safe_str(payload.get("source")) or "weather",
+            "sport": _safe_str(payload.get("sport")) or sport,
+            "season": _safe_str(payload.get("season")) or season,
+            "game_id": game_id,
+            "temp_f": _safe_float(payload.get("temp_f")),
+            "wind_mph": _safe_float(payload.get("wind_mph")),
+            "wind_direction": _safe_str(payload.get("wind_direction")),
+            "humidity_pct": _safe_float(payload.get("humidity_pct")),
+            "precipitation": _safe_float(payload.get("precipitation")),
+            "condition": _safe_str(payload.get("condition")),
+            "dome": bool(payload.get("dome") or False),
+        })
+
+    return records
 
 
 # ═════════════════════════════════════════════════════════
@@ -7830,10 +9354,6 @@ PROVIDER_LOADERS: dict[tuple[str, str], LoaderFn] = {
     ("nbastats", "games"):        _nbastats_games,
     ("nbastats", "players"):      _nbastats_players,
     ("nbastats", "player_stats"): _nbastats_player_stats,
-    # NFL FaSTR
-    ("nflfastr", "games"):        _nflfastr_games,
-    ("nflfastr", "players"):      _nflfastr_players,
-    ("nflfastr", "player_stats"): _nflfastr_player_stats,
     # NHL API
     ("nhl", "games"):        _nhl_games,
     ("nhl", "standings"):    _nhl_standings,
@@ -7857,13 +9377,17 @@ PROVIDER_LOADERS: dict[tuple[str, str], LoaderFn] = {
     ("lahman", "games"):        _lahman_games,
     ("lahman", "teams"):        _lahman_teams,
     ("lahman", "players"):      _lahman_players,
+    ("lahman", "standings"):    _lahman_standings,
     ("lahman", "player_stats"): _lahman_player_stats,
     # MLB Stats API
+    ("mlbstats", "teams"):      _mlbstats_teams,
+    ("mlbstats", "standings"):  _mlbstats_standings,
+    ("mlbstats", "players"):    _mlbstats_players,
     ("mlbstats", "games"):      _mlbstats_games,
     ("mlbstats", "player_stats"): _mlbstats_player_stats,
-    # FiveThirtyEight
-    ("fivethirtyeight", "player_stats"): _fivethirtyeight_nba_player_stats,
-    ("fivethirtyeight", "games"): _fivethirtyeight_elo_games,
+    ("mlbstats", "team_game_stats"): _mlbstats_team_game_stats,
+    ("mlbstats", "batter_game_stats"): _mlbstats_batter_game_stats,
+    ("mlbstats", "pitcher_game_stats"): _mlbstats_pitcher_game_stats,
     # Tennis Abstract
     ("tennisabstract", "games"):        _tennisabstract_games,
     ("tennisabstract", "players"):      _tennisabstract_players,
@@ -7891,12 +9415,18 @@ PROVIDER_LOADERS: dict[tuple[str, str], LoaderFn] = {
     ("footballdata", "games"):     _footballdata_games,
     ("footballdata", "standings"): _footballdata_standings,
     ("footballdata", "players"):   _footballdata_players,
+    ("footballdata", "teams"):     _footballdata_teams,
+    # Understat (soccer xG enrichment)
+    ("understat", "games"):        _understat_games,
+    ("understat", "player_stats"): _understat_player_stats,
     # PandaScore (esports)
     ("pandascore", "games"):         _pandascore_games,
     ("pandascore", "players"):       _pandascore_players,
     ("pandascore", "teams"):         _pandascore_teams,
     ("pandascore", "standings"):     _pandascore_standings,
     ("pandascore", "player_stats"):  _pandascore_player_stats,
+    # Visual Crossing weather
+    ("weather", "weather"):          _weather_game_records,
 }
 
 
@@ -7922,6 +9452,8 @@ class Normalizer:
     ) -> Path | None:
         """Resolve ``data/raw/{provider}/{sport_dir}/{season}``."""
         sport_dir = SPORT_PROVIDER_DIR.get(sport, {}).get(provider)
+        if sport_dir is None and provider == "weather":
+            sport_dir = sport
         if sport_dir is None:
             return None
         return _provider_base_dir(self.raw_dir, provider, sport_dir, season)
@@ -7944,7 +9476,12 @@ class Normalizer:
             # season) — same as the normalizer — so ESPN is NOT listed here.
             load_season = season
             _start_year_providers = {
-                ("nhl", "nhl"),           # NHL API: folder 2024 = 2024-25 season
+                ("nhl", "nhl"),             # NHL API: folder 2024 = 2024-25 season
+                ("understat", "epl"),       # Understat: folder 2024 = 2024-25 season
+                ("understat", "laliga"),
+                ("understat", "bundesliga"),
+                ("understat", "seriea"),
+                ("understat", "ligue1"),
             }
             if (provider, sport) in _start_year_providers:
                 try:
@@ -8067,123 +9604,9 @@ class Normalizer:
         # ESPN scoreboard files can contain next-season scheduled games.
         deduped = _filter_season_date_range(deduped, sport, season)
 
-        # Post-merge EPA enrichment for NFL from nflfastr player_stats
-        if sport == "nfl":
-            deduped = self._enrich_nfl_epa(deduped, season)
-
         primary_source = providers[0] if providers else "unknown"
         validated = _validate_batch(deduped, Game, sport, source=primary_source)
         return _write_parquet(validated, self._out_path(sport, "games", season))
-
-    def _enrich_nfl_epa(
-        self, games: list[dict[str, Any]], season: str,
-    ) -> list[dict[str, Any]]:
-        """Enrich NFL game records with EPA from nflfastr player_stats."""
-        nfl_dir = self._resolve_provider_dir("nfl", "nflfastr", season)
-        if nfl_dir is None:
-            return games
-        ps_path = nfl_dir / "player_stats.csv"
-        if not ps_path.exists():
-            return games
-
-        try:
-            usecols = [
-                "recent_team", "week",
-                "passing_epa", "rushing_epa", "receiving_epa",
-                "passing_air_yards", "passing_yards_after_catch",
-            ]
-            ps = pd.read_csv(ps_path, usecols=usecols, low_memory=False)
-            for col in usecols[2:]:
-                ps[col] = pd.to_numeric(ps[col], errors="coerce").fillna(0.0)
-
-            agg = ps.groupby(["recent_team", "week"]).agg(
-                passing_epa=("passing_epa", "sum"),
-                rushing_epa=("rushing_epa", "sum"),
-                receiving_epa=("receiving_epa", "sum"),
-                air_yards=("passing_air_yards", "sum"),
-                yac=("passing_yards_after_catch", "sum"),
-            ).reset_index()
-            agg["total_epa"] = agg["passing_epa"] + agg["rushing_epa"] + agg["receiving_epa"]
-
-            epa_lookup: dict[tuple[str, int], dict[str, float]] = {}
-            for _, row in agg.iterrows():
-                key = (str(row["recent_team"]).upper(), int(row["week"]))
-                epa_lookup[key] = {
-                    "passing_epa": round(float(row["passing_epa"]), 2),
-                    "rushing_epa": round(float(row["rushing_epa"]), 2),
-                    "total_epa": round(float(row["total_epa"]), 2),
-                    "air_yards": round(float(row["air_yards"]), 1),
-                    "yac": round(float(row["yac"]), 1),
-                }
-        except Exception as exc:
-            logger.debug("NFL EPA enrichment failed: %s", exc)
-            return games
-
-        # Build full-name → nflfastr abbreviation map from teams parquet
-        teams_path = self._out_path("nfl", "teams", season)
-        name_to_abbr: dict[str, str] = {}
-        if teams_path.exists():
-            try:
-                tdf = pd.read_parquet(teams_path, columns=["name", "abbreviation"])
-                for _, row in tdf.iterrows():
-                    name = (row.get("name") or "").strip()
-                    abbr = (row.get("abbreviation") or "").strip().upper()
-                    if name and abbr:
-                        name_to_abbr[name.lower()] = abbr
-            except Exception:
-                pass
-
-        # Hardcoded abbreviation corrections (ESPN → nflfastr)
-        _ABBR_FIX: dict[str, str] = {
-            "WSH": "WAS", "LAR": "LA", "JAX": "JAX",
-        }
-
-        def _to_fastr_abbr(team_name: str) -> str:
-            abbr = name_to_abbr.get(team_name.lower().strip(), "")
-            return _ABBR_FIX.get(abbr, abbr)
-
-        # Sort games by date to derive NFL week numbers
-        dated = [(g, str(g.get("date") or "")[:10]) for g in games if g.get("date")]
-        dated.sort(key=lambda x: x[1])
-        week_dates = sorted(set(d for _, d in dated if d))
-
-        week_map: dict[str, int] = {}
-        if week_dates:
-            from datetime import datetime
-            base_dt = datetime.strptime(week_dates[0], "%Y-%m-%d")
-            for d in week_dates:
-                dt = datetime.strptime(d, "%Y-%m-%d")
-                week_num = max(1, (dt - base_dt).days // 7 + 1)
-                week_map[d] = week_num
-
-        enriched = 0
-        for g in games:
-            d = str(g.get("date") or "")[:10]
-            wk = week_map.get(d)
-            if wk is None:
-                continue
-            ht_abbr = _to_fastr_abbr(g.get("home_team") or "")
-            at_abbr = _to_fastr_abbr(g.get("away_team") or "")
-
-            h_epa = epa_lookup.get((ht_abbr, wk))
-            a_epa = epa_lookup.get((at_abbr, wk))
-            if h_epa:
-                g["home_passing_epa"] = h_epa["passing_epa"]
-                g["home_rushing_epa"] = h_epa["rushing_epa"]
-                g["home_total_epa"] = h_epa["total_epa"]
-                g["home_air_yards"] = h_epa["air_yards"]
-                g["home_yac"] = h_epa["yac"]
-                enriched += 1
-            if a_epa:
-                g["away_passing_epa"] = a_epa["passing_epa"]
-                g["away_rushing_epa"] = a_epa["rushing_epa"]
-                g["away_total_epa"] = a_epa["total_epa"]
-                g["away_air_yards"] = a_epa["air_yards"]
-                g["away_yac"] = a_epa["yac"]
-
-        if enriched:
-            logger.info("NFL EPA: enriched %d/%d games", enriched, len(games))
-        return games
 
     def normalize_teams(self, sport: str, season: str) -> int:
         return self._normalize_generic(sport, "teams", season, Team, "id")
@@ -8396,6 +9819,33 @@ class Normalizer:
                 unique.append(r)
         return _write_parquet(unique, self._out_path(sport, "transactions", season))
 
+    def normalize_team_game_stats(self, sport: str, season: str) -> int:
+        return self._normalize_generic(
+            sport,
+            "team_game_stats",
+            season,
+            TeamGameStats,
+            "game_id+team_id",
+        )
+
+    def normalize_batter_game_stats(self, sport: str, season: str) -> int:
+        return self._normalize_generic(
+            sport,
+            "batter_game_stats",
+            season,
+            BatterGameStats,
+            "game_id+player_id+team_id",
+        )
+
+    def normalize_pitcher_game_stats(self, sport: str, season: str) -> int:
+        return self._normalize_generic(
+            sport,
+            "pitcher_game_stats",
+            season,
+            PitcherGameStats,
+            "game_id+player_id+team_id",
+        )
+
     # ── Sport-specific advanced normalization ─────────────
 
     def normalize_advanced_batting(self, sport: str, season: str) -> int:
@@ -8485,6 +9935,75 @@ class Normalizer:
                         existing = next((r for r in records if r["player_id"] == pid), None)
                         if existing and stats.get("wrc_plus") is not None:
                             existing["wrc_plus"] = _safe_float(stats["wrc_plus"])
+
+        # Fallback: derive advanced metrics from normalized MLB player_stats
+        # when Lahman rows are missing for the season (e.g., current year).
+        if not records:
+            ps_path = self._out_path(sport, "player_stats", season)
+            if ps_path.exists():
+                df = pd.read_parquet(ps_path)
+                if not df.empty:
+                    needed = [
+                        "player_id", "team_id", "ab", "hits", "bb", "so", "hr",
+                        "hbp", "sac_flies", "doubles", "triples",
+                    ]
+                    for col in needed:
+                        if col not in df.columns:
+                            df[col] = 0
+
+                    grouped = (
+                        df.groupby(["player_id", "team_id"], dropna=False)[needed[2:]]
+                        .sum(min_count=1)
+                        .reset_index()
+                    )
+
+                    for _, row in grouped.iterrows():
+                        ab = _safe_int(row.get("ab")) or 0
+                        h = _safe_int(row.get("hits")) or 0
+                        bb = _safe_int(row.get("bb")) or 0
+                        so = _safe_int(row.get("so")) or 0
+                        hr = _safe_int(row.get("hr")) or 0
+                        hbp = _safe_int(row.get("hbp")) or 0
+                        sf = _safe_int(row.get("sac_flies")) or 0
+                        doubles = _safe_int(row.get("doubles")) or 0
+                        triples = _safe_int(row.get("triples")) or 0
+                        pa = ab + bb + hbp + sf
+                        if pa < 1:
+                            continue
+
+                        singles = h - doubles - triples - hr
+                        slg = (singles + 2 * doubles + 3 * triples + 4 * hr) / ab if ab > 0 else 0
+                        avg = h / ab if ab > 0 else 0
+                        iso = slg - avg
+                        bip = ab - so - hr + sf
+                        babip = (h - hr) / bip if bip > 0 else 0
+                        bb_pct = bb / pa if pa > 0 else 0
+                        k_pct = so / pa if pa > 0 else 0
+
+                        woba_num = (
+                            0.690 * bb
+                            + 0.722 * hbp
+                            + 0.880 * singles
+                            + 1.242 * doubles
+                            + 1.569 * triples
+                            + 2.015 * hr
+                        )
+                        woba = woba_num / pa if pa > 0 else 0
+
+                        records.append({
+                            "sport": sport,
+                            "source": "mlbstats",
+                            "player_id": _safe_str(row.get("player_id")) or "",
+                            "season": season,
+                            "team_id": _safe_str(row.get("team_id")) or "",
+                            "plate_appearances": pa,
+                            "iso": round(iso, 3),
+                            "babip": round(babip, 3),
+                            "bb_pct": round(bb_pct, 3),
+                            "k_pct": round(k_pct, 3),
+                            "woba": round(woba, 3),
+                            "wrc_plus": None,
+                        })
 
         if not records:
             return 0
@@ -8715,108 +10234,8 @@ class Normalizer:
         return _write_parquet(records, dest)
 
     def normalize_ratings(self, sport: str, season: str) -> int:
-        """ELO, SPI, RAPTOR ratings from FiveThirtyEight data.
-
-        Source: fivethirtyeight provider CSV/JSON files.
-        """
-        records: list[dict[str, Any]] = []
-        fte_dir = self._resolve_provider_dir(sport, "fivethirtyeight", season)
-
-        if fte_dir and fte_dir.exists():
-            for f in fte_dir.glob("*.json"):
-                data = _load_json(f)
-                if not data or not isinstance(data, dict):
-                    continue
-                rows = data.get("data", [])
-                if not isinstance(rows, list):
-                    continue
-                endpoint = _safe_str(data.get("endpoint")) or f.stem
-
-                for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-
-                    if "elo" in endpoint.lower():
-                        for team_side in ("team1", "team2", ""):
-                            prefix = f"{team_side}_" if team_side else ""
-                            elo_val = _safe_float(
-                                row.get(f"{prefix}elo_pre")
-                                or row.get(f"{prefix}elo_i")
-                                or row.get("elo")
-                                or row.get("elo_pre")
-                            )
-                            if elo_val is None:
-                                continue
-                            team_name = _safe_str(
-                                row.get(f"{prefix}team")
-                                or row.get("team")
-                            ) or ""
-                            records.append({
-                                "sport": sport,
-                                "source": "fivethirtyeight",
-                                "rating_type": "elo",
-                                "team_or_player": team_name,
-                                "value": round(elo_val, 1),
-                                "date": _safe_str(row.get("date")) or "",
-                                "season": season,
-                                "extra": {
-                                    "elo_post": _safe_float(
-                                        row.get(f"{prefix}elo_post")
-                                        or row.get(f"{prefix}elo_n")
-                                    ),
-                                },
-                            })
-
-                    elif "raptor" in endpoint.lower():
-                        records.append({
-                            "sport": sport,
-                            "source": "fivethirtyeight",
-                            "rating_type": "raptor",
-                            "team_or_player": _safe_str(
-                                row.get("player_name")
-                                or row.get("player")
-                                or row.get("team")
-                            ) or "",
-                            "value": _safe_float(row.get("raptor_total")) or 0,
-                            "date": _safe_str(row.get("season")) or season,
-                            "season": season,
-                            "extra": {
-                                "raptor_offense": _safe_float(row.get("raptor_offense")),
-                                "raptor_defense": _safe_float(row.get("raptor_defense")),
-                                "war_total": _safe_float(row.get("war_total")),
-                            },
-                        })
-
-                    elif "spi" in endpoint.lower():
-                        for team_side in ("team1", "team2"):
-                            spi_val = _safe_float(row.get(f"spi{team_side[-1]}"))
-                            team_name = _safe_str(row.get(team_side)) or ""
-                            if spi_val is None or not team_name:
-                                continue
-                            records.append({
-                                "sport": sport,
-                                "source": "fivethirtyeight",
-                                "rating_type": "spi",
-                                "team_or_player": team_name,
-                                "value": round(spi_val, 1),
-                                "date": _safe_str(row.get("date")) or "",
-                                "season": season,
-                                "extra": {
-                                    "prob_win": _safe_float(row.get(f"prob{team_side[-1]}")),
-                                    "proj_score": _safe_float(row.get(f"proj_score{team_side[-1]}")),
-                                },
-                            })
-
-        if not records:
-            return 0
-
-        # Convert extra dict to JSON string for parquet compatibility
-        for r in records:
-            if isinstance(r.get("extra"), dict):
-                r["extra"] = json.dumps(r["extra"])
-
-        dest = self._out_path(sport, "ratings", season)
-        return _write_parquet(records, dest)
+        """Ratings normalization is currently disabled."""
+        return 0
 
     def normalize_market_signals(self, sport: str, season: str) -> int:
         """Derive bookmaker line-movement signals keyed by ``game_id``.
@@ -9149,6 +10568,9 @@ class Normalizer:
         "weather":          "normalize_weather",
         "team_stats":       "normalize_team_stats",
         "transactions":     "normalize_transactions",
+        "team_game_stats":  "normalize_team_game_stats",
+        "batter_game_stats": "normalize_batter_game_stats",
+        "pitcher_game_stats": "normalize_pitcher_game_stats",
         "advanced_batting": "normalize_advanced_batting",
         "advanced_stats":   "normalize_advanced_stats",
         "match_events":     "normalize_match_events",

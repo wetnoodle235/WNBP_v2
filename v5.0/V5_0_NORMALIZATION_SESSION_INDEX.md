@@ -153,10 +153,15 @@ All API endpoints validated:
 | **NBA Stats** | NBA, WNBA | games, players, player_stats, standings | ✅ |
 | **NFL FaSTR** | NFL | games, players, player_stats | ✅ |
 | **NHL API** | NHL | games, standings, players, player_stats | ✅ |
-| **StatsBomb** | Soccer (5 leagues) | games, players, player_stats | ✅ |
+| **StatsBomb** | Soccer (8 leagues) | games, players, player_stats, three_sixty raw coverage | ✅ |
 | **FiveThirtyEight** | NBA, NFL, Soccer | **player_stats (RAPTOR)**, **games (ELO - NEW)** | ✅ |
 | **Ergast** | F1 | games, players, teams, standings, player_stats | ✅ |
+
+Ergast F1 raw storage is round-partitioned under `reference/`, `standings/`, and `rounds/round_XX/`; the backend normalizer prefers that layout and retains fallback support for legacy flat season files.
 | **OpenF1** | F1 | games, players, player_stats | ✅ |
+
+OpenF1 F1 raw storage now prefers `reference/` plus `season_phases/{testing|championship}/meetings/meeting_{key}/sessions/session_{key}/`; normalization falls back to legacy flat `sessions.json` and numeric session folders for compatibility.
+StatsBomb soccer raw storage now prefers a match-centric layout under `matches/index.json`, `matches/by_competition/{competition_id}/{season_id}.json`, and `matches/{match_id}/{events|lineups|three_sixty}.json`; normalization falls back to legacy `matches.json`, `events/*.json`, and `lineups/*.json`.
 | **Lahman** | MLB | games, teams, players, player_stats | ✅ |
 | **Tennis Abstract** | ATP, WTA | games, players, player_stats, standings | ✅ |
 | **UFC Stats** | UFC | games, players, player_stats | ✅ |
@@ -173,11 +178,11 @@ All API endpoints validated:
 
 ### Data Quality Issues
 - ❌ **FiveThirtyEight Soccer SPI** — Files corrupted (HTML wrapper in JSON), requires importer fix
-- ❌ **Understat** — No raw data established, advanced metrics unavailable
+- ⚠️ **Understat** — Raw importer now implemented (AJAX endpoints + structured season/week/date/game layout); normalization enrichments still pending
 - ❌ **Clearsports** — No raw data established, market signals unavailable
 
 ### Enhancement Opportunities
-1. **Soccer xG Metrics** — Add expected goals if Understat data becomes available
+1. **Soccer xG Metrics** — Add normalization handlers for newly collected Understat xG/shot data
 2. **Advanced Baseball** — XWOBA, barrel rate if advanced data sources added
 3. **Sports Redundancy** — Add apisports games as tertiary source for soccer
 4. **Performance** — Monitor parquet merge overhead as providers grow
@@ -207,6 +212,9 @@ All API endpoints validated:
 3. **Normalizer Handler Docs** — Inline comments in `normalization/normalizer.py` (lines 7101-7460)
 4. **Provider Map Docs** — Inline comments in `normalization/provider_map.py` (lines 1-80)
 5. **Schema Field Docs** — Inline comments in `api/models/schemas.py` (Game/Basketball/Baseball classes)
+6. **StatsBomb Design** — `STATSBOMB_STORAGE_NORMALIZATION_DESIGN.md` — StatsBomb endpoint coverage and raw/normalized compatibility contract
+7. **TennisAbstract Design** — `TENNISABSTRACT_STORAGE_NORMALIZATION_DESIGN.md` — ATP/WTA endpoint contract, 2020-2026 coverage, and normalized output behavior
+8. **Understat Design** — `UNDERSTAT_STORAGE_NORMALIZATION_DESIGN.md` — AJAX endpoint coverage, season/week/date/game raw layout, and normalization enrichment contract
 
 ---
 

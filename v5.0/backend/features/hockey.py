@@ -195,13 +195,22 @@ class HockeyExtractor(BaseFeatureExtractor):
             v = self._col_sum(home_df, home_col) + self._col_sum(away_df, away_col)
             return v
 
+        def _pp_opp_from_pim(opp_home: str, opp_away: str, h: pd.DataFrame, a: pd.DataFrame) -> float:
+            """Estimate PP opportunities from opponent penalty minutes (2 min = 1 opp)."""
+            pim = self._col_sum(h, opp_home) + self._col_sum(a, opp_away)
+            return pim / 2.0 if pim > 0 else 0.0
+
         pp_opp = (
             _pp_opp("home_power_play_attempts", "away_power_play_attempts", home, away) or
-            _pp_opp("home_pp_opportunities", "away_pp_opportunities", home, away)
+            _pp_opp("home_pp_opportunities", "away_pp_opportunities", home, away) or
+            # Fallback: opponent penalty minutes / 2 ≈ team's PP opportunities (99% fill rate)
+            _pp_opp_from_pim("away_penalty_minutes", "home_penalty_minutes", home, away)
         )
         pk_opp = (
             _pp_opp("away_power_play_attempts", "home_power_play_attempts", home, away) or
-            _pp_opp("away_pp_opportunities", "home_pp_opportunities", home, away)
+            _pp_opp("away_pp_opportunities", "home_pp_opportunities", home, away) or
+            # Fallback: own penalty minutes / 2 ≈ opponent's PP opportunities (our PK opportunities)
+            _pp_opp_from_pim("home_penalty_minutes", "away_penalty_minutes", home, away)
         )
         pk_ga = (self._col_sum(home, "away_power_play_goals") +
                  self._col_sum(home, "away_pp_goals") +
@@ -217,11 +226,30 @@ class HockeyExtractor(BaseFeatureExtractor):
         pk_pct_val = float(np.mean(pk_pcts)) if pk_pcts else (
             float((1 - pk_ga / pk_opp) * 100) if pk_opp > 0 else 0.0)
 
+        # PP trend: recent 3 vs overall window (positive = improving)
+        r3 = recent.tail(3)
+        h3, a3 = self._split_home_away(r3, team_id)
+        pp_pcts3 = (self._col_mean_nonnan(h3, "home_power_play_pct") +
+                    self._col_mean_nonnan(a3, "away_power_play_pct"))
+        pp_goals3 = (self._col_sum(h3, "home_power_play_goals") + self._col_sum(h3, "home_pp_goals") +
+                     self._col_sum(a3, "away_power_play_goals") + self._col_sum(a3, "away_pp_goals"))
+        pp_opp3 = (_pp_opp("home_power_play_attempts", "away_power_play_attempts", h3, a3) or
+                   _pp_opp("home_pp_opportunities", "away_pp_opportunities", h3, a3) or
+                   _pp_opp_from_pim("away_penalty_minutes", "home_penalty_minutes", h3, a3))
+        pp_pct3 = float(np.mean(pp_pcts3)) if pp_pcts3 else (
+            float(pp_goals3 / pp_opp3 * 100) if pp_opp3 > 0 else pp_pct_val)
+        pp_trend = pp_pct3 - pp_pct_val  # positive = improving PP recently
+
+        # Net special teams advantage (PP% - (100 - PK%)); positive = special teams advantage
+        net_st = pp_pct_val - (100.0 - pk_pct_val) if pk_pct_val > 0 else 0.0
+
         return {
             "pp_pct": pp_pct_val,
             "pk_pct": pk_pct_val,
             "pp_opportunities_pg": float(pp_opp / n),
             "pim_pg": float(pim_total / n),
+            "pp_trend": pp_trend,
+            "net_special_teams": net_st,
         }
 
     def _goalie_features(
@@ -276,6 +304,193 @@ class HockeyExtractor(BaseFeatureExtractor):
             "goalie_win_pct": float(wins_total / n) if n > 0 else 0.0,
         }
 
+    def _ot_features(
+        self,
+        team_id: str,
+        date: str,
+        games: pd.DataFrame,
+        window: int = 30,
+    ) -> dict[str, float]:
+        """Overtime tendency and win rate in OT/shootout situations."""
+        recent = self._team_games_before(games, team_id, date, limit=window)
+        defaults = {"ot_rate": 0.25, "ot_win_rate": 0.5, "one_goal_rate": 0.3}
+        if recent.empty:
+            return defaults
+
+        hs = pd.to_numeric(recent["home_score"], errors="coerce").fillna(0)
+        as_ = pd.to_numeric(recent["away_score"], errors="coerce").fillna(0)
+        ot_col = "overtime" if "overtime" in recent.columns else None
+        n = len(recent)
+
+        if ot_col:
+            ot_games = recent[ot_col].fillna(False).astype(bool)
+        else:
+            # Approximate: one-goal final that went to OT won't have explicit column
+            ot_games = pd.Series(False, index=recent.index)
+        ot_count = int(ot_games.sum())
+
+        # OT win/loss for this team
+        home_rows = recent["home_team_id"].astype(str) == str(team_id)
+        away_rows = ~home_rows
+        ot_wins = 0
+        if ot_count > 0:
+            ot_h = recent[ot_games & home_rows]
+            ot_a = recent[ot_games & away_rows]
+            if not ot_h.empty:
+                ot_wins += int((pd.to_numeric(ot_h["home_score"], errors="coerce").fillna(0) >
+                                pd.to_numeric(ot_h["away_score"], errors="coerce").fillna(0)).sum())
+            if not ot_a.empty:
+                ot_wins += int((pd.to_numeric(ot_a["away_score"], errors="coerce").fillna(0) >
+                                pd.to_numeric(ot_a["home_score"], errors="coerce").fillna(0)).sum())
+
+        # One-goal game rate (margin == 1 in regulation)
+        margin = (hs - as_).abs()
+        one_goal_count = int((margin <= 1).sum())
+
+        return {
+            "ot_rate": float(ot_count / n),
+            "ot_win_rate": float(ot_wins / ot_count) if ot_count > 0 else 0.5,
+            "one_goal_rate": float(one_goal_count / n),
+        }
+
+    def _lead_protection_features(
+        self,
+        team_id: str,
+        date: str,
+        games: pd.DataFrame,
+        window: int = 20,
+    ) -> dict[str, float]:
+        """How often team holds a lead after each period."""
+        recent = self._team_games_before(games, team_id, date, limit=window)
+        defaults = {"lead_p2_protection_rate": 0.75, "lead_p1_protection_rate": 0.70}
+        if recent.empty:
+            return defaults
+
+        home, away = self._split_home_away(recent, team_id)
+        n = len(recent)
+
+        total_lead_p1 = 0
+        held_p1 = 0
+        total_lead_p2 = 0
+        held_p2 = 0
+
+        # Home games: team is home
+        for df_side, team_col, opp_col in [(home, "home", "away"), (away, "away", "home")]:
+            if df_side.empty:
+                continue
+            t_p1 = pd.to_numeric(df_side.get(f"{team_col}_p1"), errors="coerce").fillna(np.nan)
+            o_p1 = pd.to_numeric(df_side.get(f"{opp_col}_p1"), errors="coerce").fillna(np.nan)
+            t_p2 = pd.to_numeric(df_side.get(f"{team_col}_p2"), errors="coerce").fillna(np.nan)
+            o_p2 = pd.to_numeric(df_side.get(f"{opp_col}_p2"), errors="coerce").fillna(np.nan)
+            t_sc = pd.to_numeric(df_side["home_score" if team_col == "home" else "away_score"], errors="coerce").fillna(0)
+            o_sc = pd.to_numeric(df_side["away_score" if team_col == "home" else "home_score"], errors="coerce").fillna(0)
+
+            for i in range(len(df_side)):
+                # After P1 lead protection
+                if not np.isnan(t_p1.iloc[i]) and not np.isnan(o_p1.iloc[i]):
+                    if t_p1.iloc[i] > o_p1.iloc[i]:
+                        total_lead_p1 += 1
+                        if t_sc.iloc[i] > o_sc.iloc[i]:
+                            held_p1 += 1
+                # After P2 lead protection
+                if not np.isnan(t_p2.iloc[i]) and not np.isnan(o_p2.iloc[i]):
+                    t_thru2 = t_p1.iloc[i] + t_p2.iloc[i] if not np.isnan(t_p1.iloc[i]) else np.nan
+                    o_thru2 = o_p1.iloc[i] + o_p2.iloc[i] if not np.isnan(o_p1.iloc[i]) else np.nan
+                    if not np.isnan(t_thru2) and not np.isnan(o_thru2) and t_thru2 > o_thru2:
+                        total_lead_p2 += 1
+                        if t_sc.iloc[i] > o_sc.iloc[i]:
+                            held_p2 += 1
+
+        return {
+            "lead_p1_protection_rate": float(held_p1 / total_lead_p1) if total_lead_p1 > 0 else 0.70,
+            "lead_p2_protection_rate": float(held_p2 / total_lead_p2) if total_lead_p2 > 0 else 0.75,
+        }
+
+    def _starting_goalie_form(
+        self,
+        team_id: str,
+        date: str,
+        season: int,
+        window: int = 5,
+    ) -> dict[str, float]:
+        """Identify likely starting goalie and return their personal rolling sv_pct."""
+        ps = self.load_player_stats(season)
+        defaults = {"starter_sv_pct": np.nan, "starter_gaa": 0.0, "goalie_consistency": 0.0}
+        if ps.empty or "team_id" not in ps.columns:
+            return defaults
+
+        abr_map = self._build_ps_abr_to_id(season)
+
+        cache_key = f"_pg_cache_{season}"
+        if not hasattr(self, cache_key):
+            raw_ids = ps["team_id"].astype(str)
+            mapped_ids = raw_ids.map(lambda t: abr_map.get(t, abr_map.get(self._ABR_NORM.get(t, t), t)))
+            pg_cache = {
+                "team_ids": mapped_ids.values,
+                "dates_ns": pd.to_datetime(ps["date"], errors="coerce").values.astype("int64"),
+                "goalie_mask": (ps["saves"].notna() & (ps["saves"] > 0)).values if "saves" in ps.columns else np.zeros(len(ps), dtype=bool),
+                "saves": pd.to_numeric(ps.get("saves", 0), errors="coerce").fillna(0).values if "saves" in ps.columns else np.zeros(len(ps)),
+                "ga": pd.to_numeric(ps.get("goals_against", 0), errors="coerce").fillna(0).values if "goals_against" in ps.columns else np.zeros(len(ps)),
+                "player_ids": ps.get("player_id", pd.Series(dtype=str)).astype(str).values,
+                "dates_dt": pd.to_datetime(ps["date"], errors="coerce").values,
+            }
+            setattr(self, cache_key, pg_cache)
+        pc = getattr(self, cache_key)
+
+        game_date_ns = pd.Timestamp(date).value if date else 0
+        if game_date_ns == 0:
+            return defaults
+
+        mask = (pc["team_ids"] == str(team_id)) & pc["goalie_mask"] & (pc["dates_ns"] < game_date_ns)
+        if not mask.any():
+            return defaults
+
+        indices = np.where(mask)[0]
+        sorted_idx = indices[np.argsort(pc["dates_ns"][indices])[::-1]][:window * 3]
+
+        # Find the most recently played goalie (likely starter)
+        if len(sorted_idx) == 0:
+            return defaults
+
+        # Identify likely starter = goalie who appeared in most recent game
+        most_recent_date = pc["dates_ns"][sorted_idx[0]]
+        recent_game_mask = pc["dates_ns"][sorted_idx] == most_recent_date
+        starter_ids = pc["player_ids"][sorted_idx[recent_game_mask]]
+        if len(starter_ids) == 0:
+            return defaults
+        likely_starter = starter_ids[0]
+
+        # Get starter's last `window` games
+        starter_mask = (pc["team_ids"] == str(team_id)) & pc["goalie_mask"] & \
+                       (pc["dates_ns"] < game_date_ns) & (pc["player_ids"] == likely_starter)
+        if not starter_mask.any():
+            return defaults
+
+        starter_idx = np.where(starter_mask)[0]
+        sorted_starter = starter_idx[np.argsort(pc["dates_ns"][starter_idx])[::-1]][:window]
+
+        saves = pc["saves"][sorted_starter].sum()
+        ga = pc["ga"][sorted_starter].sum()
+        total = saves + ga
+        sv_pct = float(saves / total * 100) if total > 0 else np.nan
+        n = len(sorted_starter)
+        gaa = float(ga / n) if n > 0 else 0.0
+
+        # Consistency: std dev of per-game sv_pct (lower = more consistent)
+        per_game_sv = np.array([
+            float(pc["saves"][i] / (pc["saves"][i] + pc["ga"][i]) * 100)
+            if (pc["saves"][i] + pc["ga"][i]) > 0 else np.nan
+            for i in sorted_starter
+        ])
+        valid = per_game_sv[~np.isnan(per_game_sv)]
+        consistency = float(np.std(valid)) if len(valid) > 1 else 0.0
+
+        return {
+            "starter_sv_pct": sv_pct,
+            "starter_gaa": gaa,
+            "goalie_consistency": consistency,
+        }
+
     def _player_goalie_features(
         self,
         team_id: str,
@@ -309,6 +524,7 @@ class HockeyExtractor(BaseFeatureExtractor):
                 "saves": pd.to_numeric(ps.get("saves", 0), errors="coerce").fillna(0).values if "saves" in ps.columns else np.zeros(len(ps)),
                 "ga": pd.to_numeric(ps.get("goals_against", 0), errors="coerce").fillna(0).values if "goals_against" in ps.columns else np.zeros(len(ps)),
                 "dates_dt": pd.to_datetime(ps["date"], errors="coerce").values,
+                "player_ids": ps.get("player_id", pd.Series(dtype=str)).astype(str).values,
             }
             setattr(self, cache_key, pg_cache)
         pc = getattr(self, cache_key)
@@ -355,6 +571,104 @@ class HockeyExtractor(BaseFeatureExtractor):
         ratio = gf_pg / ga_pg if ga_pg > 0 else 1.0
         return {"gf_l5": float(gf_pg), "ga_l5": float(ga_pg), "gf_ga_ratio_l5": float(ratio)}
 
+    def _close_game_record(
+        self,
+        team_id: str,
+        date: str,
+        games: pd.DataFrame,
+        window: int = 20,
+    ) -> dict[str, float]:
+        """Win% in 1-goal games and blown-lead rate (highly predictive in NHL)."""
+        recent = self._team_games_before(games, team_id, date, limit=window)
+        defaults = {"close_game_win_pct": 0.5, "blowout_win_pct": 0.5, "one_goal_rate": 0.0}
+        if recent.empty:
+            return defaults
+
+        home, away = self._split_home_away(recent, team_id)
+        results = []
+        for _, row in recent.iterrows():
+            h_s = pd.to_numeric(row.get("home_score"), errors="coerce")
+            a_s = pd.to_numeric(row.get("away_score"), errors="coerce")
+            if pd.isna(h_s) or pd.isna(a_s):
+                continue
+            is_home_team = str(row.get("home_team_id")) == str(team_id)
+            won = (is_home_team and h_s > a_s) or (not is_home_team and a_s > h_s)
+            diff = abs(h_s - a_s)
+            results.append({"won": won, "diff": diff})
+
+        if not results:
+            return defaults
+
+        close = [r for r in results if r["diff"] <= 1]
+        blow = [r for r in results if r["diff"] >= 3]
+        close_win_pct = sum(1 for r in close if r["won"]) / len(close) if close else 0.5
+        blowout_win_pct = sum(1 for r in blow if r["won"]) / len(blow) if blow else 0.5
+        one_goal_rate = len(close) / len(results) if results else 0.0
+
+        return {
+            "close_game_win_pct": float(close_win_pct),
+            "blowout_win_pct": float(blowout_win_pct),
+            "one_goal_rate": float(one_goal_rate),
+        }
+
+    def _save_pct_trend(
+        self,
+        team_id: str,
+        date: str,
+        games: pd.DataFrame,
+    ) -> dict[str, float]:
+        """Goalie save% trend: recent 5 vs prior 15 (positive = improving)."""
+        short = self._team_games_before(games, team_id, date, limit=5)
+        longer = self._team_games_before(games, team_id, date, limit=20)
+        defaults = {"sv_pct_trend": 0.0, "sv_pct_short": 0.0}
+
+        def _sv(df: pd.DataFrame) -> float:
+            if df.empty:
+                return 0.0
+            home, away = self._split_home_away(df, team_id)
+            vals = (self._col_mean_nonnan(home, "home_save_pct") +
+                    self._col_mean_nonnan(away, "away_save_pct"))
+            vals = [v * 100 if v <= 1.0 else v for v in vals if v > 0]
+            return float(np.mean(vals)) if vals else 0.0
+
+        sv_short = _sv(short)
+        sv_long = _sv(longer.iloc[5:] if len(longer) > 5 else longer)  # prior 15 after removing short
+        trend = sv_short - sv_long
+        return {"sv_pct_trend": float(trend), "sv_pct_short": float(sv_short)}
+
+    def _goal_streak_features(
+        self,
+        team_id: str,
+        date: str,
+        games: pd.DataFrame,
+    ) -> dict[str, float]:
+        """Hot/cold streak: recent 3-game GF-GA vs prior 7-game baseline."""
+        defaults = {"goal_streak_gf": 0.0, "goal_streak_ga": 0.0,
+                    "goal_trend_gf": 0.0, "goal_trend_ga": 0.0}
+        long = self._team_games_before(games, team_id, date, limit=10)
+        if len(long) < 3:
+            return defaults
+        short = long.iloc[:3]
+        baseline = long.iloc[3:] if len(long) > 3 else long
+
+        def _gf_ga(df: pd.DataFrame) -> tuple[float, float]:
+            if df.empty:
+                return 0.0, 0.0
+            home, away = self._split_home_away(df, team_id)
+            n = max(len(df), 1)
+            gf = (self._col_sum(home, "home_score") + self._col_sum(away, "away_score")) / n
+            ga = (self._col_sum(home, "away_score") + self._col_sum(away, "home_score")) / n
+            return float(gf), float(ga)
+
+        s_gf, s_ga = _gf_ga(short)
+        b_gf, b_ga = _gf_ga(baseline)
+        return {
+            "goal_streak_gf": s_gf,
+            "goal_streak_ga": s_ga,
+            "goal_trend_gf": s_gf - b_gf,   # positive = getting hotter offensively
+            "goal_trend_ga": s_ga - b_ga,   # positive = conceding more recently
+        }
+
     def _physical_stats(
         self,
         team_id: str,
@@ -375,8 +689,9 @@ class HockeyExtractor(BaseFeatureExtractor):
         home, away = self._split_home_away(recent, team_id)
         n = len(recent)
 
-        hits = (self._col_sum(home, "home_hits_nhl") + self._col_sum(home, "home_hits") +
-                self._col_sum(away, "away_hits_nhl") + self._col_sum(away, "away_hits"))
+        # Use home_hits only (home_hits_nhl is identical — avoid double-counting)
+        hits = (self._col_sum(home, "home_hits") +
+                self._col_sum(away, "away_hits"))
         blocks = (self._col_sum(home, "home_blocked_shots") +
                   self._col_sum(away, "away_blocked_shots"))
         fo_won = (self._col_sum(home, "home_faceoffs_won") +
@@ -433,6 +748,7 @@ class HockeyExtractor(BaseFeatureExtractor):
             "top_scorer_pts_pg": 0.0,
             "team_pts_pg": 0.0,
             "team_shots_pg": 0.0,
+            "team_pp_goals_pg": 0.0,
         }
         if ps.empty or "team_id" not in ps.columns:
             return defaults
@@ -444,14 +760,23 @@ class HockeyExtractor(BaseFeatureExtractor):
         if not hasattr(self, cache_key):
             raw_ids = ps["team_id"].astype(str)
             mapped = raw_ids.map(lambda t: abr_map.get(t, abr_map.get(self._ABR_NORM.get(t, t), t)))
+            n_ps = len(ps)
+
+            def _col(col_name: str) -> "np.ndarray":
+                col = ps.get(col_name)
+                if col is None or not isinstance(col, pd.Series):
+                    return np.zeros(n_ps)
+                return pd.to_numeric(col, errors="coerce").fillna(0).values
+
             sk_cache = {
                 "team_ids": mapped.values,
                 "dates_ns": pd.to_datetime(ps["date"], errors="coerce").values.astype("int64"),
-                "plus_minus": pd.to_numeric(ps.get("plus_minus", 0), errors="coerce").fillna(0).values,
-                "goals": pd.to_numeric(ps.get("goals", 0), errors="coerce").fillna(0).values,
-                "assists": pd.to_numeric(ps.get("assists", 0), errors="coerce").fillna(0).values,
-                "shots": pd.to_numeric(ps.get("shots", 0), errors="coerce").fillna(0).values,
-                "player_ids": ps.get("player_id", pd.Series(dtype=str)).astype(str).values,
+                "plus_minus": _col("plus_minus"),
+                "goals": _col("goals"),
+                "assists": _col("assists"),
+                "shots": _col("shots"),
+                "pp_goals": _col("pp_goals"),
+                "player_ids": ps.get("player_id", pd.Series(dtype=str)).astype(str).values if isinstance(ps.get("player_id"), pd.Series) else np.array([""] * n_ps),
                 "is_skater": (ps["saves"].isna() | (ps["saves"] == 0)).values if "saves" in ps.columns else np.ones(len(ps), dtype=bool),
             }
             setattr(self, cache_key, sk_cache)
@@ -473,6 +798,7 @@ class HockeyExtractor(BaseFeatureExtractor):
         goals = sc["goals"][sorted_idx]
         assists = sc["assists"][sorted_idx]
         shots = sc["shots"][sorted_idx]
+        pp_goals = sc["pp_goals"][sorted_idx]
         pids = sc["player_ids"][sorted_idx]
 
         n_games = min(window, len(np.unique(sc["dates_ns"][sorted_idx])))
@@ -499,6 +825,7 @@ class HockeyExtractor(BaseFeatureExtractor):
             "top_scorer_pts_pg": top_pts / n_games,
             "team_pts_pg": total_pts / n_games,
             "team_shots_pg": total_shots / n_games,
+            "team_pp_goals_pg": float(pp_goals.sum()) / n_games,
         }
 
     def _nhl_standings_features(self, team_id: str, season: int) -> dict[str, float]:
@@ -510,6 +837,8 @@ class HockeyExtractor(BaseFeatureExtractor):
             "stnd_streak": 0.0,
             "stnd_pts_diff": 0.0,
             "stnd_gp": 0.0,
+            "stnd_conf_rank": 16.0,
+            "stnd_div_rank": 4.0,
         }
         standings = self.load_standings(season)
         if standings.empty or "team_id" not in standings.columns:
@@ -551,6 +880,15 @@ class HockeyExtractor(BaseFeatureExtractor):
         pa = self._n(row.get("points_against"))
         pts_diff = pf - pa
 
+        # Conference and division rank (available in richer standings files)
+        conf_rank = self._n(row.get("conference_rank", 16.0), 16.0)
+        div_rank = self._n(row.get("division_rank", 4.0), 4.0)
+
+        # Also use the pre-computed win% (pct) if available (more reliable than our manual calc)
+        standings_pct = self._n(row.get("pct", win_pct), win_pct)
+        if 0.0 < standings_pct <= 1.0:
+            win_pct = standings_pct
+
         return {
             "stnd_win_pct": win_pct,
             "stnd_points": points,
@@ -558,7 +896,51 @@ class HockeyExtractor(BaseFeatureExtractor):
             "stnd_streak": streak_val,
             "stnd_pts_diff": pts_diff,
             "stnd_gp": gp,
+            "stnd_conf_rank": conf_rank,
+            "stnd_div_rank": div_rank,
         }
+
+    def _quality_weighted_form(
+        self,
+        team_id: str,
+        date: str,
+        games: pd.DataFrame,
+        window: int = 10,
+    ) -> dict[str, float]:
+        """Win form weighted by opponent quality (opponent win% up to prediction date).
+
+        Uses a single lookup per unique opponent — O(n × log n) not O(n²).
+        """
+        defaults = {"nhl_quality_form": 0.0, "nhl_quality_win_rate": 0.5}
+        recent = self._team_games_before(games, team_id, date, limit=window)
+        if recent.empty:
+            return defaults
+
+        is_home = recent["home_team_id"].astype(str) == str(team_id)
+        h_sc = pd.to_numeric(recent["home_score"], errors="coerce").fillna(0)
+        a_sc = pd.to_numeric(recent["away_score"], errors="coerce").fillna(0)
+        tm_sc = np.where(is_home, h_sc, a_sc)
+        op_sc = np.where(is_home, a_sc, h_sc)
+        wins = (tm_sc > op_sc).astype(float)
+        opp_ids = np.where(is_home, recent["away_team_id"].astype(str), recent["home_team_id"].astype(str))
+
+        opp_qual: dict[str, float] = {}
+        for opp_id in set(opp_ids):
+            opp_hist = self._team_games_before(games, str(opp_id), date, limit=20)
+            if opp_hist.empty:
+                opp_qual[str(opp_id)] = 0.5
+            else:
+                oh = opp_hist["home_team_id"].astype(str) == str(opp_id)
+                ohs = pd.to_numeric(opp_hist["home_score"], errors="coerce").fillna(0)
+                oas = pd.to_numeric(opp_hist["away_score"], errors="coerce").fillna(0)
+                ow = np.where(oh, ohs > oas, oas > ohs).astype(float)
+                opp_qual[str(opp_id)] = float(ow.mean()) if len(ow) else 0.5
+
+        opp_arr = np.array([opp_qual.get(str(o), 0.5) for o in opp_ids])
+        n = max(len(recent), 1)
+        quality_form = float(np.dot(wins * 2.0 - 1.0, opp_arr) / n)
+        quality_win_rate = float(np.dot(wins, opp_arr) / n)
+        return {"nhl_quality_form": quality_form, "nhl_quality_win_rate": quality_win_rate}
 
     # ── Main Extraction ───────────────────────────────────
 
@@ -582,16 +964,26 @@ class HockeyExtractor(BaseFeatureExtractor):
             "home_score": pd.to_numeric(game.get("home_score"), errors="coerce"),
             "away_score": pd.to_numeric(game.get("away_score"), errors="coerce"),
             # Period scores — passed through as targets for extra-market models
-            "home_q1": pd.to_numeric(game.get("home_q1"), errors="coerce"),
-            "home_q2": pd.to_numeric(game.get("home_q2"), errors="coerce"),
-            "home_q3": pd.to_numeric(game.get("home_q3"), errors="coerce"),
+            # NHL uses home_p1/p2/p3; fall back to home_q1/q2/q3 for generic schema
+            "home_p1": pd.to_numeric(game.get("home_p1", game.get("home_q1")), errors="coerce"),
+            "home_p2": pd.to_numeric(game.get("home_p2", game.get("home_q2")), errors="coerce"),
+            "home_p3": pd.to_numeric(game.get("home_p3", game.get("home_q3")), errors="coerce"),
+            "home_q1": pd.to_numeric(game.get("home_p1", game.get("home_q1")), errors="coerce"),
+            "home_q2": pd.to_numeric(game.get("home_p2", game.get("home_q2")), errors="coerce"),
+            "home_q3": pd.to_numeric(game.get("home_p3", game.get("home_q3")), errors="coerce"),
             "home_q4": pd.to_numeric(game.get("home_q4"), errors="coerce"),
             "home_ot": pd.to_numeric(game.get("home_ot"), errors="coerce"),
-            "away_q1": pd.to_numeric(game.get("away_q1"), errors="coerce"),
-            "away_q2": pd.to_numeric(game.get("away_q2"), errors="coerce"),
-            "away_q3": pd.to_numeric(game.get("away_q3"), errors="coerce"),
+            "away_p1": pd.to_numeric(game.get("away_p1", game.get("away_q1")), errors="coerce"),
+            "away_p2": pd.to_numeric(game.get("away_p2", game.get("away_q2")), errors="coerce"),
+            "away_p3": pd.to_numeric(game.get("away_p3", game.get("away_q3")), errors="coerce"),
+            "away_q1": pd.to_numeric(game.get("away_p1", game.get("away_q1")), errors="coerce"),
+            "away_q2": pd.to_numeric(game.get("away_p2", game.get("away_q2")), errors="coerce"),
+            "away_q3": pd.to_numeric(game.get("away_p3", game.get("away_q3")), errors="coerce"),
             "away_q4": pd.to_numeric(game.get("away_q4"), errors="coerce"),
             "away_ot": pd.to_numeric(game.get("away_ot"), errors="coerce"),
+            # Raw per-game totals for specialty market targets (excluded from feature matrix)
+            "home_shots_game": pd.to_numeric(game.get("home_shots_on_goal"), errors="coerce"),
+            "away_shots_game": pd.to_numeric(game.get("away_shots_on_goal"), errors="coerce"),
             "season": season,
         }
 
@@ -601,16 +993,25 @@ class HockeyExtractor(BaseFeatureExtractor):
         a_form = self.team_form(a_id, date, games_df)
         features.update({f"away_{k}": v for k, v in a_form.items()})
 
+        # Home/Away split rolling form (richer than season-wide splits)
+        h_home_form = self.home_away_form(h_id, date, games_df, is_home=True)
+        features.update({f"home_home_{k}": v for k, v in h_home_form.items()})
+        a_away_form = self.home_away_form(a_id, date, games_df, is_home=False)
+        features.update({f"away_away_{k}": v for k, v in a_away_form.items()})
+        features["ha_win_pct_diff"] = h_home_form["ha_win_pct"] - a_away_form["ha_win_pct"]
+        features["ha_ppg_diff"] = h_home_form["ha_ppg"] - a_away_form["ha_ppg"]
+
+        # Season-wide home/away splits (for feature list compatibility)
+        h_splits = self.home_away_splits(h_id, games_df, season)
+        features["home_home_win_pct"] = h_splits["home_win_pct"]
+        a_splits = self.home_away_splits(a_id, games_df, season)
+        features["away_away_win_pct"] = a_splits["away_win_pct"]
+
         h2h = self.head_to_head(h_id, a_id, games_df, date=date)
         features.update(h2h)
         features["home_momentum"] = self.momentum(h_id, date, games_df)
         features["away_momentum"] = self.momentum(a_id, date, games_df)
         features["momentum_diff"] = features["home_momentum"] - features["away_momentum"]
-
-        h_splits = self.home_away_splits(h_id, games_df, season)
-        features["home_home_win_pct"] = h_splits["home_win_pct"]
-        a_splits = self.home_away_splits(a_id, games_df, season)
-        features["away_away_win_pct"] = a_splits["away_win_pct"]
 
         # Rest / B2B
         h_rest = self.rest_days(h_id, date, games_df)
@@ -712,9 +1113,130 @@ class HockeyExtractor(BaseFeatureExtractor):
         features["shots_on_goal_diff"] = features.get("home_shots_for_pg", 0.0) - features.get("away_shots_for_pg", 0.0)
         features["pp_pct_diff"] = features.get("home_pp_pct", 0.0) - features.get("away_pp_pct", 0.0)
         features["pk_pct_diff"] = features.get("home_pk_pct", 0.0) - features.get("away_pk_pct", 0.0)
+        features["net_special_teams_diff"] = features.get("home_net_special_teams", 0.0) - features.get("away_net_special_teams", 0.0)
+        features["pp_trend_diff"] = features.get("home_pp_trend", 0.0) - features.get("away_pp_trend", 0.0)
         features["hits_pg_diff"] = features.get("home_hits_pg", 0.0) - features.get("away_hits_pg", 0.0)
         features["blocks_pg_diff"] = features.get("home_blocked_shots_pg", 0.0) - features.get("away_blocked_shots_pg", 0.0)
         features["standing_diff"] = features.get("home_std_stnd_win_pct", 0.0) - features.get("away_std_stnd_win_pct", 0.0)
+
+        # ── Scoring Trend (last 5) ────────────────────────
+        h_l5 = self._scoring_last_n(h_id, date, games_df, n=5)
+        features["home_last5_ppg"] = h_l5["last_n_ppg"]
+        features["home_last5_opp_ppg"] = h_l5["last_n_opp_ppg"]
+        features["home_last5_margin"] = h_l5["last_n_margin"]
+        a_l5 = self._scoring_last_n(a_id, date, games_df, n=5)
+        features["away_last5_ppg"] = a_l5["last_n_ppg"]
+        features["away_last5_opp_ppg"] = a_l5["last_n_opp_ppg"]
+        features["away_last5_margin"] = a_l5["last_n_margin"]
+        features["last5_ppg_diff"] = h_l5["last_n_ppg"] - a_l5["last_n_ppg"]
+        features["last5_margin_diff"] = h_l5["last_n_margin"] - a_l5["last_n_margin"]
+
+        # Injury burden
+        h_inj = self._injury_features(h_id, season)
+        a_inj = self._injury_features(a_id, season)
+        for k, v in h_inj.items():
+            features[f"home_{k}"] = v
+        for k, v in a_inj.items():
+            features[f"away_{k}"] = v
+        features["injury_severity_diff"] = a_inj["injury_severity_score"] - h_inj["injury_severity_score"]
+
+        # Strength of schedule (average opponent win% over recent games)
+        features["home_sos"] = self._strength_of_schedule(h_id, date, games_df, season)
+        features["away_sos"] = self._strength_of_schedule(a_id, date, games_df, season)
+        features["sos_diff"] = features["home_sos"] - features["away_sos"]
+
+        # ── OT tendencies ─────────────────────────────────
+        h_ot = self._ot_features(h_id, date, games_df)
+        features.update({f"home_{k}": v for k, v in h_ot.items()})
+        a_ot = self._ot_features(a_id, date, games_df)
+        features.update({f"away_{k}": v for k, v in a_ot.items()})
+        features["ot_rate_diff"] = h_ot["ot_rate"] - a_ot["ot_rate"]
+        features["ot_win_rate_diff"] = h_ot["ot_win_rate"] - a_ot["ot_win_rate"]
+
+        # ── Lead protection ────────────────────────────────
+        h_lp = self._lead_protection_features(h_id, date, games_df)
+        features.update({f"home_{k}": v for k, v in h_lp.items()})
+        a_lp = self._lead_protection_features(a_id, date, games_df)
+        features.update({f"away_{k}": v for k, v in a_lp.items()})
+        features["lead_p2_protection_diff"] = h_lp["lead_p2_protection_rate"] - a_lp["lead_p2_protection_rate"]
+
+        # ── Starting goalie individual form ────────────────
+        h_sg = self._starting_goalie_form(h_id, date, season)
+        features.update({f"home_{k}": v for k, v in h_sg.items()})
+        a_sg = self._starting_goalie_form(a_id, date, season)
+        features.update({f"away_{k}": v for k, v in a_sg.items()})
+        features["starter_sv_pct_diff"] = (
+            (h_sg["starter_sv_pct"] or 0.0) - (a_sg["starter_sv_pct"] or 0.0)
+        )
+
+        # ── Close game record and save% trend ─────────────
+        h_cg = self._close_game_record(h_id, date, games_df)
+        features.update({f"home_{k}": v for k, v in h_cg.items()})
+        a_cg = self._close_game_record(a_id, date, games_df)
+        features.update({f"away_{k}": v for k, v in a_cg.items()})
+        features["close_game_win_pct_diff"] = h_cg["close_game_win_pct"] - a_cg["close_game_win_pct"]
+        features["one_goal_rate_diff"] = h_cg["one_goal_rate"] - a_cg["one_goal_rate"]
+
+        h_svt = self._save_pct_trend(h_id, date, games_df)
+        features.update({f"home_{k}": v for k, v in h_svt.items()})
+        a_svt = self._save_pct_trend(a_id, date, games_df)
+        features.update({f"away_{k}": v for k, v in a_svt.items()})
+        features["sv_pct_trend_diff"] = h_svt["sv_pct_trend"] - a_svt["sv_pct_trend"]
+
+        h_gs = self._goal_streak_features(h_id, date, games_df)
+        features.update({f"home_{k}": v for k, v in h_gs.items()})
+        a_gs = self._goal_streak_features(a_id, date, games_df)
+        features.update({f"away_{k}": v for k, v in a_gs.items()})
+        features["goal_trend_gf_diff"] = h_gs["goal_trend_gf"] - a_gs["goal_trend_gf"]
+        features["goal_trend_ga_diff"] = h_gs["goal_trend_ga"] - a_gs["goal_trend_ga"]
+
+        # Divisional/conference context + playoff position
+        try:
+            stnd = self.load_standings(season)
+            if not stnd.empty and "team_id" in stnd.columns:
+                def _sr(tid: str) -> "pd.Series":
+                    r = stnd.loc[stnd["team_id"] == str(tid)]
+                    return r.iloc[0] if not r.empty else pd.Series(dtype=object)
+                h_sr = _sr(h_id)
+                a_sr = _sr(a_id)
+                h_conf = str(h_sr.get("conference", "")) if not h_sr.empty else ""
+                a_conf = str(a_sr.get("conference", "")) if not a_sr.empty else ""
+                h_div = str(h_sr.get("division", "")) if not h_sr.empty else ""
+                a_div = str(a_sr.get("division", "")) if not a_sr.empty else ""
+                features["is_nhl_divisional"] = 1.0 if (h_div and h_div == a_div) else 0.0
+                features["is_nhl_conference"] = 1.0 if (h_conf and h_conf == a_conf) else 0.0
+                # Top-8 conference = in playoff position
+                h_cr = float(self._n(h_sr.get("conference_rank", 16), 16))
+                a_cr = float(self._n(a_sr.get("conference_rank", 16), 16))
+                features["home_in_playoff_pos"] = 1.0 if h_cr <= 8 else 0.0
+                features["away_in_playoff_pos"] = 1.0 if a_cr <= 8 else 0.0
+                features["playoff_pos_diff"] = features["home_in_playoff_pos"] - features["away_in_playoff_pos"]
+            else:
+                features.update({"is_nhl_divisional": 0.0, "is_nhl_conference": 0.0,
+                                  "home_in_playoff_pos": 0.0, "away_in_playoff_pos": 0.0,
+                                  "playoff_pos_diff": 0.0})
+        except Exception:
+            features.update({"is_nhl_divisional": 0.0, "is_nhl_conference": 0.0,
+                              "home_in_playoff_pos": 0.0, "away_in_playoff_pos": 0.0,
+                              "playoff_pos_diff": 0.0})
+
+        # ── PP vs PK matchup (cross-side special teams advantage) ─────────
+        h_pp = features.get("home_pp_pct", 0.0)
+        a_pp = features.get("away_pp_pct", 0.0)
+        h_pk = features.get("home_pk_pct", 0.85)
+        a_pk = features.get("away_pk_pct", 0.85)
+        # Home PP executing against away PK: higher = home advantage on PP
+        features["pp_vs_pk_home_adv"] = h_pp - (1.0 - a_pk)
+        features["pp_vs_pk_away_adv"] = a_pp - (1.0 - h_pk)
+        features["pp_pk_matchup_diff"] = features["pp_vs_pk_home_adv"] - features["pp_vs_pk_away_adv"]
+
+        # ── Quality-weighted form ──────────────────────────
+        h_qf = self._quality_weighted_form(h_id, date, games_df)
+        features.update({f"home_{k}": v for k, v in h_qf.items()})
+        a_qf = self._quality_weighted_form(a_id, date, games_df)
+        features.update({f"away_{k}": v for k, v in a_qf.items()})
+        features["nhl_quality_form_diff"] = h_qf["nhl_quality_form"] - a_qf["nhl_quality_form"]
+        features["nhl_quality_win_rate_diff"] = h_qf["nhl_quality_win_rate"] - a_qf["nhl_quality_win_rate"]
 
         return features
 
@@ -730,6 +1252,12 @@ class HockeyExtractor(BaseFeatureExtractor):
             # Momentum & splits
             "home_momentum", "away_momentum", "momentum_diff",
             "home_home_win_pct", "away_away_win_pct",
+            # Home/Away rolling form
+            "home_home_ha_win_pct", "home_home_ha_ppg", "home_home_ha_opp_ppg",
+            "home_home_ha_avg_margin", "home_home_ha_games_played",
+            "away_away_ha_win_pct", "away_away_ha_ppg", "away_away_ha_opp_ppg",
+            "away_away_ha_avg_margin", "away_away_ha_games_played",
+            "ha_win_pct_diff", "ha_ppg_diff",
             # Rest
             "home_rest_days", "away_rest_days", "home_is_b2b", "away_is_b2b",
             # Possession
@@ -739,7 +1267,9 @@ class HockeyExtractor(BaseFeatureExtractor):
             "away_shots_for_pg", "away_shots_against_pg",
             # Special teams
             "home_pp_pct", "home_pk_pct", "home_pp_opportunities_pg", "home_pim_pg",
+            "home_pp_trend", "home_net_special_teams",
             "away_pp_pct", "away_pk_pct", "away_pp_opportunities_pg", "away_pim_pg",
+            "away_pp_trend", "away_net_special_teams",
             # Goalie
             "home_goalie_sv_pct", "home_goalie_gaa", "home_goalie_win_pct",
             "away_goalie_sv_pct", "away_goalie_gaa", "away_goalie_win_pct",
@@ -750,13 +1280,15 @@ class HockeyExtractor(BaseFeatureExtractor):
             "away_hits_pg", "away_blocked_shots_pg", "away_faceoff_pct",
             "away_takeaway_giveaway_ratio", "away_shooting_pct",
             "away_shorthanded_goals_pg", "away_shootout_goals_pg",
-            # Standings (NHL-specific: points, win%, L10, streak)
+            # Standings (NHL-specific: points, win%, L10, streak, rank)
             "home_std_stnd_win_pct", "home_std_stnd_points",
             "home_std_stnd_l10_win_pct", "home_std_stnd_streak",
             "home_std_stnd_pts_diff", "home_std_stnd_gp",
+            "home_std_stnd_conf_rank", "home_std_stnd_div_rank",
             "away_std_stnd_win_pct", "away_std_stnd_points",
             "away_std_stnd_l10_win_pct", "away_std_stnd_streak",
             "away_std_stnd_pts_diff", "away_std_stnd_gp",
+            "away_std_stnd_conf_rank", "away_std_stnd_div_rank",
             # Short-window goals (last 5 games)
             "home_gf_l5", "home_ga_l5", "home_gf_ga_ratio_l5",
             "away_gf_l5", "away_ga_l5", "away_gf_ga_ratio_l5",
@@ -765,10 +1297,12 @@ class HockeyExtractor(BaseFeatureExtractor):
             "away_ps_sv_pct", "away_ps_gaa",
             # Skater star-player features
             "home_avg_plus_minus", "home_top_scorer_pts_pg", "home_team_pts_pg", "home_team_shots_pg",
+            "home_team_pp_goals_pg",
             "away_avg_plus_minus", "away_top_scorer_pts_pg", "away_team_pts_pg", "away_team_shots_pg",
+            "away_team_pp_goals_pg",
             # Skater differentials
             "sk_avg_plus_minus_diff", "sk_top_scorer_pts_pg_diff",
-            "sk_team_pts_pg_diff", "sk_team_shots_pg_diff",
+            "sk_team_pts_pg_diff", "sk_team_shots_pg_diff", "sk_team_pp_goals_pg_diff",
             # ELO ratings
             "home_elo", "home_elo_diff", "home_elo_expected_win",
             "away_elo", "away_elo_diff", "away_elo_expected_win",
@@ -787,6 +1321,7 @@ class HockeyExtractor(BaseFeatureExtractor):
             # Key differentials
             "faceoff_pct_diff", "takeaway_giveaway_diff", "save_pct_diff",
             "shots_on_goal_diff", "pp_pct_diff", "pk_pct_diff",
+            "net_special_teams_diff", "pp_trend_diff",
             "hits_pg_diff", "blocks_pg_diff", "standing_diff",
             # Period rolling stats
             "home_period_first_ppg", "away_period_first_ppg",
@@ -801,4 +1336,44 @@ class HockeyExtractor(BaseFeatureExtractor):
             "period_first_ppg_diff", "period_first_opp_ppg_diff",
             "period_first_win_pct_diff", "period_first_half_win_pct_diff",
             "period_second_half_ppg_diff", "period_comeback_diff", "period_ot_rate_diff",
+            # Scoring trends (last 5)
+            "home_last5_ppg", "home_last5_opp_ppg", "home_last5_margin",
+            "away_last5_ppg", "away_last5_opp_ppg", "away_last5_margin",
+            "last5_ppg_diff", "last5_margin_diff",
+            # Injury burden
+            "home_injury_count", "home_injury_severity_score", "home_injury_out_count",
+            "home_injury_dtd_count", "home_injury_questionable_count",
+            "away_injury_count", "away_injury_severity_score", "away_injury_out_count",
+            "away_injury_dtd_count", "away_injury_questionable_count",
+            "injury_severity_diff",
+            # Strength of schedule
+            "home_sos", "away_sos", "sos_diff",
+            # OT tendencies
+            "home_ot_rate", "home_ot_win_rate", "home_one_goal_rate",
+            "away_ot_rate", "away_ot_win_rate", "away_one_goal_rate",
+            "ot_rate_diff", "ot_win_rate_diff",
+            # Lead protection
+            "home_lead_p1_protection_rate", "home_lead_p2_protection_rate",
+            "away_lead_p1_protection_rate", "away_lead_p2_protection_rate",
+            "lead_p2_protection_diff",
+            # Starting goalie individual form
+            "home_starter_sv_pct", "home_starter_gaa", "home_goalie_consistency",
+            "away_starter_sv_pct", "away_starter_gaa", "away_goalie_consistency",
+            "starter_sv_pct_diff",
+            # Close-game record and save% trend
+            "home_close_game_win_pct", "home_blowout_win_pct", "home_one_goal_rate",
+            "away_close_game_win_pct", "away_blowout_win_pct", "away_one_goal_rate",
+            "close_game_win_pct_diff", "one_goal_rate_diff",
+            "home_sv_pct_trend", "home_sv_pct_short",
+            "away_sv_pct_trend", "away_sv_pct_short",
+            "sv_pct_trend_diff",
+            # Goal hot/cold streak
+            "home_goal_streak_gf", "home_goal_streak_ga",
+            "home_goal_trend_gf", "home_goal_trend_ga",
+            "away_goal_streak_gf", "away_goal_streak_ga",
+            "away_goal_trend_gf", "away_goal_trend_ga",
+            "goal_trend_gf_diff", "goal_trend_ga_diff",
+            # Divisional / conference / playoff position
+            "is_nhl_divisional", "is_nhl_conference",
+            "home_in_playoff_pos", "away_in_playoff_pos", "playoff_pos_diff",
         ]

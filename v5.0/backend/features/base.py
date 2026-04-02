@@ -420,6 +420,11 @@ class BaseFeatureExtractor(ABC):
         self._team_history_idx[cache_id] = idx
         return idx
 
+    def _split_home_away(self, recent: pd.DataFrame, team_id: str):
+        """Return (home_rows, away_rows) sub-DataFrames for team_id."""
+        is_home = recent["home_team_id"].astype(str) == str(team_id)
+        return recent[is_home], recent[~is_home]
+
     def _team_games_before(
         self,
         games: pd.DataFrame,
@@ -526,6 +531,60 @@ class BaseFeatureExtractor(ABC):
             "form_games_played": len(recent),
         }
 
+    def home_away_form(
+        self,
+        team_id: str,
+        date: str,
+        games: pd.DataFrame,
+        is_home: bool,
+        window: int = 10,
+    ) -> dict[str, float]:
+        """Rolling win rate and scoring averages for home-only or away-only games.
+
+        Home/away performance can diverge significantly — tracking them separately
+        provides better signal than combining all games.
+        """
+        recent_all = self._team_games_before(games, team_id, date, limit=window * 3)
+        if recent_all.empty:
+            return {
+                "ha_win_pct": 0.0,
+                "ha_ppg": 0.0,
+                "ha_opp_ppg": 0.0,
+                "ha_avg_margin": 0.0,
+                "ha_games_played": 0,
+            }
+
+        # Filter to home or away games only
+        if is_home:
+            filtered = recent_all[recent_all["home_team_id"] == str(team_id)]
+        else:
+            filtered = recent_all[recent_all["away_team_id"] == str(team_id)]
+
+        # Fall back to all games if insufficient home/away split data
+        if len(filtered) < 3:
+            filtered = recent_all
+
+        filtered = filtered.tail(window)
+        if filtered.empty:
+            return {
+                "ha_win_pct": 0.0,
+                "ha_ppg": 0.0,
+                "ha_opp_ppg": 0.0,
+                "ha_avg_margin": 0.0,
+                "ha_games_played": 0,
+            }
+
+        wins = self._vec_win_flags(filtered, team_id)
+        team_pts, opp_pts = self._vec_team_scores(filtered, team_id)
+
+        return {
+            "ha_win_pct": float(wins.mean()),
+            "ha_ppg": float(team_pts.mean()),
+            "ha_opp_ppg": float(opp_pts.mean()),
+            "ha_avg_margin": float((team_pts - opp_pts).mean()),
+            "ha_games_played": len(filtered),
+        }
+
     def head_to_head(
         self,
         team_a: str,
@@ -562,6 +621,36 @@ class BaseFeatureExtractor(ABC):
             "h2h_games": len(h2h),
             "h2h_win_pct": float(wins_a.mean()),
             "h2h_avg_margin": float((team_pts - opp_pts).mean()),
+        }
+
+    def head_to_head_at_home(
+        self,
+        home_team: str,
+        away_team: str,
+        games: pd.DataFrame,
+        date: str | None = None,
+        n: int = 8,
+    ) -> dict[str, float]:
+        """H2H record specifically when home_team hosts away_team (venue-specific)."""
+        defaults = {"h2h_home_games": 0, "h2h_home_win_pct": 0.0, "h2h_home_avg_margin": 0.0}
+        if games.empty:
+            return defaults
+        effective_date = date or "2099-01-01"
+        home_games = self._team_games_before(games, home_team, effective_date, limit=500)
+        if home_games.empty:
+            return defaults
+        venue_h2h = home_games[
+            (home_games["home_team_id"] == home_team) &
+            (home_games["away_team_id"] == away_team)
+        ].head(n)
+        if venue_h2h.empty:
+            return defaults
+        wins = self._vec_win_flags(venue_h2h, home_team)
+        tp, op = self._vec_team_scores(venue_h2h, home_team)
+        return {
+            "h2h_home_games": len(venue_h2h),
+            "h2h_home_win_pct": float(wins.mean()),
+            "h2h_home_avg_margin": float((tp - op).mean()),
         }
 
     def rest_days(
@@ -742,8 +831,15 @@ class BaseFeatureExtractor(ABC):
                 continue
             eh = 1.0 / (1.0 + 10 ** ((ra - rh) / 400.0))
             sh = 1.0 if hs > as_ else (0.0 if hs < as_ else 0.5)
-            elo_current[h] = rh + k * (sh - eh)
-            elo_current[a] = ra + k * ((1 - sh) - (1 - eh))
+            # Margin-of-victory K multiplier: log-scale reward for dominant wins
+            # Prevents autocorrection bias (per 538) and rewards predictive quality
+            margin = abs(float(hs) - float(as_))
+            elo_diff_dir = (rh - ra) * (1.0 if hs >= as_ else -1.0)
+            # autocorrelation correction factor (avoids over-rewarding expected blowouts)
+            autocorr = 1.0 / (1.0 + 0.001 * max(0.0, elo_diff_dir))
+            mov_mult = np.log(margin + 1.0) * autocorr
+            elo_current[h] = rh + k * mov_mult * (sh - eh)
+            elo_current[a] = ra + k * mov_mult * ((1 - sh) - (1 - eh))
 
         # Convert to numpy for fast searchsorted lookups
         elo_np: dict[str, tuple] = {}
@@ -1588,8 +1684,14 @@ class BaseFeatureExtractor(ABC):
         if "status" in games.columns:
             completed_mask = games["status"].str.lower().isin(_COMPLETED_STATUSES)
         if "home_score" in games.columns and "away_score" in games.columns:
-            has_scores = games["home_score"].notna() & games["away_score"].notna()
-            completed_mask = completed_mask | has_scores
+            # Scores must be present AND at least one team must have scored,
+            # otherwise scheduled games with 0-0 placeholder scores pass through.
+            has_real_scores = (
+                games["home_score"].notna()
+                & games["away_score"].notna()
+                & ((games["home_score"] > 0) | (games["away_score"] > 0))
+            )
+            completed_mask = completed_mask | has_real_scores
         games = games[completed_mask].reset_index(drop=True)
         if games.empty:
             logger.warning("No completed games for %s season %s", self.sport, season)

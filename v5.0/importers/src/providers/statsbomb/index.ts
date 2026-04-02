@@ -7,7 +7,7 @@
 
 import type { Provider, ImportOptions, ImportResult, Sport, RateLimitConfig } from "../../core/types.js";
 import { fetchJSON, sleep } from "../../core/http.js";
-import { writeJSON, rawPath, fileExists } from "../../core/io.js";
+import { writeJSON, rawPath, fileExists, readJSON } from "../../core/io.js";
 import { logger } from "../../core/logger.js";
 
 // ── Constants ───────────────────────────────────────────────
@@ -27,6 +27,7 @@ const ALL_ENDPOINTS = [
   "matches",
   "events",
   "lineups",
+  "three_sixty",
 ] as const;
 
 type Endpoint = (typeof ALL_ENDPOINTS)[number];
@@ -79,11 +80,14 @@ interface SBMatch {
 
 // ── Fetch helper ────────────────────────────────────────────
 
-async function sbFetch<T = unknown>(path: string): Promise<T | null> {
+async function sbFetch<T = unknown>(path: string, opts?: { quietNotFound?: boolean }): Promise<T | null> {
   try {
     return await fetchJSON<T>(`${DATA_BASE}/${path}`, NAME, RATE_LIMIT);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (opts?.quietNotFound && msg.includes("404")) {
+      return null;
+    }
     logger.warn(`Fetch failed: ${msg}`, NAME);
     return null;
   }
@@ -97,11 +101,79 @@ interface EndpointContext {
   dataDir: string;
   dryRun: boolean;
   competitions: SBCompetition[];
+  matchesCache: Map<string, SBMatch[]>;
 }
 
 interface EndpointResult {
   filesWritten: number;
   errors: string[];
+}
+
+function seasonCacheKey(sport: Sport, season: number): string {
+  return `${sport}:${season}`;
+}
+
+function uniqueMatches(matches: SBMatch[]): SBMatch[] {
+  const byId = new Map<number, SBMatch>();
+  for (const match of matches) {
+    byId.set(match.match_id, match);
+  }
+  return [...byId.values()];
+}
+
+async function loadSeasonMatches(
+  ctx: EndpointContext,
+  compSeasons: { competitionId: number; seasonId: number; seasonName: string }[],
+): Promise<SBMatch[]> {
+  const key = seasonCacheKey(ctx.sport, ctx.season);
+  const cached = ctx.matchesCache.get(key);
+  if (cached) return cached;
+
+  const indexFile = rawPath(ctx.dataDir, NAME, ctx.sport, ctx.season, "matches", "index.json");
+  const legacyFile = rawPath(ctx.dataDir, NAME, ctx.sport, ctx.season, "matches.json");
+
+  const existing = readJSON<SBMatch[]>(indexFile) ?? readJSON<SBMatch[]>(legacyFile);
+  if (existing && Array.isArray(existing)) {
+    const deduped = uniqueMatches(existing);
+    ctx.matchesCache.set(key, deduped);
+    return deduped;
+  }
+
+  const all: SBMatch[] = [];
+  for (const { competitionId, seasonId } of compSeasons) {
+    const byCompFile = rawPath(
+      ctx.dataDir,
+      NAME,
+      ctx.sport,
+      ctx.season,
+      "matches",
+      "by_competition",
+      String(competitionId),
+      `${seasonId}.json`,
+    );
+
+    let rows = readJSON<SBMatch[]>(byCompFile);
+    if (!rows || !Array.isArray(rows)) {
+      rows = await sbFetch<SBMatch[]>(`matches/${competitionId}/${seasonId}.json`);
+      if (rows && !ctx.dryRun) {
+        writeJSON(byCompFile, rows);
+      }
+    }
+
+    if (rows && Array.isArray(rows)) {
+      all.push(...rows);
+    }
+  }
+
+  const deduped = uniqueMatches(all);
+  if (!ctx.dryRun && deduped.length > 0) {
+    writeJSON(indexFile, deduped);
+    // Keep legacy aggregate path for compatibility.
+    writeJSON(legacyFile, deduped);
+  }
+
+  ctx.matchesCache.set(key, deduped);
+  return deduped;
 }
 
 // ── Core logic: resolve available competitions/seasons ──────
@@ -139,7 +211,8 @@ function resolveCompetitionSeasons(
 
 async function importCompetitions(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
-  const outFile = rawPath(dataDir, NAME, sport, season, "competitions.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "reference", "competitions.json");
+  const legacyOutFile = rawPath(dataDir, NAME, sport, season, "competitions.json");
   if (fileExists(outFile)) {
     logger.progress(NAME, sport, "competitions", `Skipping — already exists`);
     return { filesWritten: 0, errors: [] };
@@ -155,8 +228,9 @@ async function importCompetitions(ctx: EndpointContext): Promise<EndpointResult>
   );
 
   writeJSON(outFile, filtered);
+  writeJSON(legacyOutFile, filtered);
   logger.progress(NAME, sport, "competitions", `Saved ${filtered.length} competition entries`);
-  return { filesWritten: 1, errors: [] };
+  return { filesWritten: 2, errors: [] };
 }
 
 async function importMatches(ctx: EndpointContext): Promise<EndpointResult> {
@@ -170,27 +244,57 @@ async function importMatches(ctx: EndpointContext): Promise<EndpointResult> {
     return { filesWritten, errors };
   }
 
+  const allMatches: SBMatch[] = [];
+
   for (const { competitionId, seasonId, seasonName } of compSeasons) {
-    const outFile = rawPath(dataDir, NAME, sport, season, "matches.json");
-    if (fileExists(outFile)) {
-      logger.progress(NAME, sport, "matches", `Skipping ${seasonName} — already exists`);
+    const byCompFile = rawPath(
+      dataDir,
+      NAME,
+      sport,
+      season,
+      "matches",
+      "by_competition",
+      String(competitionId),
+      `${seasonId}.json`,
+    );
+
+    let matches = readJSON<SBMatch[]>(byCompFile);
+    if (matches && Array.isArray(matches)) {
+      logger.progress(NAME, sport, "matches", `Loaded cached matches for ${seasonName}`);
+      allMatches.push(...matches);
       continue;
     }
+
     logger.progress(NAME, sport, "matches", `Fetching matches for ${seasonName}`);
     if (dryRun) continue;
 
     try {
-      const matches = await sbFetch<SBMatch[]>(`matches/${competitionId}/${seasonId}.json`);
+      matches = await sbFetch<SBMatch[]>(`matches/${competitionId}/${seasonId}.json`);
       if (matches) {
-        writeJSON(outFile, matches);
+        writeJSON(byCompFile, matches);
+        allMatches.push(...matches);
         filesWritten++;
-        logger.progress(NAME, sport, "matches", `Saved ${matches.length} matches`);
+        logger.progress(NAME, sport, "matches", `Saved ${matches.length} matches for ${seasonName}`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(`matches/${competitionId}/${seasonId}: ${msg}`);
     }
   }
+
+  const merged = uniqueMatches(allMatches);
+  if (!dryRun && merged.length > 0) {
+    const indexFile = rawPath(dataDir, NAME, sport, season, "matches", "index.json");
+    const legacyFile = rawPath(dataDir, NAME, sport, season, "matches.json");
+    const compSeasonManifest = rawPath(dataDir, NAME, sport, season, "reference", "competition_seasons.json");
+    writeJSON(indexFile, merged);
+    writeJSON(legacyFile, merged);
+    writeJSON(compSeasonManifest, compSeasons);
+    filesWritten += 3;
+  }
+
+  ctx.matchesCache.set(seasonCacheKey(sport, season), merged);
+  logger.progress(NAME, sport, "matches", `Prepared ${merged.length} unique matches`);
 
   return { filesWritten, errors };
 }
@@ -206,54 +310,34 @@ async function importEvents(ctx: EndpointContext): Promise<EndpointResult> {
     return { filesWritten, errors };
   }
 
-  for (const { competitionId, seasonId, seasonName } of compSeasons) {
-    // First load match list to get match IDs
-    const matchesFile = rawPath(dataDir, NAME, sport, season, "matches.json");
-    let matches: SBMatch[] | null = null;
-
-    if (fileExists(matchesFile)) {
-      try {
-        const content = await import("node:fs").then((fs) =>
-          JSON.parse(fs.readFileSync(matchesFile, "utf-8")),
-        );
-        matches = content as SBMatch[];
-      } catch {
-        // Fall through to fetch
-      }
-    }
-
-    if (!matches) {
-      // Fetch matches inline if not already saved
-      matches = await sbFetch<SBMatch[]>(`matches/${competitionId}/${seasonId}.json`);
-    }
-
-    if (!matches || matches.length === 0) {
-      logger.progress(NAME, sport, "events", `No matches found for ${seasonName}`);
-      continue;
-    }
-
-    logger.progress(NAME, sport, "events", `Fetching events for ${matches.length} matches (${seasonName})`);
-    if (dryRun) continue;
-
-    for (const match of matches) {
-      const matchId = match.match_id;
-      const outFile = rawPath(dataDir, NAME, sport, season, "events", `${matchId}.json`);
-      if (fileExists(outFile)) continue;
-
-      try {
-        const events = await sbFetch(`events/${matchId}.json`);
-        if (events) {
-          writeJSON(outFile, events);
-          filesWritten++;
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        errors.push(`events/${matchId}: ${msg}`);
-      }
-    }
-
-    logger.progress(NAME, sport, "events", `Saved ${filesWritten} event files`);
+  const matches = await loadSeasonMatches(ctx, compSeasons);
+  if (!matches || matches.length === 0) {
+    logger.progress(NAME, sport, "events", `No matches found for ${season}`);
+    return { filesWritten, errors };
   }
+
+  logger.progress(NAME, sport, "events", `Fetching events for ${matches.length} matches`);
+  if (dryRun) return { filesWritten, errors };
+
+  for (const match of matches) {
+    const matchId = match.match_id;
+    const outFile = rawPath(dataDir, NAME, sport, season, "matches", `${matchId}`, "events.json");
+    const legacyFile = rawPath(dataDir, NAME, sport, season, "events", `${matchId}.json`);
+    if (fileExists(outFile) || fileExists(legacyFile)) continue;
+
+    try {
+      const events = await sbFetch(`events/${matchId}.json`);
+      if (events) {
+        writeJSON(outFile, events);
+        filesWritten++;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`events/${matchId}: ${msg}`);
+    }
+  }
+
+  logger.progress(NAME, sport, "events", `Saved ${filesWritten} event files`);
 
   return { filesWritten, errors };
 }
@@ -269,53 +353,77 @@ async function importLineups(ctx: EndpointContext): Promise<EndpointResult> {
     return { filesWritten, errors };
   }
 
-  for (const { competitionId, seasonId, seasonName } of compSeasons) {
-    // Load match list
-    const matchesFile = rawPath(dataDir, NAME, sport, season, "matches.json");
-    let matches: SBMatch[] | null = null;
-
-    if (fileExists(matchesFile)) {
-      try {
-        const content = await import("node:fs").then((fs) =>
-          JSON.parse(fs.readFileSync(matchesFile, "utf-8")),
-        );
-        matches = content as SBMatch[];
-      } catch {
-        // Fall through to fetch
-      }
-    }
-
-    if (!matches) {
-      matches = await sbFetch<SBMatch[]>(`matches/${competitionId}/${seasonId}.json`);
-    }
-
-    if (!matches || matches.length === 0) {
-      logger.progress(NAME, sport, "lineups", `No matches found for ${seasonName}`);
-      continue;
-    }
-
-    logger.progress(NAME, sport, "lineups", `Fetching lineups for ${matches.length} matches (${seasonName})`);
-    if (dryRun) continue;
-
-    for (const match of matches) {
-      const matchId = match.match_id;
-      const outFile = rawPath(dataDir, NAME, sport, season, "lineups", `${matchId}.json`);
-      if (fileExists(outFile)) continue;
-
-      try {
-        const lineups = await sbFetch(`lineups/${matchId}.json`);
-        if (lineups) {
-          writeJSON(outFile, lineups);
-          filesWritten++;
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        errors.push(`lineups/${matchId}: ${msg}`);
-      }
-    }
-
-    logger.progress(NAME, sport, "lineups", `Saved ${filesWritten} lineup files`);
+  const matches = await loadSeasonMatches(ctx, compSeasons);
+  if (!matches || matches.length === 0) {
+    logger.progress(NAME, sport, "lineups", `No matches found for ${season}`);
+    return { filesWritten, errors };
   }
+
+  logger.progress(NAME, sport, "lineups", `Fetching lineups for ${matches.length} matches`);
+  if (dryRun) return { filesWritten, errors };
+
+  for (const match of matches) {
+    const matchId = match.match_id;
+    const outFile = rawPath(dataDir, NAME, sport, season, "matches", `${matchId}`, "lineups.json");
+    const legacyFile = rawPath(dataDir, NAME, sport, season, "lineups", `${matchId}.json`);
+    if (fileExists(outFile) || fileExists(legacyFile)) continue;
+
+    try {
+      const lineups = await sbFetch(`lineups/${matchId}.json`);
+      if (lineups) {
+        writeJSON(outFile, lineups);
+        filesWritten++;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`lineups/${matchId}: ${msg}`);
+    }
+  }
+
+  logger.progress(NAME, sport, "lineups", `Saved ${filesWritten} lineup files`);
+
+  return { filesWritten, errors };
+}
+
+async function importThreeSixty(ctx: EndpointContext): Promise<EndpointResult> {
+  const { sport, season, dataDir, dryRun, competitions } = ctx;
+  let filesWritten = 0;
+  const errors: string[] = [];
+
+  const compSeasons = resolveCompetitionSeasons(sport, season, competitions);
+  if (compSeasons.length === 0) {
+    logger.progress(NAME, sport, "three_sixty", `No matching competition/season for ${season}`);
+    return { filesWritten, errors };
+  }
+
+  const matches = await loadSeasonMatches(ctx, compSeasons);
+  if (!matches || matches.length === 0) {
+    logger.progress(NAME, sport, "three_sixty", `No matches found for ${season}`);
+    return { filesWritten, errors };
+  }
+
+  logger.progress(NAME, sport, "three_sixty", `Fetching freeze-frame data for ${matches.length} matches`);
+  if (dryRun) return { filesWritten, errors };
+
+  for (const match of matches) {
+    const matchId = match.match_id;
+    const outFile = rawPath(dataDir, NAME, sport, season, "matches", `${matchId}`, "three_sixty.json");
+    const legacyFile = rawPath(dataDir, NAME, sport, season, "three_sixty", `${matchId}.json`);
+    if (fileExists(outFile) || fileExists(legacyFile)) continue;
+
+    try {
+      const frames = await sbFetch(`three-sixty/${matchId}.json`, { quietNotFound: true });
+      if (frames) {
+        writeJSON(outFile, frames);
+        filesWritten++;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`three-sixty/${matchId}: ${msg}`);
+    }
+  }
+
+  logger.progress(NAME, sport, "three_sixty", `Saved ${filesWritten} three-sixty files`);
 
   return { filesWritten, errors };
 }
@@ -327,6 +435,7 @@ const ENDPOINT_FNS: Record<Endpoint, (ctx: EndpointContext) => Promise<EndpointR
   matches: importMatches,
   events: importEvents,
   lineups: importLineups,
+  three_sixty: importThreeSixty,
 };
 
 // ── Provider implementation ─────────────────────────────────
@@ -377,6 +486,7 @@ const statsbomb: Provider = {
     for (const sport of sports) {
       for (const season of opts.seasons) {
         logger.info(`── ${sport.toUpperCase()} ${season} ──`, NAME);
+        const matchesCache = new Map<string, SBMatch[]>();
 
         for (const ep of endpoints) {
           const fn = ENDPOINT_FNS[ep];
@@ -389,6 +499,7 @@ const statsbomb: Provider = {
               dataDir: opts.dataDir,
               dryRun: opts.dryRun,
               competitions: allCompetitions,
+              matchesCache,
             };
             const result = await fn(ctx);
             totalFiles += result.filesWritten;

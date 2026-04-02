@@ -1,14 +1,20 @@
 // ──────────────────────────────────────────────────────────
 // V5.0 football-data.org Provider
 // ──────────────────────────────────────────────────────────
-// Fetches match results, standings, teams, and top scorers
-// from the football-data.org free-tier API.
+// Fetches match results, standings, teams, top scorers, and
+// head-to-head records from the football-data.org v4 API.
 // Requires API key via FOOTBALLDATA_API_KEY env var.
 // Free tier: 10 requests/min.
+//
+// Supported competitions (v4 API codes):
+//   Tier-one leagues:  PL, BL1, BL2, PD, SA, FL1, DED, PPL, SA (via SB), MLS
+//   European:          CL (ucl), EL (europa), EC (euros)
+//   World:             WC (worldcup)
+//   Second divisions:  ELC (championship), SB (serieb), FL2 (ligue2)
 
 import type { Provider, ImportOptions, ImportResult, Sport, RateLimitConfig } from "../../core/types.js";
 import { fetchJSON } from "../../core/http.js";
-import { writeJSON, rawPath, fileExists } from "../../core/io.js";
+import { writeJSON, readJSON, rawPath, fileExists } from "../../core/io.js";
 import { logger } from "../../core/logger.js";
 
 // ── Constants ───────────────────────────────────────────────
@@ -19,24 +25,58 @@ const BASE_URL = "https://api.football-data.org/v4";
 // Free tier: 10 req/min → enforce 6 req/min to stay safe
 const RATE_LIMIT: RateLimitConfig = { requests: 6, perMs: 60_000 };
 
-const SUPPORTED_SPORTS: Sport[] = ["epl", "bundesliga", "laliga", "seriea", "ligue1", "mls", "ucl"];
+const SUPPORTED_SPORTS: Sport[] = [
+  // Tier-1 leagues (major)
+  "epl", "bundesliga", "laliga", "seriea", "ligue1",
+  // Additional top-flight leagues
+  "eredivisie", "primeiraliga",
+  // Second divisions
+  "championship", "bundesliga2", "serieb", "ligue2",
+  // Club European competitions
+  "ucl", "europa",
+  // International tournaments
+  "euros", "worldcup",
+  // Additional leagues
+  "mls",
+];
 
-// Sport → football-data.org competition code
+// Sport key → football-data.org competition code
 const COMPETITION_CODES: Record<string, string> = {
-  epl:        "PL",
-  bundesliga: "BL1",
-  laliga:     "PD",
-  seriea:     "SA",
-  ligue1:     "FL1",
-  mls:        "MLS",
-  ucl:        "CL",
+  // Major top-flight
+  epl:          "PL",
+  bundesliga:   "BL1",
+  laliga:       "PD",
+  seriea:       "SA",
+  ligue1:       "FL1",
+  // Additional top-flight
+  eredivisie:   "DED",
+  primeiraliga: "PPL",
+  // Second divisions
+  championship: "ELC",
+  bundesliga2:  "BL2",
+  serieb:       "SB",
+  ligue2:       "FL2",
+  // European club
+  ucl:          "CL",
+  europa:       "EL",
+  // International
+  euros:        "EC",
+  worldcup:     "WC",
+  // Other
+  mls:          "MLS",
 };
+
+// Sports that are tournaments (not annual rolling leagues); they only have
+// data for specific calendar years (WC: 2022, EC: 2020/2024, etc.).
+// The importer will silently skip 404s for seasons without a tournament.
+const TOURNAMENT_SPORTS = new Set(["worldcup", "euros"]);
 
 const ALL_ENDPOINTS = [
   "matches",
   "standings",
   "teams",
   "scorers",
+  "head2head",
 ] as const;
 
 type Endpoint = (typeof ALL_ENDPOINTS)[number];
@@ -269,6 +309,70 @@ async function importScorers(ctx: EndpointContext): Promise<EndpointResult> {
   return { filesWritten, errors };
 }
 
+// ── Head-to-head ────────────────────────────────────────────
+// Reads match IDs from an already-fetched games/all.json and
+// fetches /v4/matches/{id}/head2head?limit=10 for each FINISHED
+// match that hasn't been cached yet.  Due to the free-tier rate
+// limit this is intentionally incremental — re-run to fill gaps.
+
+async function importHead2Head(ctx: EndpointContext): Promise<EndpointResult> {
+  const { sport, season, dataDir, dryRun } = ctx;
+  let filesWritten = 0;
+  const errors: string[] = [];
+
+  const matchesFile = rawPath(dataDir, NAME, sport, season, "games", "all.json");
+  if (!fileExists(matchesFile)) {
+    logger.progress(NAME, sport, "head2head", `Skipping ${season} — games/all.json not yet fetched`);
+    return { filesWritten, errors };
+  }
+
+  const allMatches = readJSON<any>(matchesFile);
+  const matches: any[] = allMatches?.matches ?? [];
+  const finished = matches.filter((m: any) => m.status === "FINISHED");
+
+  if (finished.length === 0) {
+    logger.progress(NAME, sport, "head2head", `No finished matches for ${season}`);
+    return { filesWritten, errors };
+  }
+
+  logger.progress(
+    NAME, sport, "head2head",
+    `Fetching h2h for ${finished.length} finished matches in ${season} (incremental)`,
+  );
+
+  for (const m of finished) {
+    const mid = String(m.id);
+    const outFile = rawPath(dataDir, NAME, sport, season, "head2head", `${mid}.json`);
+    if (fileExists(outFile)) continue;
+
+    if (dryRun) { filesWritten++; continue; }
+
+    const url = `${BASE_URL}/matches/${mid}/head2head?limit=10`;
+    try {
+      const data = await fetchJSON<any>(url, NAME, RATE_LIMIT, {
+        headers: authHeaders(),
+        timeoutMs: 20_000,
+      });
+      writeJSON(outFile, {
+        matchId: mid,
+        sport,
+        season,
+        headToHead: data?.headToHead ?? null,
+        aggregates: data?.aggregates ?? null,
+        matches: data?.matches ?? [],
+        fetchedAt: new Date().toISOString(),
+      });
+      filesWritten++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`head2head/${sport}/${season}/${mid}: ${msg}`);
+    }
+  }
+
+  logger.progress(NAME, sport, "head2head", `Saved ${filesWritten} h2h files for ${season}`);
+  return { filesWritten, errors };
+}
+
 // ── Endpoint dispatch map ───────────────────────────────────
 
 const ENDPOINT_FNS: Record<Endpoint, (ctx: EndpointContext) => Promise<EndpointResult>> = {
@@ -276,6 +380,7 @@ const ENDPOINT_FNS: Record<Endpoint, (ctx: EndpointContext) => Promise<EndpointR
   standings: importStandings,
   teams: importTeams,
   scorers: importScorers,
+  head2head: importHead2Head,
 };
 
 // ── Provider implementation ─────────────────────────────────
@@ -313,6 +418,18 @@ const footballdata: Provider = {
 
     for (const sport of sports) {
       for (const season of opts.seasons) {
+        // Tournament sports (WC, EC) only happen in specific years — skip
+        // non-tournament years rather than making API calls that return 404.
+        if (TOURNAMENT_SPORTS.has(sport)) {
+          const isTournamentYear =
+            (sport === "worldcup" && [2018, 2022, 2026].includes(season)) ||
+            (sport === "euros" && [2016, 2020, 2021, 2024].includes(season));
+          if (!isTournamentYear) {
+            logger.progress(NAME, sport, "skip", `Season ${season} — no tournament held`);
+            continue;
+          }
+        }
+
         logger.info(`── ${sport.toUpperCase()} ${season} ──`, NAME);
 
         for (const ep of endpoints) {

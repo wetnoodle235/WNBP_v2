@@ -16,14 +16,16 @@ import { logger } from "../../core/logger.js";
 const NAME = "openf1";
 const BASE_URL = "https://api.openf1.org/v1";
 
-const RATE_LIMIT: RateLimitConfig = { requests: 5, perMs: 1_000 };
+const RATE_LIMIT: RateLimitConfig = { requests: 3, perMs: 1_000 };
 
 const SUPPORTED_SPORTS: Sport[] = ["f1"];
 
 const ALL_ENDPOINTS = [
+  "meetings",
   "sessions",
   "drivers",
   "laps",
+  "location",
   "car_data",
   "position",
   "weather",
@@ -31,12 +33,19 @@ const ALL_ENDPOINTS = [
   "stints",
   "pit",
   "intervals",
+  "team_radio",
+  "overtakes",
+  "session_result",
+  "starting_grid",
+  "championship_drivers",
+  "championship_teams",
 ] as const;
 
 type Endpoint = (typeof ALL_ENDPOINTS)[number];
 
-/** Endpoints to fetch per-session (excluding sessions itself and car_data) */
-const SESSION_ENDPOINTS: Endpoint[] = [
+const DEFAULT_ENDPOINTS: Endpoint[] = [
+  "meetings",
+  "sessions",
   "drivers",
   "laps",
   "position",
@@ -45,18 +54,63 @@ const SESSION_ENDPOINTS: Endpoint[] = [
   "stints",
   "pit",
   "intervals",
+  "team_radio",
+  "overtakes",
+  "session_result",
+  "starting_grid",
+  "championship_drivers",
+  "championship_teams",
 ];
+
+/** Endpoints to fetch per-session (excluding sessions itself and car_data) */
+const SESSION_ENDPOINTS: Endpoint[] = [
+  "drivers",
+  "laps",
+  "location",
+  "position",
+  "weather",
+  "race_control",
+  "stints",
+  "pit",
+  "intervals",
+  "team_radio",
+  "overtakes",
+  "session_result",
+  "starting_grid",
+  "championship_drivers",
+  "championship_teams",
+];
+
+const RACE_ONLY_ENDPOINTS = new Set<Endpoint>([
+  "intervals",
+  "pit",
+  "overtakes",
+  "starting_grid",
+  "championship_drivers",
+  "championship_teams",
+]);
+
+const HIGH_VOLUME_ENDPOINTS = new Set<Endpoint>(["car_data", "location"]);
 
 // ── Types ───────────────────────────────────────────────────
 
 interface OpenF1Session {
   session_key: number;
+  meeting_key: number;
   session_name: string;
   session_type: string;
   date_start: string;
   date_end: string;
   circuit_short_name: string;
   country_name: string;
+  year: number;
+  [key: string]: unknown;
+}
+
+interface OpenF1Meeting {
+  meeting_key: number;
+  meeting_name?: string;
+  meeting_official_name?: string;
   year: number;
   [key: string]: unknown;
 }
@@ -75,25 +129,111 @@ interface EndpointResult {
   errors: string[];
 }
 
+interface OpenF1SeasonContext extends EndpointContext {
+  meetingsByKey: Map<number, OpenF1Meeting>;
+}
+
 // ── Helper ──────────────────────────────────────────────────
 
 function isCurrentYear(year: number): boolean {
   return year >= new Date().getFullYear();
 }
 
+function meetingPhase(meeting: OpenF1Meeting | undefined, session?: OpenF1Session): string {
+  const tokens = [meeting?.meeting_name, meeting?.meeting_official_name, session?.session_name, session?.session_type]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+
+  return tokens.includes("test") || tokens.includes("day 1") || tokens.includes("day 2") || tokens.includes("day 3")
+    ? "testing"
+    : "championship";
+}
+
+function meetingDir(dataDir: string, sport: Sport, season: number, meetingKey: number, phase: string): string {
+  return rawPath(dataDir, NAME, sport, season, "season_phases", phase, "meetings", `meeting_${meetingKey}`);
+}
+
+function sessionDir(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+  session: OpenF1Session,
+  meetingsByKey: Map<number, OpenF1Meeting>,
+): string {
+  const phase = meetingPhase(meetingsByKey.get(session.meeting_key), session);
+  return rawPath(
+    dataDir,
+    NAME,
+    sport,
+    season,
+    "season_phases",
+    phase,
+    "meetings",
+    `meeting_${session.meeting_key}`,
+    "sessions",
+    `session_${session.session_key}`,
+  );
+}
+
+function shouldFetchSessionEndpoint(session: OpenF1Session, endpoint: Endpoint): boolean {
+  if (!RACE_ONLY_ENDPOINTS.has(endpoint)) return true;
+  return session.session_type === "Race" || session.session_type === "Sprint";
+}
+
 // ── Endpoint implementations ────────────────────────────────
 
-async function importSessions(ctx: EndpointContext): Promise<{ result: EndpointResult; sessions: OpenF1Session[] }> {
+async function importMeetings(ctx: EndpointContext): Promise<{ result: EndpointResult; meetings: OpenF1Meeting[] }> {
   const { sport, season, dataDir, dryRun } = ctx;
   let filesWritten = 0;
   const errors: string[] = [];
 
-  const outFile = rawPath(dataDir, NAME, sport, season, "sessions.json");
+  const outFile = rawPath(dataDir, NAME, sport, season, "reference", "meetings.json");
 
-  // Always re-fetch sessions to get the latest list, but return cached if exists
+  if (fileExists(outFile) && !isCurrentYear(season)) {
+    logger.progress(NAME, sport, "meetings", `Skipping ${season} — already exists`);
+    try {
+      const fs = await import("node:fs");
+      const cached = JSON.parse(fs.readFileSync(outFile, "utf-8")) as OpenF1Meeting[];
+      return { result: { filesWritten, errors }, meetings: cached };
+    } catch {
+      // Fall through to re-fetch
+    }
+  }
+
+  const url = `${BASE_URL}/meetings?year=${season}`;
+  logger.progress(NAME, sport, "meetings", `Fetching ${season} meetings`);
+
+  if (dryRun) return { result: { filesWritten: 0, errors: [] }, meetings: [] };
+
+  try {
+    const meetings = await fetchJSON<OpenF1Meeting[]>(url, NAME, RATE_LIMIT);
+    writeJSON(outFile, meetings);
+    filesWritten++;
+    for (const meeting of meetings) {
+      const phase = meetingPhase(meeting);
+      writeJSON(`${meetingDir(dataDir, sport, season, meeting.meeting_key, phase)}/meeting.json`, meeting);
+      filesWritten++;
+    }
+    logger.progress(NAME, sport, "meetings", `Saved ${meetings.length} meetings for ${season}`);
+    return { result: { filesWritten, errors }, meetings };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`meetings ${season}: ${msg}`, NAME);
+    errors.push(`meetings/${season}: ${msg}`);
+    return { result: { filesWritten, errors }, meetings: [] };
+  }
+}
+
+async function importSessions(ctx: OpenF1SeasonContext): Promise<{ result: EndpointResult; sessions: OpenF1Session[] }> {
+  const { sport, season, dataDir, dryRun, meetingsByKey } = ctx;
+  let filesWritten = 0;
+  const errors: string[] = [];
+
+  const outFile = rawPath(dataDir, NAME, sport, season, "reference", "sessions.json");
+
   if (fileExists(outFile) && !isCurrentYear(season)) {
     logger.progress(NAME, sport, "sessions", `Skipping ${season} — already exists`);
-    // Still need to return sessions for downstream endpoints
     try {
       const fs = await import("node:fs");
       const cached = JSON.parse(fs.readFileSync(outFile, "utf-8")) as OpenF1Session[];
@@ -112,6 +252,10 @@ async function importSessions(ctx: EndpointContext): Promise<{ result: EndpointR
     const sessions = await fetchJSON<OpenF1Session[]>(url, NAME, RATE_LIMIT);
     writeJSON(outFile, sessions);
     filesWritten++;
+    for (const session of sessions) {
+      writeJSON(`${sessionDir(dataDir, sport, season, session, meetingsByKey)}/session.json`, session);
+      filesWritten++;
+    }
     logger.progress(NAME, sport, "sessions", `Saved ${sessions.length} sessions for ${season}`);
     return { result: { filesWritten, errors }, sessions };
   } catch (err) {
@@ -123,24 +267,27 @@ async function importSessions(ctx: EndpointContext): Promise<{ result: EndpointR
 }
 
 async function importSessionEndpoint(
-  ctx: EndpointContext,
+  ctx: OpenF1SeasonContext,
   session: OpenF1Session,
   endpoint: Endpoint,
 ): Promise<EndpointResult> {
-  const { sport, season, dataDir, dryRun } = ctx;
+  const { sport, season, dataDir, dryRun, meetingsByKey } = ctx;
   let filesWritten = 0;
   const errors: string[] = [];
 
   const sessionKey = session.session_key;
-  const outFile = rawPath(dataDir, NAME, sport, season, String(sessionKey), `${endpoint}.json`);
+  const outFile = `${sessionDir(dataDir, sport, season, session, meetingsByKey)}/${endpoint}.json`;
 
   if (fileExists(outFile)) {
     return { filesWritten, errors };
   }
 
-  // Skip car_data for historical years — too large
-  if (endpoint === "car_data" && !isCurrentYear(season)) {
-    logger.progress(NAME, sport, endpoint, `Skipping car_data for historical session ${sessionKey}`);
+  if (HIGH_VOLUME_ENDPOINTS.has(endpoint) && !isCurrentYear(season)) {
+    logger.progress(NAME, sport, endpoint, `Skipping ${endpoint} for historical session ${sessionKey}`);
+    return { filesWritten, errors };
+  }
+
+  if (!shouldFetchSessionEndpoint(session, endpoint)) {
     return { filesWritten, errors };
   }
 
@@ -154,6 +301,11 @@ async function importSessionEndpoint(
     filesWritten++;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("HTTP 404") && msg.includes("No results found")) {
+      writeJSON(outFile, []);
+      filesWritten++;
+      return { filesWritten, errors };
+    }
     logger.warn(`${endpoint} session ${sessionKey}: ${msg}`, NAME);
     errors.push(`${endpoint}/${season}/${sessionKey}: ${msg}`);
   }
@@ -183,7 +335,7 @@ const openf1: Provider = {
 
     const endpoints: Endpoint[] = opts.endpoints.length
       ? (opts.endpoints.filter((e) => ALL_ENDPOINTS.includes(e as Endpoint)) as Endpoint[])
-      : [...ALL_ENDPOINTS];
+      : [...DEFAULT_ENDPOINTS];
 
     logger.info(
       `Starting import — ${endpoints.length} endpoints, ${opts.seasons.length} seasons`,
@@ -194,13 +346,24 @@ const openf1: Provider = {
       for (const season of opts.seasons) {
         logger.info(`── F1 ${season} ──`, NAME);
 
-        // Step 1: Fetch sessions for this year
-        const { result: sessionsResult, sessions } = await importSessions({
+        const baseCtx: EndpointContext = {
           sport,
           season,
           dataDir: opts.dataDir,
           dryRun: opts.dryRun,
-        });
+        };
+
+        const { result: meetingsResult, meetings } = await importMeetings(baseCtx);
+        totalFiles += meetingsResult.filesWritten;
+        allErrors.push(...meetingsResult.errors);
+
+        const seasonCtx: OpenF1SeasonContext = {
+          ...baseCtx,
+          meetingsByKey: new Map(meetings.map((meeting) => [meeting.meeting_key, meeting])),
+        };
+
+        // Step 1: Fetch sessions for this year
+        const { result: sessionsResult, sessions } = await importSessions(seasonCtx);
         totalFiles += sessionsResult.filesWritten;
         allErrors.push(...sessionsResult.errors);
 
@@ -223,7 +386,12 @@ const openf1: Provider = {
 
         // Step 2: For each session, fetch all requested endpoints
         const raceAndQualiSessions = sessions.filter(
-          (s) => s.session_type === "Race" || s.session_type === "Qualifying" || s.session_type === "Sprint",
+          (s) => {
+            const sessionType = String(s.session_type || "");
+            return sessionType === "Race"
+              || sessionType === "Sprint"
+              || sessionType.includes("Qualifying");
+          },
         );
 
         const targetSessions = raceAndQualiSessions.length > 0 ? raceAndQualiSessions : sessions;
@@ -235,13 +403,7 @@ const openf1: Provider = {
 
           for (const ep of sessionEps) {
             try {
-              const ctx: EndpointContext = {
-                sport,
-                season,
-                dataDir: opts.dataDir,
-                dryRun: opts.dryRun,
-              };
-              const result = await importSessionEndpoint(ctx, session, ep);
+              const result = await importSessionEndpoint(seasonCtx, session, ep);
               totalFiles += result.filesWritten;
               allErrors.push(...result.errors);
             } catch (err) {

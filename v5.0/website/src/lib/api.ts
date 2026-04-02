@@ -217,6 +217,25 @@ export async function getStandingsWithMeta(
   return { data, seasonActive, seasonYear };
 }
 
+export interface WeatherInfo {
+  game_id: string;
+  sport: string;
+  venue?: string;
+  dome: boolean;
+  temp_f?: number | null;
+  wind_mph?: number | null;
+  wind_direction?: string | null;
+  wind_direction_deg?: number | null;
+  humidity_pct?: number | null;
+  precipitation_pct?: number | null;
+  condition?: string | null;
+  source?: string;
+}
+
+export async function getGameWeather(sport: string, gameId: string): Promise<WeatherInfo | null> {
+  return getData<WeatherInfo>(`/v1/${sport}/games/${gameId}/weather`);
+}
+
 export async function getOdds(
   sport: string,
   params?: Record<string, string>,

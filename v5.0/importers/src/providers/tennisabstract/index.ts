@@ -33,6 +33,22 @@ const ALL_ENDPOINTS = [
 
 type Endpoint = (typeof ALL_ENDPOINTS)[number];
 
+const ENDPOINTS_BY_SPORT: Record<Sport, Endpoint[]> = {
+  // ATP qualifiers/challengers are bundled in the same file
+  atp: ["matches", "rankings", "futures", "challengers"],
+  // WTA has qual/ITF feed; no dedicated futures/challengers files
+  wta: ["matches", "rankings", "qualies"],
+};
+
+function endpointSupportedForSport(sport: Sport, endpoint: Endpoint): boolean {
+  return ENDPOINTS_BY_SPORT[sport].includes(endpoint);
+}
+
+function isNotFoundError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b404\b|not found/i.test(msg);
+}
+
 // ── URL builders ────────────────────────────────────────────
 
 function repoBase(sport: Sport): string {
@@ -117,8 +133,12 @@ async function importMatches(ctx: EndpointContext): Promise<EndpointResult> {
     logger.progress(NAME, sport, "matches", `Saved ${season} matches`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`matches ${sport}/${season}: ${msg}`, NAME);
-    errors.push(`matches/${sport}/${season}: ${msg}`);
+    if (isNotFoundError(err)) {
+      logger.info(`No matches file for ${sport}/${season}; skipping`, NAME);
+    } else {
+      logger.warn(`matches ${sport}/${season}: ${msg}`, NAME);
+      errors.push(`matches/${sport}/${season}: ${msg}`);
+    }
   }
 
   return { filesWritten, errors };
@@ -161,6 +181,10 @@ async function importFutures(ctx: EndpointContext): Promise<EndpointResult> {
   let filesWritten = 0;
   const errors: string[] = [];
 
+  if (!endpointSupportedForSport(sport, "futures")) {
+    return { filesWritten, errors };
+  }
+
   const outFile = rawPath(dataDir, NAME, sport, season, "futures.csv");
 
   if (fileExists(outFile)) {
@@ -180,9 +204,13 @@ async function importFutures(ctx: EndpointContext): Promise<EndpointResult> {
     logger.progress(NAME, sport, "futures", `Saved ${season} futures`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    // Futures files don't exist for all years / WTA
-    logger.warn(`futures ${sport}/${season}: ${msg}`, NAME);
-    errors.push(`futures/${sport}/${season}: ${msg}`);
+    // Futures files are missing for some years as Sackmann seasons are published.
+    if (isNotFoundError(err)) {
+      logger.info(`No futures file for ${sport}/${season}; skipping`, NAME);
+    } else {
+      logger.warn(`futures ${sport}/${season}: ${msg}`, NAME);
+      errors.push(`futures/${sport}/${season}: ${msg}`);
+    }
   }
 
   return { filesWritten, errors };
@@ -192,6 +220,10 @@ async function importQualies(ctx: EndpointContext): Promise<EndpointResult> {
   const { sport, season, dataDir, dryRun } = ctx;
   let filesWritten = 0;
   const errors: string[] = [];
+
+  if (!endpointSupportedForSport(sport, "qualies")) {
+    return { filesWritten, errors };
+  }
 
   const outFile = rawPath(dataDir, NAME, sport, season, "qualies.csv");
 
@@ -212,8 +244,12 @@ async function importQualies(ctx: EndpointContext): Promise<EndpointResult> {
     logger.progress(NAME, sport, "qualies", `Saved ${season} qualies`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`qualies ${sport}/${season}: ${msg}`, NAME);
-    errors.push(`qualies/${sport}/${season}: ${msg}`);
+    if (isNotFoundError(err)) {
+      logger.info(`No qualies file for ${sport}/${season}; skipping`, NAME);
+    } else {
+      logger.warn(`qualies ${sport}/${season}: ${msg}`, NAME);
+      errors.push(`qualies/${sport}/${season}: ${msg}`);
+    }
   }
 
   return { filesWritten, errors };
@@ -223,6 +259,10 @@ async function importChallengers(ctx: EndpointContext): Promise<EndpointResult> 
   const { sport, season, dataDir, dryRun } = ctx;
   let filesWritten = 0;
   const errors: string[] = [];
+
+  if (!endpointSupportedForSport(sport, "challengers")) {
+    return { filesWritten, errors };
+  }
 
   const outFile = rawPath(dataDir, NAME, sport, season, "challengers.csv");
 
@@ -243,8 +283,12 @@ async function importChallengers(ctx: EndpointContext): Promise<EndpointResult> 
     logger.progress(NAME, sport, "challengers", `Saved ${season} challengers`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`challengers ${sport}/${season}: ${msg}`, NAME);
-    errors.push(`challengers/${sport}/${season}: ${msg}`);
+    if (isNotFoundError(err)) {
+      logger.info(`No challengers file for ${sport}/${season}; skipping`, NAME);
+    } else {
+      logger.warn(`challengers ${sport}/${season}: ${msg}`, NAME);
+      errors.push(`challengers/${sport}/${season}: ${msg}`);
+    }
   }
 
   return { filesWritten, errors };
@@ -293,7 +337,9 @@ const tennisabstract: Provider = {
       for (const season of opts.seasons) {
         logger.info(`── ${sport.toUpperCase()} ${season} ──`, NAME);
 
-        for (const ep of endpoints) {
+        const sportEndpoints = endpoints.filter((ep) => endpointSupportedForSport(sport, ep));
+
+        for (const ep of sportEndpoints) {
           const fn = ENDPOINT_FNS[ep];
           if (!fn) continue;
 

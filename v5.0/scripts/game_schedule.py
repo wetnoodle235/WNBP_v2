@@ -47,12 +47,27 @@ ESPN_SPORT_MAP: dict[str, tuple[str, str]] = {
     "nfl": ("football", "nfl"),
     "mlb": ("baseball", "mlb"),
     "nhl": ("hockey", "nhl"),
+    # Soccer — top-flight
     "epl": ("soccer", "eng.1"),
     "laliga": ("soccer", "esp.1"),
     "bundesliga": ("soccer", "ger.1"),
     "seriea": ("soccer", "ita.1"),
     "ligue1": ("soccer", "fra.1"),
     "mls": ("soccer", "usa.1"),
+    "eredivisie": ("soccer", "ned.1"),
+    "primeiraliga": ("soccer", "por.1"),
+    # Soccer — second divisions
+    "championship": ("soccer", "eng.2"),
+    "bundesliga2": ("soccer", "ger.2"),
+    "serieb": ("soccer", "ita.2"),
+    "ligue2": ("soccer", "fra.2"),
+    # Soccer — European / international
+    "ucl": ("soccer", "UEFA.CHAMPIONS"),
+    "europa": ("soccer", "UEFA.EUROPA"),
+    "euros": ("soccer", "UEFA.EURO"),
+    "worldcup": ("soccer", "FIFA.WORLD"),
+    "ligamx": ("soccer", "mex.1"),
+    "nwsl": ("soccer", "usa.nwsl"),
 }
 
 # Default sports to check

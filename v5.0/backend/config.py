@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     raw_dir: Optional[Path] = Field(default=None)
     normalized_dir: Optional[Path] = Field(default=None)
 
+    # Data reader backend
+    backend_reader: str = "parquet"  # parquet | duckdb
+    duckdb_path: Optional[Path] = Field(default=None)
+    duckdb_enabled_sports: str = ""  # comma-separated, empty = all sports
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
@@ -62,6 +67,8 @@ class Settings(BaseSettings):
             self.raw_dir = self.data_dir / "raw"
         if self.normalized_dir is None:
             self.normalized_dir = self.data_dir / "normalized"
+        if self.duckdb_path is None:
+            self.duckdb_path = self.data_dir / "normalized.duckdb"
 
 
 @lru_cache()
@@ -92,6 +99,14 @@ SPORT_DEFINITIONS: dict[str, dict] = {
     "nwsl":       {"label": "NWSL",       "category": "soccer",     "country": "US"},
     "ligamx":     {"label": "Liga MX",    "category": "soccer",     "country": "MX"},
     "europa":     {"label": "Europa League", "category": "soccer",  "country": "EU"},
+    "eredivisie":  {"label": "Eredivisie",  "category": "soccer",  "country": "NL"},
+    "primeiraliga":{"label": "Primeira Liga","category": "soccer",  "country": "PT"},
+    "championship":{"label": "Championship","category": "soccer",  "country": "GB"},
+    "bundesliga2": {"label": "Bundesliga 2","category": "soccer",  "country": "DE"},
+    "serieb":      {"label": "Serie B",     "category": "soccer",  "country": "IT"},
+    "ligue2":      {"label": "Ligue 2",     "category": "soccer",  "country": "FR"},
+    "worldcup":    {"label": "World Cup",   "category": "soccer",  "country": "INT"},
+    "euros":       {"label": "Euros",       "category": "soccer",  "country": "EU"},
     "f1":         {"label": "F1",         "category": "motorsport", "country": "INT"},
     "indycar":    {"label": "IndyCar",    "category": "motorsport", "country": "US"},
     "atp":        {"label": "ATP",        "category": "tennis",     "country": "INT"},
@@ -130,6 +145,9 @@ SPORT_SEASON_START = {
     # European football: Aug-May
     "epl": 8, "laliga": 8, "bundesliga": 8, "seriea": 8, "ligue1": 8, "ucl": 9,
     "ligamx": 7, "europa": 9,
+    "eredivisie": 8, "primeiraliga": 8, "championship": 8,
+    "bundesliga2": 8, "serieb": 8, "ligue2": 8,
+    "worldcup": 6, "euros": 6,
 }
 
 
@@ -189,6 +207,8 @@ def get_current_season(sport: str) -> str:
         "nfl": 9,
         "ncaab": 8, "ncaaf": 8, "ncaaw": 8,
         "epl": 8, "laliga": 8, "bundesliga": 8, "seriea": 8, "ligue1": 8, "ucl": 8,
+        "eredivisie": 8, "primeiraliga": 8, "championship": 8,
+        "bundesliga2": 8, "serieb": 8, "ligue2": 8,
     }
 
     if sport in CROSS_YEAR_THRESHOLDS:
@@ -262,6 +282,9 @@ SPORT_SEASON_END = {
     # European football: cross-year (Aug → May/Jun)
     "epl": 5, "laliga": 5, "bundesliga": 5, "seriea": 5, "ligue1": 5, "ucl": 6,
     "ligamx": 6, "europa": 5,
+    "eredivisie": 5, "primeiraliga": 5, "championship": 5,
+    "bundesliga2": 5, "serieb": 5, "ligue2": 5,
+    "worldcup": 7, "euros": 7,
 }
 
 

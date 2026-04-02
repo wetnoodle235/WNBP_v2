@@ -15,7 +15,7 @@ import type {
   RateLimitConfig,
 } from "../../core/types.js";
 import { fetchJSON } from "../../core/http.js";
-import { writeJSON, rawPath } from "../../core/io.js";
+import { oddsProviderRawPath, writeJSON, rawPath } from "../../core/io.js";
 import { logger } from "../../core/logger.js";
 
 // ── Constants ───────────────────────────────────────────────
@@ -293,7 +293,7 @@ async function importOdds(
     const records = Array.from(seen.values());
 
     const date = todayISO();
-    const outPath = rawPath(dataDir, NAME, sport, season, "odds", date, `${snapshotType}.json`);
+    const outPath = oddsProviderRawPath(dataDir, NAME, sport, season, "odds", date, `${snapshotType}.json`);
     writeJSON(outPath, {
       sport,
       leagueID,

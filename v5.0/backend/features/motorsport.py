@@ -196,15 +196,16 @@ class MotorsportExtractor(BaseFeatureExtractor):
         window: int = 5,
     ) -> dict[str, float]:
         """Compute historical race performance from player_stats."""
+        _empty = {"avg_finish": 0.0, "finish_std": 0.0, "podium_rate": 0.0, "dnf_rate": 0.0,
+                  "avg_points": 0.0, "win_rate": 0.0, "form_trend": 0.0,
+                  "avg_laps_led": 0.0, "avg_running_pos": 0.0}
         if player_stats.empty or not driver_id:
-            return {"avg_finish": 0.0, "finish_std": 0.0, "podium_rate": 0.0, "dnf_rate": 0.0,
-                    "avg_points": 0.0, "win_rate": 0.0}
+            return _empty
 
         pid_col = next((c for c in ("player_id", "driver_id") if c in player_stats.columns), None)
         date_col = "date" if "date" in player_stats.columns else None
         if pid_col is None:
-            return {"avg_finish": 0.0, "finish_std": 0.0, "podium_rate": 0.0, "dnf_rate": 0.0,
-                    "avg_points": 0.0, "win_rate": 0.0}
+            return _empty
 
         mask = player_stats[pid_col].astype(str) == driver_id
         driver_rows = player_stats[mask]
@@ -213,12 +214,13 @@ class MotorsportExtractor(BaseFeatureExtractor):
         driver_rows = driver_rows.sort_values(date_col or pid_col, ascending=False).head(window)
 
         if driver_rows.empty:
-            return {"avg_finish": 0.0, "finish_std": 0.0, "podium_rate": 0.0, "dnf_rate": 0.0,
-                    "avg_points": 0.0, "win_rate": 0.0}
+            return _empty
 
         finishes = pd.to_numeric(driver_rows.get("finish_position", pd.Series(dtype=float)), errors="coerce").dropna().tolist()
         points_list = pd.to_numeric(driver_rows.get("points", pd.Series(dtype=float)), errors="coerce").fillna(0).tolist()
         dnf_list = pd.to_numeric(driver_rows.get("dnf", pd.Series(dtype=float)), errors="coerce").fillna(0).tolist()
+        laps_led_list = pd.to_numeric(driver_rows.get("laps_led", pd.Series(dtype=float)), errors="coerce").fillna(0).tolist()
+        avg_running_list = pd.to_numeric(driver_rows.get("avg_running_position", pd.Series(dtype=float)), errors="coerce").dropna().tolist()
         n = len(driver_rows)
 
         return {
@@ -230,6 +232,8 @@ class MotorsportExtractor(BaseFeatureExtractor):
             "win_rate": float(sum(1 for f in finishes if f == 1) / n),
             # positive = improving (lower finish number = better)
             "form_trend": float(np.polyfit(range(len(finishes)), finishes, 1)[0]) * -1.0 if len(finishes) >= 3 else 0.0,
+            "avg_laps_led": float(np.mean(laps_led_list)) if laps_led_list else 0.0,
+            "avg_running_pos": float(np.mean(avg_running_list)) if avg_running_list else 0.0,
         }
 
     def _driver_track_history(
@@ -496,6 +500,8 @@ class MotorsportExtractor(BaseFeatureExtractor):
                 driver_dict["home_pit_stops"] = float(driver.get("pit_stops") or 0)
                 driver_dict["home_avg_speed_kph"] = float(driver.get("avg_speed_kph") or 0)
                 driver_dict["home_laps_completed"] = float(driver.get("laps") or 0)
+                driver_dict["home_laps_led"] = float(driver.get("laps_led") or 0)
+                driver_dict["home_avg_running_position"] = float(driver.get("avg_running_position") or 0)
                 # Race-level context from games_df
                 driver_dict["round_number"] = float(race_dict.get("round_number") or 0)
                 driver_dict["total_laps"] = float(race_dict.get("total_laps") or 0)
@@ -528,6 +534,7 @@ class MotorsportExtractor(BaseFeatureExtractor):
             "grid_position", "q_time_ms", "gap_to_pole_ms", "q_position",
             # Historical race pace
             "avg_finish", "finish_std", "podium_rate", "dnf_rate", "avg_points", "win_rate", "form_trend",
+            "avg_laps_led", "avg_running_pos",
             # Constructor standings (before race)
             "constructor_points", "constructor_position",
             # Track history

@@ -85,6 +85,8 @@ class GamePredictor:
         self.extractor = get_extractor(self.sport, self.data_dir)
         self._bundle: dict[str, Any] | None = None
         self._mode: str | None = None
+        self._extra: dict[str, Any] | None = None
+        self._extra_future: "concurrent.futures.Future | None" = None
         self._load_models(self.models_dir)
 
     # ── Model loading ────────────────────────────────────
@@ -116,16 +118,29 @@ class GamePredictor:
                 models_dir,
             )
 
-        # Load extra-market models (halftime, OT, period, first-score) if present
+        # Load extra-market models in a background thread (can be large: 0.5-1.5GB)
         extra_path = models_dir / "extra_models.pkl"
-        self._extra: dict[str, Any] | None = None
         if extra_path.exists():
+            from concurrent.futures import ThreadPoolExecutor
+            self._extra_pool = ThreadPoolExecutor(max_workers=1)
+            self._extra_future = self._extra_pool.submit(self._unpickle, extra_path)
+        else:
+            self._extra_future = None
+
+    def _ensure_extra_loaded(self) -> None:
+        """Block until extra models finish loading (called before extra inference)."""
+        if self._extra_future is not None:
             try:
-                self._extra = self._unpickle(extra_path)
+                self._extra = self._extra_future.result()
                 n = len(self._extra.get("models", {}))
-                logger.info("Loaded %d extra-market models from %s", n, extra_path)
+                logger.info("Loaded %d extra-market models", n)
             except Exception:
                 logger.warning("Could not load extra_models.pkl", exc_info=True)
+                self._extra = None
+            finally:
+                self._extra_future = None
+                if hasattr(self, "_extra_pool"):
+                    self._extra_pool.shutdown(wait=False)
 
     @staticmethod
     def _unpickle(path: Path) -> dict[str, Any]:
@@ -267,6 +282,7 @@ class GamePredictor:
         extra_models: dict[str, Any] = {}
         extra_cls_probs: dict[str, "np.ndarray"] = {}
         extra_reg_vals: dict[str, "np.ndarray"] = {}
+        self._ensure_extra_loaded()
         if self._extra:
             extra_models = self._extra.get("models", {})
             extra_feature_names = self._extra.get("feature_names", [])
@@ -364,10 +380,29 @@ class GamePredictor:
                     }
 
             ot_p = _cls("overtime")
+            ot_p2 = _cls("overtime_prob")
             if ot_p is not None:
                 result.ot_prob = round(ot_p, 4)
+            elif ot_p2 is not None:
+                result.ot_prob = round(ot_p2, 4)
             elif draw_p is not None:
                 result.ot_prob = result.draw_prob
+
+            # ── Q1 Winner + Q1 Total (Basketball) ─────────────
+            q1_win_p = _cls("q1_winner")
+            if q1_win_p is not None:
+                result.q1_home_win_prob = round(q1_win_p, 4)
+            for qk, ql_attr, qv_attr in [
+                ("q1_total_over_low", "q1_total_over_low_prob", "q1_total_over_low_line"),
+                ("q1_total_over_mid", "q1_total_over_mid_prob", "q1_total_over_mid_line"),
+                ("q1_total_over_high", "q1_total_over_high_prob", "q1_total_over_high_line"),
+            ]:
+                qp = _cls(qk)
+                if qp is not None:
+                    setattr(result, ql_attr, round(qp, 4))
+                    qline = extra_models.get(f"{qk}_line")
+                    if qline is not None:
+                        setattr(result, qv_attr, float(qline))
 
             ht_home = _reg("halftime_home_score")
             ht_away = _reg("halftime_away_score")
@@ -429,6 +464,21 @@ class GamePredictor:
             btts_p = _cls("btts")
             if btts_p is not None:
                 result.btts_prob = round(btts_p, 4)
+            btts_ov = _cls("btts_over2_5")
+            if btts_ov is not None:
+                result.btts_over2_5_prob = round(btts_ov, 4)
+            h15 = _cls("home_over1_5")
+            if h15 is not None:
+                result.home_over1_5_prob = round(h15, 4)
+            a15 = _cls("away_over1_5")
+            if a15 is not None:
+                result.away_over1_5_prob = round(a15, 4)
+            hw2p = _cls("home_win_score2plus")
+            if hw2p is not None:
+                result.home_win_score2plus_prob = round(hw2p, 4)
+            aw2p = _cls("away_win_score2plus")
+            if aw2p is not None:
+                result.away_win_score2plus_prob = round(aw2p, 4)
 
             cs_h = _cls("clean_sheet_home")
             if cs_h is not None:
@@ -487,10 +537,14 @@ class GamePredictor:
             dec_p = _cls("ufc_decision")
             ko_p = _cls("ufc_ko_tko")
             sub_p = _cls("ufc_submission")
-            if any(v is not None for v in (dec_p, ko_p, sub_p)):
+            ef_p  = _cls("ufc_early_finish")
+            r1_p  = _cls("ufc_round1_finish")
+            if any(v is not None for v in (dec_p, ko_p, sub_p, ef_p, r1_p)):
                 result.decision_prob = round(dec_p, 4) if dec_p is not None else None
                 result.ko_tko_prob = round(ko_p, 4) if ko_p is not None else None
                 result.submission_prob = round(sub_p, 4) if sub_p is not None else None
+                result.early_finish_prob = round(ef_p, 4) if ef_p is not None else None
+                result.round1_finish_prob = round(r1_p, 4) if r1_p is not None else None
                 mp: dict[str, float] = {}
                 if dec_p is not None:
                     mp["decision"] = round(dec_p, 4)
@@ -498,6 +552,10 @@ class GamePredictor:
                     mp["ko_tko"] = round(ko_p, 4)
                 if sub_p is not None:
                     mp["submission"] = round(sub_p, 4)
+                if ef_p is not None:
+                    mp["early_finish"] = round(ef_p, 4)
+                if r1_p is not None:
+                    mp["round1_finish"] = round(r1_p, 4)
                 if mp:
                     result.method_probs = mp
 
@@ -554,6 +612,377 @@ class GamePredictor:
             sh_t = _reg("second_half_total")
             if sh_t is not None:
                 result.second_half_total = round(sh_t, 2)
+
+            # ── F5 Innings (MLB) ──────────────────────────────
+            for fk, attr in [
+                ("f5_home_win", "f5_home_win_prob"), ("f5_away_win", "f5_away_win_prob"),
+                ("f5_tie", "f5_tie_prob"), ("f5_over4_5", "f5_over4_5_prob"),
+                ("f5_under4_5", "f5_under4_5_prob"),
+            ]:
+                fp = _cls(fk)
+                if fp is not None:
+                    setattr(result, attr, round(fp, 4))
+
+            # ── Correct Score Bands (Soccer) ─────────────────
+            for sk, attr in [
+                ("score_nil_nil", "score_nil_nil_prob"), ("score_1_0", "score_1_0_prob"),
+                ("score_0_1", "score_0_1_prob"), ("score_1_1", "score_1_1_prob"),
+                ("score_2plus_0", "score_2plus_0_prob"), ("score_0_2plus", "score_0_2plus_prob"),
+                ("score_2_1", "score_2_1_prob"), ("score_1_2", "score_1_2_prob"),
+                ("score_3plus_total", "score_3plus_total_prob"), ("score_low_total", "score_low_total_prob"),
+            ]:
+                sp = _cls(sk)
+                if sp is not None:
+                    setattr(result, attr, round(sp, 4))
+
+            # ── First Half O/U + Win Both Halves (Soccer) ────
+            for hk, attr in [
+                ("h1_over0_5", "h1_over0_5_prob"), ("h1_over1_5", "h1_over1_5_prob"),
+                ("win_both_halves_home", "win_both_halves_home_prob"),
+                ("win_both_halves_away", "win_both_halves_away_prob"),
+            ]:
+                hp = _cls(hk)
+                if hp is not None:
+                    setattr(result, attr, round(hp, 4))
+
+            # ── Period BTTS (hockey/basketball) ──────────────
+            for pk, attr in [
+                ("btts_period1", "btts_period1_prob"),
+                ("btts_period2", "btts_period2_prob"),
+                ("btts_period3", "btts_period3_prob"),
+            ]:
+                pp = _cls(pk)
+                if pp is not None:
+                    setattr(result, attr, round(pp, 4))
+
+            # ── Corners Markets (Soccer) ──────────────────────
+            for ck, attr in [
+                ("corners_over9_5", "corners_over9_5_prob"),
+                ("corners_over10_5", "corners_over10_5_prob"),
+                ("corners_over11_5", "corners_over11_5_prob"),
+            ]:
+                cp = _cls(ck)
+                if cp is not None:
+                    setattr(result, attr, round(cp, 4))
+
+            # ── Cards Markets (Soccer) ────────────────────────
+            for kk, attr in [
+                ("cards_over3_5", "cards_over3_5_prob"),
+                ("cards_over4_5", "cards_over4_5_prob"),
+                ("cards_over5_5", "cards_over5_5_prob"),
+            ]:
+                kp = _cls(kk)
+                if kp is not None:
+                    setattr(result, attr, round(kp, 4))
+
+            # ── Soccer H2 Goals Markets ───────────────────────
+            for mk, attr in [
+                ("soccer_h2_over0_5", "soccer_h2_over0_5_prob"),
+                ("soccer_h2_over1_5", "soccer_h2_over1_5_prob"),
+                ("soccer_h2_over2_5", "soccer_h2_over2_5_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+
+            # ── Three-Pointer Markets (NBA/WNBA/NCAAB) ───────
+            for mk, attr in [
+                ("threes_over_low", "threes_over_low_prob"),
+                ("threes_over_mid", "threes_over_mid_prob"),
+                ("threes_over_high", "threes_over_high_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            # Dynamic lines stored alongside models
+            for lk, attr in [
+                ("threes_over_low_line", "threes_low_line"),
+                ("threes_over_mid_line", "threes_mid_line"),
+                ("threes_over_high_line", "threes_high_line"),
+            ]:
+                if lk in extra_models:
+                    setattr(result, attr, extra_models[lk])
+
+            # ── NHL Shots Markets (legacy fixed + dynamic) ────
+            for mk, attr in [
+                ("shots_over55_5", "shots_over55_5_prob"),
+                ("shots_over60_5", "shots_over60_5_prob"),
+                ("shots_over65_5", "shots_over65_5_prob"),
+                ("shots_over_low", "shots_over_low_prob"),
+                ("shots_over_mid", "shots_over_mid_prob"),
+                ("shots_over_high", "shots_over_high_prob"),
+                ("home_shots_advantage", "home_shots_advantage_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            for mk, attr in [
+                ("shots_over_low_line", "shots_over_low_line"),
+                ("shots_over_mid_line", "shots_over_mid_line"),
+                ("shots_over_high_line", "shots_over_high_line"),
+            ]:
+                v = extra_models.get(mk)
+                if v is not None:
+                    setattr(result, attr, float(v))
+
+            # ── MLB Hits Markets ──────────────────────────────
+            for mk, attr in [
+                ("hits_over14_5", "hits_over14_5_prob"),
+                ("hits_over16_5", "hits_over16_5_prob"),
+                ("hits_over18_5", "hits_over18_5_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+
+            # ── NBA/WNBA Rebounds Markets ─────────────────────
+            for mk, attr in [
+                ("rebounds_over_low", "rebounds_over_low_prob"),
+                ("rebounds_over_mid", "rebounds_over_mid_prob"),
+                ("rebounds_over_high", "rebounds_over_high_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            for mk, attr in [
+                ("rebounds_over_low_line", "rebounds_low_line"),
+                ("rebounds_over_mid_line", "rebounds_mid_line"),
+                ("rebounds_over_high_line", "rebounds_high_line"),
+            ]:
+                v = extra_models.get(mk)
+                if v is not None:
+                    setattr(result, attr, float(v))
+
+            # ── NBA/WNBA Turnovers Markets ────────────────────
+            for mk, attr in [
+                ("turnovers_over_low", "turnovers_over_low_prob"),
+                ("turnovers_over_mid", "turnovers_over_mid_prob"),
+                ("turnovers_over_high", "turnovers_over_high_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            for mk, attr in [
+                ("turnovers_over_low_line", "turnovers_low_line"),
+                ("turnovers_over_mid_line", "turnovers_mid_line"),
+                ("turnovers_over_high_line", "turnovers_high_line"),
+            ]:
+                v = extra_models.get(mk)
+                if v is not None:
+                    setattr(result, attr, float(v))
+
+            # ── NBA/WNBA Assists Markets ──────────────────────
+            for mk, attr in [
+                ("assists_over_low", "assists_over_low_prob"),
+                ("assists_over_mid", "assists_over_mid_prob"),
+                ("assists_over_high", "assists_over_high_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            for mk, attr in [
+                ("assists_over_low_line", "assists_low_line"),
+                ("assists_over_mid_line", "assists_mid_line"),
+                ("assists_over_high_line", "assists_high_line"),
+            ]:
+                v = extra_models.get(mk)
+                if v is not None:
+                    setattr(result, attr, float(v))
+
+            # ── NHL Period Goals Markets ──────────────────────
+            for period in ("p1", "p2", "p3"):
+                for line_str in ("0.5", "1.5", "2.5"):
+                    mk = f"nhl_{period}_goals_over_{line_str}"
+                    attr = f"nhl_{period}_goals_over_{line_str.replace('.', '_')}_prob"
+                    p = _cls(mk)
+                    if p is not None:
+                        setattr(result, attr, round(p, 4))
+
+            # ── Soccer Total Shots Markets ────────────────────
+            for mk, attr in [
+                ("shots_total_over_low", "shots_total_over_low_prob"),
+                ("shots_total_over_mid", "shots_total_over_mid_prob"),
+                ("shots_total_over_high", "shots_total_over_high_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            for mk, attr in [
+                ("shots_total_over_low_line", "shots_total_low_line"),
+                ("shots_total_over_mid_line", "shots_total_mid_line"),
+                ("shots_total_over_high_line", "shots_total_high_line"),
+            ]:
+                v = extra_models.get(mk)
+                if v is not None:
+                    setattr(result, attr, float(v))
+
+            # ── UFC Total Rounds Markets ──────────────────────
+            for line_str in ("1.5", "2.5", "3.5"):
+                mk = f"ufc_rounds_over_{line_str}"
+                attr = f"ufc_rounds_over_{line_str.replace('.', '_')}_prob"
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+
+            # ── NFL First Quarter Total Markets ───────────────
+            for mk, attr in [
+                ("q1_total_over_low", "q1_total_over_low_prob"),
+                ("q1_total_over_mid", "q1_total_over_mid_prob"),
+                ("q1_total_over_high", "q1_total_over_high_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            for mk, attr in [
+                ("q1_total_over_low_line", "q1_total_low_line"),
+                ("q1_total_over_mid_line", "q1_total_mid_line"),
+                ("q1_total_over_high_line", "q1_total_high_line"),
+            ]:
+                v = extra_models.get(mk)
+                if v is not None:
+                    setattr(result, attr, float(v))
+
+            # ── Q3/Q4 Period Total Markets ────────────────────
+            for period in ("q3", "q4"):
+                for tier in ("low", "mid", "high"):
+                    mk = f"{period}_over_{tier}"
+                    p = _cls(mk)
+                    if p is not None:
+                        setattr(result, f"{period}_over_{tier}_prob", round(p, 4))
+                    line_val = extra_models.get(f"{mk}_line")
+                    if line_val is not None:
+                        setattr(result, f"{period}_over_{tier}_line", float(line_val))
+
+            # ── Q1 Winner (Basketball) ────────────────────────
+            q1w = _cls("q1_winner")
+            if q1w is not None:
+                result.q1_home_win_prob = round(q1w, 4)
+
+            # ── NHL Period Goals Markets ──────────────────────
+            for period in ("p1", "p2", "p3"):
+                for tier in ("low", "mid", "high"):
+                    mk = f"nhl_{period}_goals_over_{tier}"
+                    p = _cls(mk)
+                    if p is not None:
+                        setattr(result, f"nhl_{period}_goals_over_{tier}_prob", round(p, 4))
+
+            # ── Soccer Total Shots Markets ────────────────────
+            for mk, attr in [
+                ("shots_total_over_low", "shots_total_over_low_prob"),
+                ("shots_total_over_mid", "shots_total_over_mid_prob"),
+                ("shots_total_over_high", "shots_total_over_high_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            for mk, attr in [
+                ("shots_total_over_low_line", "shots_total_low_line"),
+                ("shots_total_over_mid_line", "shots_total_mid_line"),
+                ("shots_total_over_high_line", "shots_total_high_line"),
+            ]:
+                v = extra_models.get(mk)
+                if v is not None:
+                    setattr(result, attr, float(v))
+
+
+            for inn in range(1, 10):
+                p = _cls(f"nrfi_i{inn}")
+                if p is not None:
+                    setattr(result, f"nrfi_i{inn}_prob", round(p, 4))
+            for mk, attr in [
+                ("f7_home_win", "f7_home_win_prob"),
+                ("f7_over", "f7_over_prob"),
+                ("late_inning_over", "late_inning_over_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            for mk, attr in [
+                ("f7_over_line", "f7_over_line"),
+                ("late_inning_line", "late_inning_line"),
+            ]:
+                v = extra_models.get(mk)
+                if v is not None:
+                    setattr(result, attr, float(v))
+
+            # ── Close Game / Blowout Markets ──────────────────
+            for mk, attr in [
+                ("close_game", "close_game_prob"),
+                ("blowout_win", "blowout_win_prob"),
+                ("one_score_game", "one_score_game_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            cg_thresh = extra_models.get("close_game_thresh")
+            if cg_thresh is not None:
+                result.close_game_thresh = float(cg_thresh)
+
+            # ── NFL Second-Half Total Markets ─────────────────
+            for mk, attr in [
+                ("nfl_2h_over_low", "nfl_2h_over_low_prob"),
+                ("nfl_2h_over_mid", "nfl_2h_over_mid_prob"),
+                ("nfl_2h_over_high", "nfl_2h_over_high_prob"),
+                ("nfl_scoring_surge", "nfl_scoring_surge_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            for mk, attr in [
+                ("nfl_2h_over_low_line", "nfl_2h_over_low_line"),
+                ("nfl_2h_over_mid_line", "nfl_2h_over_mid_line"),
+                ("nfl_2h_over_high_line", "nfl_2h_over_high_line"),
+            ]:
+                v = extra_models.get(mk)
+                if v is not None:
+                    setattr(result, attr, float(v))
+
+            # ── High / Low Scoring Markets ────────────────────
+            for mk, attr in [
+                ("high_scoring", "high_scoring_prob"),
+                ("low_scoring", "low_scoring_prob"),
+                ("both_score_high", "both_score_high_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+            hs_thresh = extra_models.get("high_scoring_thresh")
+            if hs_thresh is not None:
+                result.high_scoring_line = float(hs_thresh)
+            ls_thresh = extra_models.get("low_scoring_thresh")
+            if ls_thresh is not None:
+                result.low_scoring_line = float(ls_thresh)
+
+            # ── BTTS + Win Combo Markets ──────────────────────
+            for mk, attr in [
+                ("btts_home_win", "btts_home_win_prob"),
+                ("btts_away_win", "btts_away_win_prob"),
+                ("btts_draw", "btts_draw_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+
+            # ── eSports Series Markets ────────────────────────
+            for mk, attr in [
+                ("home_2_0_win", "home_2_0_win_prob"),
+                ("away_2_0_win", "away_2_0_win_prob"),
+                ("esports_decider_map", "esports_decider_map_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
+
+            # ── Motorsport Extra Markets ──────────────────────
+            for mk, attr in [
+                ("motor_podium", "motor_podium_prob"),
+                ("motor_points", "motor_points_prob"),
+                ("motor_dnf", "motor_dnf_prob"),
+                ("motor_fastest_lap", "motor_fastest_lap_prob"),
+            ]:
+                p = _cls(mk)
+                if p is not None:
+                    setattr(result, attr, round(p, 4))
 
             results.append(result)
 
@@ -674,6 +1103,7 @@ class GamePredictor:
 
     def _predict_extra_markets(self, X: "pd.DataFrame", result: "PredictionResult") -> None:
         """Populate extra-market fields on *result* using extra_models.pkl."""
+        self._ensure_extra_loaded()
         if not self._extra:
             return
 
@@ -734,11 +1164,19 @@ class GamePredictor:
                 }
 
         ot_p = _cls_prob("overtime")
+        ot_p2 = _cls_prob("overtime_prob")
         if ot_p is not None:
             result.ot_prob = round(ot_p, 4)
+        elif ot_p2 is not None:
+            result.ot_prob = round(ot_p2, 4)
         elif draw_p is not None:
             # For sports without explicit OT data, OT ≈ draw prob
             result.ot_prob = result.draw_prob
+
+        # ── Q1 Winner + Q1 Total (Basketball) ─────────────────
+        q1_win_p2 = _cls_prob("q1_winner")
+        if q1_win_p2 is not None:
+            result.q1_home_win_prob = round(q1_win_p2, 4)
 
         # ── Halftime ─────────────────────────────────────
         ht_home = _reg_val("halftime_home_score")
@@ -808,6 +1246,18 @@ class GamePredictor:
         if btts_p is not None:
             result.btts_prob = round(btts_p, 4)
 
+        btts_ov = _cls_prob("btts_over2_5")
+        if btts_ov is not None:
+            result.btts_over2_5_prob = round(btts_ov, 4)
+        for fk2, attr2 in [
+            ("home_over1_5", "home_over1_5_prob"), ("away_over1_5", "away_over1_5_prob"),
+            ("home_win_score2plus", "home_win_score2plus_prob"),
+            ("away_win_score2plus", "away_win_score2plus_prob"),
+        ]:
+            fv = _cls_prob(fk2)
+            if fv is not None:
+                setattr(result, attr2, round(fv, 4))
+
         cs_h_p = _cls_prob("clean_sheet_home")
         if cs_h_p is not None:
             result.home_clean_sheet_prob = round(cs_h_p, 4)
@@ -820,15 +1270,21 @@ class GamePredictor:
         dec_p = _cls_prob("ufc_decision")
         ko_p  = _cls_prob("ufc_ko_tko")
         sub_p = _cls_prob("ufc_submission")
-        if dec_p is not None or ko_p is not None or sub_p is not None:
+        ef_p  = _cls_prob("ufc_early_finish")
+        r1_p  = _cls_prob("ufc_round1_finish")
+        if dec_p is not None or ko_p is not None or sub_p is not None or ef_p is not None or r1_p is not None:
             result.decision_prob = round(dec_p, 4) if dec_p is not None else None
             result.ko_tko_prob   = round(ko_p,  4) if ko_p  is not None else None
             result.submission_prob = round(sub_p, 4) if sub_p is not None else None
+            result.early_finish_prob = round(ef_p, 4) if ef_p is not None else None
+            result.round1_finish_prob = round(r1_p, 4) if r1_p is not None else None
             # Rebuild method_probs dict for convenience
             mp: dict[str, float] = {}
             if dec_p is not None: mp["decision"] = round(dec_p, 4)
             if ko_p  is not None: mp["ko_tko"]   = round(ko_p,  4)
             if sub_p is not None: mp["submission"] = round(sub_p, 4)
+            if ef_p  is not None: mp["early_finish"] = round(ef_p, 4)
+            if r1_p  is not None: mp["round1_finish"] = round(r1_p, 4)
             if mp:
                 result.method_probs = mp
 
@@ -969,11 +1425,347 @@ class GamePredictor:
         if mt_o2 is not None:
             result.esports_map_total_over2_prob = round(mt_o2, 4)
 
+        # ── F5 Innings (MLB) ──────────────────────────────
+        for fk, attr in [
+            ("f5_home_win", "f5_home_win_prob"), ("f5_away_win", "f5_away_win_prob"),
+            ("f5_tie", "f5_tie_prob"), ("f5_over4_5", "f5_over4_5_prob"),
+            ("f5_under4_5", "f5_under4_5_prob"),
+        ]:
+            fp = _cls_prob(fk)
+            if fp is not None:
+                setattr(result, attr, round(fp, 4))
+
+        # ── Correct Score Bands (Soccer) ─────────────────
+        for sk, attr in [
+            ("score_nil_nil", "score_nil_nil_prob"), ("score_1_0", "score_1_0_prob"),
+            ("score_0_1", "score_0_1_prob"), ("score_1_1", "score_1_1_prob"),
+            ("score_2plus_0", "score_2plus_0_prob"), ("score_0_2plus", "score_0_2plus_prob"),
+            ("score_2_1", "score_2_1_prob"), ("score_1_2", "score_1_2_prob"),
+            ("score_3plus_total", "score_3plus_total_prob"), ("score_low_total", "score_low_total_prob"),
+        ]:
+            sp = _cls_prob(sk)
+            if sp is not None:
+                setattr(result, attr, round(sp, 4))
+
+        # ── First Half O/U + Win Both Halves (Soccer) ────
+        for hk, attr in [
+            ("h1_over0_5", "h1_over0_5_prob"), ("h1_over1_5", "h1_over1_5_prob"),
+            ("win_both_halves_home", "win_both_halves_home_prob"),
+            ("win_both_halves_away", "win_both_halves_away_prob"),
+        ]:
+            hp = _cls_prob(hk)
+            if hp is not None:
+                setattr(result, attr, round(hp, 4))
+
+        # ── Period BTTS (hockey/basketball) ──────────────
+        for pk, attr in [
+            ("btts_period1", "btts_period1_prob"),
+            ("btts_period2", "btts_period2_prob"),
+            ("btts_period3", "btts_period3_prob"),
+        ]:
+            pp = _cls_prob(pk)
+            if pp is not None:
+                setattr(result, attr, round(pp, 4))
+
+        # ── Corners Markets (Soccer) ──────────────────────
+        for ck, attr in [
+            ("corners_over9_5", "corners_over9_5_prob"),
+            ("corners_over10_5", "corners_over10_5_prob"),
+            ("corners_over11_5", "corners_over11_5_prob"),
+        ]:
+            cp = _cls_prob(ck)
+            if cp is not None:
+                setattr(result, attr, round(cp, 4))
+
+        # ── Cards Markets (Soccer) ────────────────────────
+        for kk, attr in [
+            ("cards_over3_5", "cards_over3_5_prob"),
+            ("cards_over4_5", "cards_over4_5_prob"),
+            ("cards_over5_5", "cards_over5_5_prob"),
+        ]:
+            kp = _cls_prob(kk)
+            if kp is not None:
+                setattr(result, attr, round(kp, 4))
+
+        # ── Soccer H2 Goals Markets ───────────────────────
+        for mk, attr in [
+            ("soccer_h2_over0_5", "soccer_h2_over0_5_prob"),
+            ("soccer_h2_over1_5", "soccer_h2_over1_5_prob"),
+            ("soccer_h2_over2_5", "soccer_h2_over2_5_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+
+        # ── Three-Pointer Markets (NBA/WNBA/NCAAB) ───────
+        for mk, attr in [
+            ("threes_over_low", "threes_over_low_prob"),
+            ("threes_over_mid", "threes_over_mid_prob"),
+            ("threes_over_high", "threes_over_high_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+        for lk, attr in [
+            ("threes_over_low_line", "threes_low_line"),
+            ("threes_over_mid_line", "threes_mid_line"),
+            ("threes_over_high_line", "threes_high_line"),
+        ]:
+            if lk in extra_models:
+                setattr(result, attr, extra_models[lk])
+
+        # ── NHL Shots Markets (legacy fixed + dynamic) ────
+        for mk, attr in [
+            ("shots_over55_5", "shots_over55_5_prob"),
+            ("shots_over60_5", "shots_over60_5_prob"),
+            ("shots_over65_5", "shots_over65_5_prob"),
+            ("shots_over_low", "shots_over_low_prob"),
+            ("shots_over_mid", "shots_over_mid_prob"),
+            ("shots_over_high", "shots_over_high_prob"),
+            ("home_shots_advantage", "home_shots_advantage_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+        for mk, attr in [
+            ("shots_over_low_line", "shots_over_low_line"),
+            ("shots_over_mid_line", "shots_over_mid_line"),
+            ("shots_over_high_line", "shots_over_high_line"),
+        ]:
+            v = extra_models.get(mk)
+            if v is not None:
+                setattr(result, attr, float(v))
+
+        # ── MLB Hits Markets ──────────────────────────────
+        for mk, attr in [
+            ("hits_over14_5", "hits_over14_5_prob"),
+            ("hits_over16_5", "hits_over16_5_prob"),
+            ("hits_over18_5", "hits_over18_5_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+
+        # ── NBA/WNBA Rebounds Markets ─────────────────────
+        for mk, attr in [
+            ("rebounds_over_low", "rebounds_over_low_prob"),
+            ("rebounds_over_mid", "rebounds_over_mid_prob"),
+            ("rebounds_over_high", "rebounds_over_high_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+        for lk, attr in [
+            ("rebounds_over_low_line", "rebounds_low_line"),
+            ("rebounds_over_mid_line", "rebounds_mid_line"),
+            ("rebounds_over_high_line", "rebounds_high_line"),
+        ]:
+            if lk in extra_models:
+                setattr(result, attr, extra_models[lk])
+
+        # ── NBA/WNBA Turnovers Markets ────────────────────
+        for mk, attr in [
+            ("turnovers_over_low", "turnovers_over_low_prob"),
+            ("turnovers_over_mid", "turnovers_over_mid_prob"),
+            ("turnovers_over_high", "turnovers_over_high_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+        for lk, attr in [
+            ("turnovers_over_low_line", "turnovers_low_line"),
+            ("turnovers_over_mid_line", "turnovers_mid_line"),
+            ("turnovers_over_high_line", "turnovers_high_line"),
+        ]:
+            if lk in extra_models:
+                setattr(result, attr, extra_models[lk])
+
+        # ── NBA/WNBA Assists Markets ──────────────────────
+        for mk, attr in [
+            ("assists_over_low", "assists_over_low_prob"),
+            ("assists_over_mid", "assists_over_mid_prob"),
+            ("assists_over_high", "assists_over_high_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+        for lk, attr in [
+            ("assists_over_low_line", "assists_low_line"),
+            ("assists_over_mid_line", "assists_mid_line"),
+            ("assists_over_high_line", "assists_high_line"),
+        ]:
+            if lk in extra_models:
+                setattr(result, attr, extra_models[lk])
+
+        # ── NHL Period Goals Markets ──────────────────────
+        for period in ("p1", "p2", "p3"):
+            for tier in ("low", "mid", "high"):
+                mk = f"nhl_{period}_goals_over_{tier}"
+                p = _cls_prob(mk)
+                if p is not None:
+                    setattr(result, f"nhl_{period}_goals_over_{tier}_prob", round(p, 4))
+
+        # ── Soccer Total Shots Markets ────────────────────
+        for mk, attr in [
+            ("shots_total_over_low", "shots_total_over_low_prob"),
+            ("shots_total_over_mid", "shots_total_over_mid_prob"),
+            ("shots_total_over_high", "shots_total_over_high_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+        for lk, attr in [
+            ("shots_total_over_low_line", "shots_total_low_line"),
+            ("shots_total_over_mid_line", "shots_total_mid_line"),
+            ("shots_total_over_high_line", "shots_total_high_line"),
+        ]:
+            if lk in extra_models:
+                setattr(result, attr, float(extra_models[lk]))
+
+        # ── UFC Total Rounds Markets ──────────────────────
+        for line_str in ("1.5", "2.5", "3.5"):
+            mk = f"ufc_rounds_over_{line_str}"
+            attr = f"ufc_rounds_over_{line_str.replace('.', '_')}_prob"
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+
+        # ── NFL First Quarter Total Markets ───────────────
+        for mk, attr in [
+            ("q1_total_over_low", "q1_total_over_low_prob"),
+            ("q1_total_over_mid", "q1_total_over_mid_prob"),
+            ("q1_total_over_high", "q1_total_over_high_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+        for lk, attr in [
+            ("q1_total_over_low_line", "q1_total_low_line"),
+            ("q1_total_over_mid_line", "q1_total_mid_line"),
+            ("q1_total_over_high_line", "q1_total_high_line"),
+        ]:
+            if lk in extra_models:
+                setattr(result, attr, float(extra_models[lk]))
+
+        # ── Q3/Q4 Period Total Markets ────────────────────
+        for period in ("q3", "q4"):
+            for tier in ("low", "mid", "high"):
+                mk = f"{period}_over_{tier}"
+                p = _cls_prob(mk)
+                if p is not None:
+                    setattr(result, f"{period}_over_{tier}_prob", round(p, 4))
+                line_val = extra_models.get(f"{mk}_line")
+                if line_val is not None:
+                    setattr(result, f"{period}_over_{tier}_line", float(line_val))
+
+        # ── Q1 Winner (Basketball) ────────────────────────
+        q1w_sp = _cls_prob("q1_winner")
+        if q1w_sp is not None:
+            result.q1_home_win_prob = round(q1w_sp, 4)
+        for inn in range(1, 10):
+            p = _cls_prob(f"nrfi_i{inn}")
+            if p is not None:
+                setattr(result, f"nrfi_i{inn}_prob", round(p, 4))
+        for mk, attr in [
+            ("f7_home_win", "f7_home_win_prob"),
+            ("f7_over", "f7_over_prob"),
+            ("late_inning_over", "late_inning_over_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+        for mk, attr in [
+            ("f7_over_line", "f7_over_line"),
+            ("late_inning_line", "late_inning_line"),
+        ]:
+            v = extra_models.get(mk)
+            if v is not None:
+                setattr(result, attr, float(v))
+
+        # ── Close Game / Blowout Markets ──────────────────
+        for mk, attr in [
+            ("close_game", "close_game_prob"),
+            ("blowout_win", "blowout_win_prob"),
+            ("one_score_game", "one_score_game_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+        cg_thresh = extra_models.get("close_game_thresh")
+        if cg_thresh is not None:
+            result.close_game_thresh = float(cg_thresh)
+
+        # ── NFL Second-Half Total Markets ─────────────────
+        for mk, attr in [
+            ("nfl_2h_over_low", "nfl_2h_over_low_prob"),
+            ("nfl_2h_over_mid", "nfl_2h_over_mid_prob"),
+            ("nfl_2h_over_high", "nfl_2h_over_high_prob"),
+            ("nfl_scoring_surge", "nfl_scoring_surge_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+        for mk, attr in [
+            ("nfl_2h_over_low_line", "nfl_2h_over_low_line"),
+            ("nfl_2h_over_mid_line", "nfl_2h_over_mid_line"),
+            ("nfl_2h_over_high_line", "nfl_2h_over_high_line"),
+        ]:
+            v = extra_models.get(mk)
+            if v is not None:
+                setattr(result, attr, float(v))
+
+        # ── High / Low Scoring Markets ────────────────────
+        for mk, attr in [
+            ("high_scoring", "high_scoring_prob"),
+            ("low_scoring", "low_scoring_prob"),
+            ("both_score_high", "both_score_high_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+        hs_thresh2 = extra_models.get("high_scoring_thresh")
+        if hs_thresh2 is not None:
+            result.high_scoring_line = float(hs_thresh2)
+        ls_thresh2 = extra_models.get("low_scoring_thresh")
+        if ls_thresh2 is not None:
+            result.low_scoring_line = float(ls_thresh2)
+
+        # ── BTTS + Win Combo Markets ──────────────────────
+        for mk, attr in [
+            ("btts_home_win", "btts_home_win_prob"),
+            ("btts_away_win", "btts_away_win_prob"),
+            ("btts_draw", "btts_draw_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+
+        # ── eSports Series Markets ────────────────────────
+        for mk, attr in [
+            ("home_2_0_win", "home_2_0_win_prob"),
+            ("away_2_0_win", "away_2_0_win_prob"),
+            ("esports_decider_map", "esports_decider_map_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+
+        # ── Motorsport Extra Markets ──────────────────────
+        for mk, attr in [
+            ("motor_podium", "motor_podium_prob"),
+            ("motor_points", "motor_points_prob"),
+            ("motor_dnf", "motor_dnf_prob"),
+            ("motor_fastest_lap", "motor_fastest_lap_prob"),
+        ]:
+            p = _cls_prob(mk)
+            if p is not None:
+                setattr(result, attr, round(p, 4))
+
     def predict_date(self, target_date: str) -> list[PredictionResult]:
         """Generate predictions for all games on *target_date*.
 
-        Loads the games file for the appropriate season, filters to
-        the target date, and runs ``predict_game`` for each.
+        Uses pre-computed features (batch) when available for speed,
+        falling back to per-game feature extraction otherwise.
         """
         target_dt = pd.Timestamp(target_date)
         season = self._date_to_season(target_dt)
@@ -1005,15 +1797,33 @@ class GamePredictor:
             logger.info("No games found for %s on %s", self.sport, target_date)
             return []
 
-        results: list[PredictionResult] = []
+        # Filter out TBD/placeholder games
+        valid_rows = []
+        for _, row in day_games.iterrows():
+            ht = str(row.get("home_team") or "")
+            at = str(row.get("away_team") or "")
+            if ht.upper() in ("TBD", "TBA", "") or at.upper() in ("TBD", "TBA", ""):
+                continue
+            valid_rows.append(row)
+        if not valid_rows:
+            return []
+        day_games = pd.DataFrame(valid_rows)
+
+        # ── Fast path: use pre-computed features (batch) ──
+        results = self._predict_date_batch(day_games)
+        if results is not None:
+            logger.info(
+                "Generated %d predictions for %s on %s (batch)",
+                len(results), self.sport, target_date,
+            )
+            return results
+
+        # ── Slow fallback: per-game feature extraction ──
+        results = []
         for _, row in day_games.iterrows():
             game = row.to_dict()
-            # Skip TBD / placeholder bracket games
-            ht = str(game.get("home_team") or "")
-            at = str(game.get("away_team") or "")
-            if ht.upper() in ("TBD", "TBA", "") or at.upper() in ("TBD", "TBA", ""):
-                logger.debug("Skipping TBD game %s", game.get("id", game.get("game_id", "?")))
-                continue
+            if "game_id" not in game and "id" in game:
+                game["game_id"] = game["id"]
             try:
                 pred = self.predict_game(game)
                 results.append(pred)
@@ -1031,6 +1841,77 @@ class GamePredictor:
             target_date,
         )
         return results
+
+    def _predict_date_batch(
+        self, day_games: "pd.DataFrame"
+    ) -> "list[PredictionResult] | None":
+        """Try batch prediction using pre-computed feature parquet.
+
+        If some games are missing from features (e.g. upcoming/scheduled),
+        extract their features inline and merge before batch prediction.
+        Returns None only if features cannot be obtained at all.
+        """
+        features_dir = self.data_dir / "features"
+        feat_path = features_dir / f"{self.sport}_all.parquet"
+        if not feat_path.exists():
+            return None
+        try:
+            precomp = pd.read_parquet(feat_path)
+            id_col = "game_id" if "game_id" in precomp.columns else "id"
+            precomp.index = precomp[id_col].astype(str)
+            gid_col = "game_id" if "game_id" in day_games.columns else "id"
+            gids = day_games[gid_col].astype(str).tolist()
+            matched = [g for g in gids if g in precomp.index]
+            missing = [g for g in gids if g not in precomp.index]
+
+            if missing:
+                # Extract features inline for missing games
+                inline = self._extract_inline_features(day_games, missing, gid_col)
+                if inline is not None and not inline.empty:
+                    iid = "game_id" if "game_id" in inline.columns else "id"
+                    inline.index = inline[iid].astype(str)
+                    precomp = pd.concat([precomp, inline])
+                    matched = [g for g in gids if g in precomp.index]
+                    missing = [g for g in gids if g not in precomp.index]
+
+            if not matched:
+                return None
+
+            # Proceed with whatever games we have features for
+            if missing:
+                logger.debug(
+                    "Batch: %d/%d games have features (%d will use slow path)",
+                    len(matched), len(gids), len(missing),
+                )
+            return self.predict_batch_precomputed(precomp, day_games)
+        except Exception:
+            logger.debug("Batch prediction failed for %s", self.sport, exc_info=True)
+            return None
+
+    def _extract_inline_features(
+        self, day_games: "pd.DataFrame", missing_ids: list[str], gid_col: str,
+    ) -> "pd.DataFrame | None":
+        """Extract features for a handful of games inline (for prediction)."""
+        try:
+            missing_set = set(missing_ids)
+            games_to_extract = day_games[
+                day_games[gid_col].astype(str).isin(missing_set)
+            ]
+            rows = []
+            for _, row in games_to_extract.iterrows():
+                try:
+                    feats = self.extractor.extract_game_features(row.to_dict())
+                    rows.append(feats)
+                except Exception:
+                    logger.debug(
+                        "Inline feature extraction failed for game %s",
+                        row.get(gid_col, "?"),
+                    )
+            if rows:
+                return pd.DataFrame(rows)
+        except Exception:
+            logger.debug("Inline feature extraction failed for %s", self.sport)
+        return None
 
     # ── Live prediction (stub) ───────────────────────────
 
@@ -1094,13 +1975,20 @@ class GamePredictor:
         - Start-year sports (EPL, Bundesliga, NFL, NCAAF…): season = year it started.
           Aug 2025 → 2025; Mar 2026 → 2025.
         """
-        if self.sport in self._CALENDAR_YEAR_SPORTS:
+        return self._date_to_season_static(self.sport, dt)
+
+    @staticmethod
+    def _date_to_season_static(sport: str, dt: "pd.Timestamp") -> int:
+        """Map a date to the appropriate season year without needing an instance."""
+        _CAL = GamePredictor._CALENDAR_YEAR_SPORTS
+        _END = GamePredictor._END_YEAR_SPORTS
+        _START = GamePredictor._START_YEAR_SPORTS
+        if sport in _CAL:
             return dt.year
-        if self.sport in self._END_YEAR_SPORTS:
-            start_month = self._END_YEAR_SPORTS[self.sport]
+        if sport in _END:
+            start_month = _END[sport]
             return dt.year + 1 if dt.month >= start_month else dt.year
-        if self.sport in self._START_YEAR_SPORTS:
-            start_month = self._START_YEAR_SPORTS[self.sport]
+        if sport in _START:
+            start_month = _START[sport]
             return dt.year if dt.month >= start_month else dt.year - 1
-        # Unknown sport: fall back to calendar year
         return dt.year

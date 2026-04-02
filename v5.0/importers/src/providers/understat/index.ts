@@ -1,42 +1,52 @@
 // ──────────────────────────────────────────────────────────
-// V5.0 Understat Provider  [DISABLED]
+// V5.0 Understat Provider
 // ──────────────────────────────────────────────────────────
-// Scrapes xG (expected goals) data from understat.com.
-// Parses JSON embedded in HTML <script> tags.
+// Uses Understat AJAX endpoints (same family used by understatAPI):
+//   getLeagueData/{league}/{season}
+//   getTeamData/{team}/{season}
+//   getPlayerData/{playerId}
+//   getMatchData/{matchId}
 // No API key required.
-//
-// DISABLED (2026-03-26): Understat moved to a JS-rendered SPA.
-// The embedded JSON variables (datesData, teamsData, playersData)
-// are no longer present in the server-rendered HTML. Data is now
-// loaded dynamically via client-side JavaScript. Fixing requires
-// either headless browser scraping or reverse-engineering the
-// internal API endpoints.
 
-import { parse as parseHTML } from "node-html-parser";
 import type { Provider, ImportOptions, ImportResult, Sport, RateLimitConfig } from "../../core/types.js";
-import { fetchText } from "../../core/http.js";
+import { fetchJSON } from "../../core/http.js";
 import { writeJSON, rawPath, fileExists } from "../../core/io.js";
 import { logger } from "../../core/logger.js";
-
-// ── Constants ───────────────────────────────────────────────
 
 const NAME = "understat";
 const BASE_URL = "https://understat.com";
 
-const RATE_LIMIT: RateLimitConfig = { requests: 1, perMs: 2_000 };
+const RATE_LIMIT: RateLimitConfig = { requests: 3, perMs: 1_000 };
 
 const SUPPORTED_SPORTS: Sport[] = ["epl", "laliga", "bundesliga", "seriea", "ligue1"];
 
-const ALL_ENDPOINTS = [
+// Legacy endpoints are kept for CLI compatibility; additional endpoints expand
+// coverage to match the understatAPI surface.
+const DEFAULT_ENDPOINTS = [
   "league_standings",
   "league_matches",
   "player_xg",
   "team_xg",
 ] as const;
 
+const EXTENDED_ENDPOINTS = [
+  "team_matches",
+  "team_players",
+  "team_context",
+  "player_matches",
+  "player_shots",
+  "player_seasons",
+  "match_shots",
+  "match_rosters",
+] as const;
+
+const ALL_ENDPOINTS = [...DEFAULT_ENDPOINTS, ...EXTENDED_ENDPOINTS] as const;
 type Endpoint = (typeof ALL_ENDPOINTS)[number];
 
-/** Map our sport slugs to Understat's league path segments */
+const AJAX_HEADERS = {
+  "X-Requested-With": "XMLHttpRequest",
+};
+
 const LEAGUE_MAP: Record<string, string> = {
   epl: "EPL",
   laliga: "La_Liga",
@@ -45,46 +55,30 @@ const LEAGUE_MAP: Record<string, string> = {
   ligue1: "Ligue_1",
 };
 
-// ── HTML/JSON Extraction ────────────────────────────────────
-
-/**
- * Understat embeds data in script tags as:
- *   var datesData = JSON.parse('...')
- *   var teamsData  = JSON.parse('...')
- *   var playersData = JSON.parse('...')
- * The encoded string uses hex escapes (\xHH) for special chars.
- */
-function extractEmbeddedJSON(html: string, varName: string): unknown | null {
-  // Pattern: var {varName} = JSON.parse('...')
-  const regex = new RegExp(`var\\s+${varName}\\s*=\\s*JSON\\.parse\\('(.+?)'\\)`, "s");
-  const match = html.match(regex);
-  if (!match?.[1]) return null;
-
-  // Decode hex escapes like \x27 → ', \x22 → ", etc.
-  const decoded = match[1].replace(/\\x([0-9a-fA-F]{2})/g, (_m, hex) =>
-    String.fromCharCode(parseInt(hex, 16)),
-  );
-
-  try {
-    return JSON.parse(decoded);
-  } catch {
-    return null;
-  }
+interface UnderstatLeagueMatch {
+  id?: string | number;
+  datetime?: string;
+  [key: string]: unknown;
 }
 
-/** Extract all match IDs from the datesData structure */
-function extractMatchIds(datesData: unknown): string[] {
-  if (!Array.isArray(datesData)) return [];
-  const ids: string[] = [];
-  for (const entry of datesData) {
-    if (entry && typeof entry === "object" && "id" in entry) {
-      ids.push(String(entry.id));
-    }
-  }
-  return ids;
+interface UnderstatLeaguePlayer {
+  id?: string | number;
+  player_name?: string;
+  [key: string]: unknown;
 }
 
-// ── Endpoint context ────────────────────────────────────────
+interface UnderstatLeagueTeam {
+  id?: string | number;
+  title?: string;
+  history?: unknown;
+  [key: string]: unknown;
+}
+
+interface UnderstatLeagueData {
+  dates?: UnderstatLeagueMatch[];
+  players?: UnderstatLeaguePlayer[];
+  teams?: Record<string, UnderstatLeagueTeam>;
+}
 
 interface EndpointContext {
   sport: Sport;
@@ -98,203 +92,381 @@ interface EndpointResult {
   errors: string[];
 }
 
-// ── Fetch league page and extract all embedded data ─────────
-
-interface LeaguePageData {
-  datesData: unknown;
-  teamsData: unknown;
-  playersData: unknown;
+function toTeamSlug(teamTitle: string): string {
+  return teamTitle.trim().replace(/\s+/g, "_");
 }
 
-async function fetchLeaguePage(sport: Sport, season: number): Promise<{ html: string; data: LeaguePageData }> {
+function sanitizePathSegment(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "unknown";
+}
+
+function extractMatchId(match: UnderstatLeagueMatch): string | null {
+  const id = match?.id;
+  if (id === undefined || id === null) return null;
+  const parsed = String(id).trim();
+  return parsed.length > 0 ? parsed : null;
+}
+
+function extractPlayerId(player: UnderstatLeaguePlayer): string | null {
+  const id = player?.id;
+  if (id === undefined || id === null) return null;
+  const parsed = String(id).trim();
+  return parsed.length > 0 ? parsed : null;
+}
+
+function extractDate(match: UnderstatLeagueMatch): string {
+  const raw = typeof match.datetime === "string" ? match.datetime : "";
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "unknown-date";
+  return parsed.toISOString().slice(0, 10);
+}
+
+function isoWeekLabel(dateIso: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) return "unknown";
+
+  const date = new Date(`${dateIso}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "unknown";
+
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - day);
+
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil((((date.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
+  return String(weekNum).padStart(2, "0");
+}
+
+function matchPartitionPath(
+  dataDir: string,
+  sport: Sport,
+  season: number,
+  match: UnderstatLeagueMatch,
+): { baseDir: string; matchId: string; date: string; week: string; seasonType: string } | null {
+  const matchId = extractMatchId(match);
+  if (!matchId) return null;
+
+  // Understat league pages are regular-season league fixtures.
+  const seasonType = "regular";
+  const date = extractDate(match);
+  const week = isoWeekLabel(date);
+
+  const baseDir = rawPath(
+    dataDir,
+    NAME,
+    sport,
+    season,
+    "matches",
+    "season_type",
+    seasonType,
+    `week_${week}`,
+    date,
+    matchId,
+  );
+
+  return { baseDir, matchId, date, week, seasonType };
+}
+
+async function fetchUnderstat<T = unknown>(path: string): Promise<T> {
+  return fetchJSON<T>(`${BASE_URL}/${path}`, NAME, RATE_LIMIT, {
+    headers: AJAX_HEADERS,
+    timeoutMs: 30_000,
+    retries: 3,
+  });
+}
+
+async function fetchLeagueData(sport: Sport, season: number): Promise<UnderstatLeagueData> {
   const league = LEAGUE_MAP[sport];
   if (!league) throw new Error(`Unknown league mapping for sport: ${sport}`);
-
-  const url = `${BASE_URL}/league/${league}/${season}`;
-  logger.progress(NAME, sport, "fetch", `Fetching league page: ${url}`);
-
-  const html = await fetchText(url, NAME, RATE_LIMIT, { timeoutMs: 30_000 });
-
-  return {
-    html,
-    data: {
-      datesData: extractEmbeddedJSON(html, "datesData"),
-      teamsData: extractEmbeddedJSON(html, "teamsData"),
-      playersData: extractEmbeddedJSON(html, "playersData"),
-    },
-  };
+  const endpoint = `getLeagueData/${league}/${season}`;
+  logger.progress(NAME, sport, "fetch", `Fetching league data: ${endpoint}`);
+  return fetchUnderstat<UnderstatLeagueData>(endpoint);
 }
 
-// ── Endpoint implementations ────────────────────────────────
+function dedupeBy<T>(rows: T[], keyFn: (row: T) => string | null): T[] {
+  const map = new Map<string, T>();
+  for (const row of rows) {
+    const key = keyFn(row);
+    if (!key) continue;
+    map.set(key, row);
+  }
+  return [...map.values()];
+}
 
-async function importLeagueStandings(ctx: EndpointContext, pageData?: LeaguePageData): Promise<EndpointResult> {
-  const { sport, season, dataDir, dryRun } = ctx;
+function extractTeamEntries(data: UnderstatLeagueData): Array<{ teamId: string; title: string; slug: string }> {
+  const teams = data.teams ?? {};
+  const entries: Array<{ teamId: string; title: string; slug: string }> = [];
+
+  for (const [teamId, teamObj] of Object.entries(teams)) {
+    const title = typeof teamObj?.title === "string" ? teamObj.title.trim() : "";
+    if (!title) continue;
+    entries.push({
+      teamId: String(teamId),
+      title,
+      slug: toTeamSlug(title),
+    });
+  }
+
+  return entries;
+}
+
+async function importLeagueStandings(ctx: EndpointContext, leagueData: UnderstatLeagueData): Promise<EndpointResult> {
+  const outFile = rawPath(ctx.dataDir, NAME, ctx.sport, ctx.season, "reference", "league_standings.json");
+  const legacyFile = rawPath(ctx.dataDir, NAME, ctx.sport, ctx.season, "league_standings.json");
+
+  if (fileExists(outFile)) {
+    logger.progress(NAME, ctx.sport, "league_standings", `Skipping ${ctx.season} — already exists`);
+    return { filesWritten: 0, errors: [] };
+  }
+  if (ctx.dryRun) return { filesWritten: 0, errors: [] };
+
+  const teams = leagueData.teams ?? {};
+  if (!Object.keys(teams).length) {
+    return { filesWritten: 0, errors: [`league_standings/${ctx.sport}/${ctx.season}: empty teams payload`] };
+  }
+
+  writeJSON(outFile, teams);
+  writeJSON(legacyFile, teams);
+  logger.progress(NAME, ctx.sport, "league_standings", `Saved ${Object.keys(teams).length} teams`);
+  return { filesWritten: 2, errors: [] };
+}
+
+async function importLeaguePlayers(ctx: EndpointContext, leagueData: UnderstatLeagueData): Promise<EndpointResult> {
+  const outFile = rawPath(ctx.dataDir, NAME, ctx.sport, ctx.season, "reference", "league_players.json");
+  const legacyFile = rawPath(ctx.dataDir, NAME, ctx.sport, ctx.season, "player_xg.json");
+
+  if (fileExists(outFile)) {
+    logger.progress(NAME, ctx.sport, "player_xg", `Skipping ${ctx.season} — already exists`);
+    return { filesWritten: 0, errors: [] };
+  }
+  if (ctx.dryRun) return { filesWritten: 0, errors: [] };
+
+  const players = dedupeBy(leagueData.players ?? [], extractPlayerId);
+  if (!players.length) {
+    return { filesWritten: 0, errors: [`player_xg/${ctx.sport}/${ctx.season}: empty players payload`] };
+  }
+
+  writeJSON(outFile, players);
+  writeJSON(legacyFile, players);
+  logger.progress(NAME, ctx.sport, "player_xg", `Saved ${players.length} players`);
+  return { filesWritten: 2, errors: [] };
+}
+
+async function importLeagueMatches(ctx: EndpointContext, leagueData: UnderstatLeagueData): Promise<EndpointResult> {
+  const outFile = rawPath(ctx.dataDir, NAME, ctx.sport, ctx.season, "matches", "index.json");
+  const legacyFile = rawPath(ctx.dataDir, NAME, ctx.sport, ctx.season, "league_matches.json");
+
+  if (fileExists(outFile)) {
+    logger.progress(NAME, ctx.sport, "league_matches", `Skipping ${ctx.season} — already exists`);
+    return { filesWritten: 0, errors: [] };
+  }
+  if (ctx.dryRun) return { filesWritten: 0, errors: [] };
+
+  const matches = dedupeBy(leagueData.dates ?? [], extractMatchId);
+  if (!matches.length) {
+    return { filesWritten: 0, errors: [`league_matches/${ctx.sport}/${ctx.season}: empty matches payload`] };
+  }
+
+  writeJSON(outFile, matches);
+  writeJSON(legacyFile, matches);
+
+  let filesWritten = 2;
+  for (const match of matches) {
+    const partition = matchPartitionPath(ctx.dataDir, ctx.sport, ctx.season, match);
+    if (!partition) continue;
+    const matchFile = `${partition.baseDir}/match.json`;
+    if (fileExists(matchFile)) continue;
+    writeJSON(matchFile, match);
+    filesWritten++;
+  }
+
+  logger.progress(NAME, ctx.sport, "league_matches", `Saved ${matches.length} match records`);
+  return { filesWritten, errors: [] };
+}
+
+async function importTeamXg(ctx: EndpointContext, leagueData: UnderstatLeagueData): Promise<EndpointResult> {
+  const outFile = rawPath(ctx.dataDir, NAME, ctx.sport, ctx.season, "reference", "team_xg.json");
+  const legacyFile = rawPath(ctx.dataDir, NAME, ctx.sport, ctx.season, "team_xg.json");
+
+  if (fileExists(outFile)) {
+    logger.progress(NAME, ctx.sport, "team_xg", `Skipping ${ctx.season} — already exists`);
+    return { filesWritten: 0, errors: [] };
+  }
+  if (ctx.dryRun) return { filesWritten: 0, errors: [] };
+
+  const teams = leagueData.teams ?? {};
+  if (!Object.keys(teams).length) {
+    return { filesWritten: 0, errors: [`team_xg/${ctx.sport}/${ctx.season}: empty teams payload`] };
+  }
+
+  writeJSON(outFile, teams);
+  writeJSON(legacyFile, teams);
+  logger.progress(NAME, ctx.sport, "team_xg", `Saved team xG for ${Object.keys(teams).length} teams`);
+  return { filesWritten: 2, errors: [] };
+}
+
+async function importTeamEndpoint(
+  ctx: EndpointContext,
+  leagueData: UnderstatLeagueData,
+  endpoint: "team_matches" | "team_players" | "team_context",
+): Promise<EndpointResult> {
+  const teamEntries = extractTeamEntries(leagueData);
+  if (!teamEntries.length) {
+    return { filesWritten: 0, errors: [`${endpoint}/${ctx.sport}/${ctx.season}: no teams found`] };
+  }
+
   let filesWritten = 0;
   const errors: string[] = [];
 
-  const outFile = rawPath(dataDir, NAME, sport, season, "league_standings.json");
+  for (const team of teamEntries) {
+    const teamDir = rawPath(
+      ctx.dataDir,
+      NAME,
+      ctx.sport,
+      ctx.season,
+      "teams",
+      `${sanitizePathSegment(team.slug)}__${team.teamId}`,
+    );
 
-  if (fileExists(outFile)) {
-    logger.progress(NAME, sport, "league_standings", `Skipping ${season} — already exists`);
-    return { filesWritten, errors };
-  }
+    const outputName = endpoint === "team_matches"
+      ? "matches.json"
+      : endpoint === "team_players"
+        ? "players.json"
+        : "context.json";
 
-  if (dryRun) return { filesWritten: 0, errors: [] };
-
-  try {
-    const data = pageData ?? (await fetchLeaguePage(sport, season)).data;
-
-    if (!data.teamsData) {
-      errors.push(`league_standings/${sport}/${season}: No teamsData found in page`);
-      return { filesWritten, errors };
+    const outFile = `${teamDir}/${outputName}`;
+    if (fileExists(outFile)) continue;
+    if (ctx.dryRun) {
+      filesWritten++;
+      continue;
     }
 
-    writeJSON(outFile, data.teamsData);
-    filesWritten++;
-    logger.progress(NAME, sport, "league_standings", `Saved ${season} standings`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`league_standings ${sport}/${season}: ${msg}`, NAME);
-    errors.push(`league_standings/${sport}/${season}: ${msg}`);
+    try {
+      const teamData = await fetchUnderstat<Record<string, unknown>>(
+        `getTeamData/${encodeURIComponent(team.slug)}/${ctx.season}`,
+      );
+
+      const payload = endpoint === "team_matches"
+        ? (teamData.dates ?? [])
+        : endpoint === "team_players"
+          ? (teamData.players ?? [])
+          : (teamData.statistics ?? {});
+
+      writeJSON(outFile, payload);
+      filesWritten++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${endpoint}/${ctx.sport}/${ctx.season}/${team.slug}: ${msg}`);
+    }
   }
 
+  logger.progress(NAME, ctx.sport, endpoint, `Saved ${filesWritten} files`);
   return { filesWritten, errors };
 }
 
-async function importLeagueMatches(ctx: EndpointContext, pageData?: LeaguePageData): Promise<EndpointResult> {
-  const { sport, season, dataDir, dryRun } = ctx;
+async function importPlayerEndpoint(
+  ctx: EndpointContext,
+  leagueData: UnderstatLeagueData,
+  endpoint: "player_matches" | "player_shots" | "player_seasons",
+): Promise<EndpointResult> {
+  const players = dedupeBy(leagueData.players ?? [], extractPlayerId);
+  if (!players.length) {
+    return { filesWritten: 0, errors: [`${endpoint}/${ctx.sport}/${ctx.season}: no players found`] };
+  }
+
   let filesWritten = 0;
   const errors: string[] = [];
 
-  const outFile = rawPath(dataDir, NAME, sport, season, "league_matches.json");
+  for (const player of players) {
+    const playerId = extractPlayerId(player);
+    if (!playerId) continue;
 
-  if (fileExists(outFile)) {
-    logger.progress(NAME, sport, "league_matches", `Skipping ${season} — already exists`);
-    return { filesWritten, errors };
-  }
+    const playerName = typeof player.player_name === "string" ? player.player_name : "unknown";
+    const outFile = rawPath(
+      ctx.dataDir,
+      NAME,
+      ctx.sport,
+      ctx.season,
+      "players",
+      `${sanitizePathSegment(playerName)}__${playerId}`,
+      endpoint === "player_matches"
+        ? "matches.json"
+        : endpoint === "player_shots"
+          ? "shots.json"
+          : "seasons.json",
+    );
 
-  if (dryRun) return { filesWritten: 0, errors: [] };
-
-  try {
-    const data = pageData ?? (await fetchLeaguePage(sport, season)).data;
-
-    if (!data.datesData) {
-      errors.push(`league_matches/${sport}/${season}: No datesData found in page`);
-      return { filesWritten, errors };
+    if (fileExists(outFile)) continue;
+    if (ctx.dryRun) {
+      filesWritten++;
+      continue;
     }
 
-    writeJSON(outFile, data.datesData);
-    filesWritten++;
-    logger.progress(NAME, sport, "league_matches", `Saved ${season} matches`);
-
-    // Also fetch per-match xG data for a sample of matches
-    const matchIds = extractMatchIds(data.datesData);
-    logger.progress(NAME, sport, "league_matches", `Found ${matchIds.length} matches for ${season}`);
-
-    // Fetch individual match details
-    for (const matchId of matchIds) {
-      const matchFile = rawPath(dataDir, NAME, sport, season, "matches", `${matchId}.json`);
-      if (fileExists(matchFile)) continue;
-
-      try {
-        const matchUrl = `${BASE_URL}/match/${matchId}`;
-        const matchHtml = await fetchText(matchUrl, NAME, RATE_LIMIT, { timeoutMs: 30_000 });
-        const matchData = extractEmbeddedJSON(matchHtml, "match_info");
-        const shotsData = extractEmbeddedJSON(matchHtml, "shotsData");
-        const rostersData = extractEmbeddedJSON(matchHtml, "rostersData");
-
-        writeJSON(matchFile, {
-          matchId,
-          match_info: matchData,
-          shotsData,
-          rostersData,
-        });
-        filesWritten++;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn(`match ${matchId}: ${msg}`, NAME);
-        errors.push(`league_matches/${sport}/${season}/match/${matchId}: ${msg}`);
-      }
+    try {
+      const playerData = await fetchUnderstat<Record<string, unknown>>(`getPlayerData/${playerId}`);
+      const payload = endpoint === "player_matches"
+        ? (playerData.matches ?? [])
+        : endpoint === "player_shots"
+          ? (playerData.shots ?? [])
+          : (playerData.groups ?? []);
+      writeJSON(outFile, payload);
+      filesWritten++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${endpoint}/${ctx.sport}/${ctx.season}/${playerId}: ${msg}`);
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`league_matches ${sport}/${season}: ${msg}`, NAME);
-    errors.push(`league_matches/${sport}/${season}: ${msg}`);
   }
 
+  logger.progress(NAME, ctx.sport, endpoint, `Saved ${filesWritten} files`);
   return { filesWritten, errors };
 }
 
-async function importPlayerXg(ctx: EndpointContext, pageData?: LeaguePageData): Promise<EndpointResult> {
-  const { sport, season, dataDir, dryRun } = ctx;
+async function importMatchEndpoint(
+  ctx: EndpointContext,
+  leagueData: UnderstatLeagueData,
+  endpoint: "match_shots" | "match_rosters",
+): Promise<EndpointResult> {
+  const matches = dedupeBy(leagueData.dates ?? [], extractMatchId);
+  if (!matches.length) {
+    return { filesWritten: 0, errors: [`${endpoint}/${ctx.sport}/${ctx.season}: no matches found`] };
+  }
+
   let filesWritten = 0;
   const errors: string[] = [];
 
-  const outFile = rawPath(dataDir, NAME, sport, season, "player_xg.json");
+  for (const match of matches) {
+    const partition = matchPartitionPath(ctx.dataDir, ctx.sport, ctx.season, match);
+    if (!partition) continue;
 
-  if (fileExists(outFile)) {
-    logger.progress(NAME, sport, "player_xg", `Skipping ${season} — already exists`);
-    return { filesWritten, errors };
-  }
+    const outFile = endpoint === "match_shots"
+      ? `${partition.baseDir}/shots.json`
+      : `${partition.baseDir}/rosters.json`;
 
-  if (dryRun) return { filesWritten: 0, errors: [] };
-
-  try {
-    const data = pageData ?? (await fetchLeaguePage(sport, season)).data;
-
-    if (!data.playersData) {
-      errors.push(`player_xg/${sport}/${season}: No playersData found in page`);
-      return { filesWritten, errors };
+    if (fileExists(outFile)) continue;
+    if (ctx.dryRun) {
+      filesWritten++;
+      continue;
     }
 
-    writeJSON(outFile, data.playersData);
-    filesWritten++;
-    logger.progress(NAME, sport, "player_xg", `Saved ${season} player xG`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`player_xg ${sport}/${season}: ${msg}`, NAME);
-    errors.push(`player_xg/${sport}/${season}: ${msg}`);
-  }
+    try {
+      const matchData = await fetchUnderstat<Record<string, unknown>>(`getMatchData/${partition.matchId}`);
+      const payload = endpoint === "match_shots"
+        ? (matchData.shots ?? {})
+        : (matchData.rosters ?? {});
 
-  return { filesWritten, errors };
-}
-
-async function importTeamXg(ctx: EndpointContext, pageData?: LeaguePageData): Promise<EndpointResult> {
-  const { sport, season, dataDir, dryRun } = ctx;
-  let filesWritten = 0;
-  const errors: string[] = [];
-
-  const outFile = rawPath(dataDir, NAME, sport, season, "team_xg.json");
-
-  if (fileExists(outFile)) {
-    logger.progress(NAME, sport, "team_xg", `Skipping ${season} — already exists`);
-    return { filesWritten, errors };
-  }
-
-  if (dryRun) return { filesWritten: 0, errors: [] };
-
-  try {
-    const data = pageData ?? (await fetchLeaguePage(sport, season)).data;
-
-    if (!data.teamsData) {
-      errors.push(`team_xg/${sport}/${season}: No teamsData found in page`);
-      return { filesWritten, errors };
+      writeJSON(outFile, payload);
+      filesWritten++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${endpoint}/${ctx.sport}/${ctx.season}/${partition.matchId}: ${msg}`);
     }
-
-    // teamsData has per-team xG breakdowns (home/away, per-match, totals)
-    writeJSON(outFile, data.teamsData);
-    filesWritten++;
-    logger.progress(NAME, sport, "team_xg", `Saved ${season} team xG`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`team_xg ${sport}/${season}: ${msg}`, NAME);
-    errors.push(`team_xg/${sport}/${season}: ${msg}`);
   }
 
+  logger.progress(NAME, ctx.sport, endpoint, `Saved ${filesWritten} files`);
   return { filesWritten, errors };
 }
-
-// ── Provider implementation ─────────────────────────────────
 
 const understat: Provider = {
   name: NAME,
@@ -316,7 +488,7 @@ const understat: Provider = {
 
     const endpoints: Endpoint[] = opts.endpoints.length
       ? (opts.endpoints.filter((e) => ALL_ENDPOINTS.includes(e as Endpoint)) as Endpoint[])
-      : [...ALL_ENDPOINTS];
+      : [...DEFAULT_ENDPOINTS];
 
     logger.info(
       `Starting import — ${sports.length} leagues, ${endpoints.length} endpoints, ${opts.seasons.length} seasons`,
@@ -327,18 +499,14 @@ const understat: Provider = {
       for (const season of opts.seasons) {
         logger.info(`── ${LEAGUE_MAP[sport] ?? sport} ${season} ──`, NAME);
 
-        // Fetch the league page once per sport/season and share across endpoints
-        let pageData: LeaguePageData | undefined;
-        if (!opts.dryRun) {
-          try {
-            const result = await fetchLeaguePage(sport, season);
-            pageData = result.data;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            logger.error(`Failed to fetch league page for ${sport}/${season}: ${msg}`, NAME);
-            allErrors.push(`${sport}/${season}: ${msg}`);
-            continue;
-          }
+        let leagueData: UnderstatLeagueData;
+        try {
+          leagueData = await fetchLeagueData(sport, season);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          allErrors.push(`${sport}/${season}: ${msg}`);
+          logger.error(`Failed league fetch ${sport}/${season}: ${msg}`, NAME);
+          continue;
         }
 
         for (const ep of endpoints) {
@@ -353,16 +521,30 @@ const understat: Provider = {
             let result: EndpointResult;
             switch (ep) {
               case "league_standings":
-                result = await importLeagueStandings(ctx, pageData);
+                result = await importLeagueStandings(ctx, leagueData);
                 break;
               case "league_matches":
-                result = await importLeagueMatches(ctx, pageData);
+                result = await importLeagueMatches(ctx, leagueData);
                 break;
               case "player_xg":
-                result = await importPlayerXg(ctx, pageData);
+                result = await importLeaguePlayers(ctx, leagueData);
                 break;
               case "team_xg":
-                result = await importTeamXg(ctx, pageData);
+                result = await importTeamXg(ctx, leagueData);
+                break;
+              case "team_matches":
+              case "team_players":
+              case "team_context":
+                result = await importTeamEndpoint(ctx, leagueData, ep);
+                break;
+              case "player_matches":
+              case "player_shots":
+              case "player_seasons":
+                result = await importPlayerEndpoint(ctx, leagueData, ep);
+                break;
+              case "match_shots":
+              case "match_rosters":
+                result = await importMatchEndpoint(ctx, leagueData, ep);
                 break;
             }
 
@@ -370,8 +552,8 @@ const understat: Provider = {
             allErrors.push(...result.errors);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            logger.error(`${sport}/${season}/${ep}: ${msg}`, NAME);
             allErrors.push(`${sport}/${season}/${ep}: ${msg}`);
+            logger.error(`${sport}/${season}/${ep}: ${msg}`, NAME);
           }
         }
       }

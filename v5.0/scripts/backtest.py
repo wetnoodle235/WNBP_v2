@@ -54,6 +54,10 @@ ALL_SPORTS = [
     # Soccer leagues — models exist or trainable
     "epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl",
     "europa", "ligamx",
+    # Additional top-flight & second division soccer
+    "eredivisie", "primeiraliga", "championship", "bundesliga2", "serieb", "ligue2",
+    # International tournaments (appear in specific years only)
+    "worldcup", "euros",
     # Combat / individual
     "ufc",
     # Tennis
@@ -89,7 +93,12 @@ _COMPLETED_STATUSES: frozenset[str] = frozenset(
 
 # Sports that can legitimately finish 0-0
 _SOCCER_SPORTS: frozenset[str] = frozenset(
-    ["epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl"]
+    [
+        "epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl",
+        "europa", "ligamx",
+        "eredivisie", "primeiraliga", "championship", "bundesliga2", "serieb", "ligue2",
+        "worldcup", "euros",
+    ]
 )
 
 # Month ranges (inclusive) for each sport's regular season.
@@ -113,9 +122,19 @@ _REGULAR_SEASON_MONTHS: dict[str, tuple[int, int]] = {
     "bundesliga":(8, 5),
     "ligue1":    (8, 5),
     "seriea":    (8, 5),
-    "ucl":       (9, 6),
-    "europa":    (9, 5),
-    "ligamx":    (1, 12),  # year-round (Apertura + Clausura)
+    "ucl":          (9, 6),
+    "europa":        (9, 5),
+    "ligamx":        (1, 12),  # year-round (Apertura + Clausura)
+    # Additional top-flight European leagues (same Aug-May window)
+    "eredivisie":    (8, 5),
+    "primeiraliga":  (8, 5),
+    # Second divisions (follow same calendar as first division)
+    "championship":  (8, 5),
+    "bundesliga2":   (8, 5),
+    "serieb":        (9, 5),
+    "ligue2":        (8, 5),
+    # International tournaments — sporadic; treated as in-season year-round
+    # when data exists (specific year filtering handled upstream)
     # Esports — year-round (no season restriction)
     # F1 — year-round
 }
@@ -442,29 +461,28 @@ class Backtester:
             return records
 
         any_loaded = False
-        # Use up to 4 parallel threads — each sport loads its own data/model
-        with ThreadPoolExecutor(max_workers=min(4, len(team_sports))) as pool:
-            futures = {
-                pool.submit(_backtest_one_sport, sport): sport
-                for sport in team_sports
-            }
-            for fut in as_completed(futures):
-                sport = futures[fut]
-                try:
-                    records = fut.result()
-                    if records:
-                        any_loaded = True
-                        self.records.extend(records)
-                except Exception:
-                    logger.warning(
-                        "Backtest failed for %s", sport, exc_info=True,
-                    )
+        if team_sports:
+            # Use up to 4 parallel threads — each sport loads its own data/model
+            with ThreadPoolExecutor(max_workers=min(4, len(team_sports))) as pool:
+                futures = {
+                    pool.submit(_backtest_one_sport, sport): sport
+                    for sport in team_sports
+                }
+                for fut in as_completed(futures):
+                    sport = futures[fut]
+                    try:
+                        records = fut.result()
+                        if records:
+                            any_loaded = True
+                            self.records.extend(records)
+                    except Exception:
+                        logger.warning(
+                            "Backtest failed for %s", sport, exc_info=True,
+                        )
 
         if not any_loaded and not golf_sports:
             logger.warning("No trained models found — nothing to backtest")
             return self._empty_report(start_date, end_date)
-
-        return self._build_report(start_date, end_date)
 
         return self._build_report(start_date, end_date)
 
@@ -862,6 +880,24 @@ class Backtester:
             actual_cs_a = ah_f == 0
             record["clean_sheet_away_correct"] = pred_cs_a == actual_cs_a
 
+        # BTTS + variants
+        if ah_f is not None and aa_f is not None:
+            btts_ov = pred_dict.get("btts_over2_5_prob")
+            if btts_ov is not None:
+                record["btts_over2_5_correct"] = (float(btts_ov) >= 0.5) == ((ah_f > 0) and (aa_f > 0) and (ah_f + aa_f > 2.5))
+            h15p = pred_dict.get("home_over1_5_prob")
+            if h15p is not None:
+                record["home_over1_5_correct"] = (float(h15p) >= 0.5) == (ah_f >= 2)
+            a15p = pred_dict.get("away_over1_5_prob")
+            if a15p is not None:
+                record["away_over1_5_correct"] = (float(a15p) >= 0.5) == (aa_f >= 2)
+            hw2p = pred_dict.get("home_win_score2plus_prob")
+            if hw2p is not None:
+                record["home_win_score2plus_correct"] = (float(hw2p) >= 0.5) == (ah_f >= 2 and ah_f > aa_f)
+            aw2p = pred_dict.get("away_win_score2plus_prob")
+            if aw2p is not None:
+                record["away_win_score2plus_correct"] = (float(aw2p) >= 0.5) == (aa_f >= 2 and aa_f > ah_f)
+
         # ── UFC Method of Victory ─────────────────────────
         dec_prob = pred_dict.get("decision_prob")
         ko_prob  = pred_dict.get("ko_tko_prob")
@@ -884,7 +920,28 @@ class Backtester:
                 if actual_method_key is not None:
                     record["ufc_method_correct"] = pred_method_key == actual_method_key
 
-        # ── Tennis Straight Sets ──────────────────────────
+        # ── UFC Early Finish / Round Markets ──────────────
+        ef_prob = pred_dict.get("early_finish_prob")
+        r1_prob = pred_dict.get("round1_finish_prob")
+        fr_raw = actual.get("home_finish_round")
+        try:
+            actual_finish_round = float(fr_raw) if fr_raw is not None and not pd.isna(fr_raw) else None
+        except (ValueError, TypeError):
+            actual_finish_round = None
+        if actual_finish_round is not None:
+            if ef_prob is not None:
+                record["ufc_early_finish_correct"] = (float(ef_prob) >= 0.5) == (actual_finish_round <= 2)
+            if r1_prob is not None:
+                record["ufc_round1_finish_correct"] = (float(r1_prob) >= 0.5) == (actual_finish_round == 1)
+            for line_str in ("1.5", "2.5", "3.5"):
+                rnd_key = f"ufc_rounds_over_{line_str.replace('.', '_')}_prob"
+                rnd_prob = pred_dict.get(rnd_key)
+                if rnd_prob is not None:
+                    record[f"ufc_rounds_over_{line_str.replace('.', '_')}_correct"] = (
+                        (float(rnd_prob) >= 0.5) == (actual_finish_round > float(line_str))
+                    )
+
+
         ss_prob = pred_dict.get("straight_sets_prob")
         if ss_prob is not None and has_ht_data:
             # Proxy: both q1 and q2 won by same side
@@ -1110,6 +1167,404 @@ class Backtester:
             ah_p1a = pred_dict.get("ah_plus1_away_prob")
             if ah_p1a is not None:
                 record["ah_plus1_away_correct"] = (float(ah_p1a) >= 0.5) == (margin < 2)
+
+        # ── F5 Innings (MLB) ─────────────────────────────────
+        f5_cols = [f"home_i{i}" for i in range(1, 6)] + [f"away_i{i}" for i in range(1, 6)]
+        if all(actual.get(c) is not None for c in f5_cols):
+            h5 = sum(float(actual.get(f"home_i{i}", 0) or 0) for i in range(1, 6))
+            a5 = sum(float(actual.get(f"away_i{i}", 0) or 0) for i in range(1, 6))
+            total5 = h5 + a5
+            f5h = pred_dict.get("f5_home_win_prob")
+            if f5h is not None:
+                record["f5_home_win_correct"] = (float(f5h) >= 0.5) == (h5 > a5)
+            f5a = pred_dict.get("f5_away_win_prob")
+            if f5a is not None:
+                record["f5_away_win_correct"] = (float(f5a) >= 0.5) == (a5 > h5)
+            f5t = pred_dict.get("f5_tie_prob")
+            if f5t is not None:
+                record["f5_tie_correct"] = (float(f5t) >= 0.5) == (h5 == a5)
+            f5ov = pred_dict.get("f5_over4_5_prob")
+            if f5ov is not None:
+                record["f5_over4_5_correct"] = (float(f5ov) >= 0.5) == (total5 > 4.5)
+
+        # ── Period BTTS (hockey/basketball) ──────────────────
+        sport_key2 = record.get("sport", "").lower()
+        btts_period_map: list[tuple[str, str]] = []
+        if sport_key2 == "nhl":
+            btts_period_map = [("p1", "btts_period1"), ("p2", "btts_period2"), ("p3", "btts_period3")]
+        elif sport_key2 in ("nba", "ncaab", "wnba", "ncaaw", "nfl", "ncaaf"):
+            btts_period_map = [("q1", "btts_period1"), ("q2", "btts_period2"), ("q3", "btts_period3")]
+        for pcol, pkey in btts_period_map:
+            ph = _safe_float(actual.get(f"home_{pcol}"))
+            pa = _safe_float(actual.get(f"away_{pcol}"))
+            pp = pred_dict.get(f"{pkey}_prob")
+            if ph is not None and pa is not None and pp is not None:
+                actual_btts = ph > 0 and pa > 0
+                record[f"{pkey}_correct"] = (float(pp) >= 0.5) == actual_btts
+
+        # ── Correct Score Bands (Soccer) ────────────────────
+        if ah_f is not None and aa_f is not None:
+            hs, as_ = int(ah_f), int(aa_f)
+            for sk, cond in [
+                ("score_nil_nil", hs == 0 and as_ == 0),
+                ("score_1_0", hs == 1 and as_ == 0),
+                ("score_0_1", hs == 0 and as_ == 1),
+                ("score_1_1", hs == 1 and as_ == 1),
+                ("score_2plus_0", hs >= 2 and as_ == 0),
+                ("score_0_2plus", hs == 0 and as_ >= 2),
+                ("score_2_1", hs == 2 and as_ == 1),
+                ("score_1_2", hs == 1 and as_ == 2),
+                ("score_3plus_total", hs + as_ >= 3),
+                ("score_low_total", hs + as_ <= 1),
+            ]:
+                sv = pred_dict.get(f"{sk}_prob")
+                if sv is not None:
+                    record[f"{sk}_correct"] = (float(sv) >= 0.5) == bool(cond)
+
+        # ── First Half O/U + Win Both Halves (Soccer) ────────
+        gh1h = actual.get("home_h1")
+        gh1a = actual.get("away_h1")
+        gh2h = actual.get("home_h2")
+        gh2a = actual.get("away_h2")
+        if gh1h is not None and gh1a is not None and pd.notna(gh1h) and pd.notna(gh1a):
+            h1_total = float(gh1h) + float(gh1a)
+            h1o05 = pred_dict.get("h1_over0_5_prob")
+            if h1o05 is not None:
+                record["h1_over0_5_correct"] = (float(h1o05) >= 0.5) == (h1_total >= 1.0)
+            h1o15 = pred_dict.get("h1_over1_5_prob")
+            if h1o15 is not None:
+                record["h1_over1_5_correct"] = (float(h1o15) >= 0.5) == (h1_total >= 2.0)
+            if gh2h is not None and gh2a is not None and pd.notna(gh2h) and pd.notna(gh2a):
+                h1h_v, h1a_v = float(gh1h), float(gh1a)
+                h2h_v, h2a_v = float(gh2h), float(gh2a)
+                wbhh = pred_dict.get("win_both_halves_home_prob")
+                if wbhh is not None:
+                    record["win_both_halves_home_correct"] = (float(wbhh) >= 0.5) == (h1h_v > h1a_v and h2h_v > h2a_v)
+                wbha = pred_dict.get("win_both_halves_away_prob")
+                if wbha is not None:
+                    record["win_both_halves_away_correct"] = (float(wbha) >= 0.5) == (h1a_v > h1h_v and h2a_v > h2h_v)
+
+        # ── Corners market evaluation (soccer) ─────────────
+        hc = actual.get("home_corners")
+        ac = actual.get("away_corners")
+        if hc is not None and ac is not None:
+            try:
+                total_corners = float(hc) + float(ac)
+                for line, key in [(9.5, "corners_over9_5"), (10.5, "corners_over10_5"), (11.5, "corners_over11_5")]:
+                    p = pred_dict.get(f"{key}_prob")
+                    if p is not None:
+                        record[f"{key}_correct"] = (float(p) >= 0.5) == (total_corners > line)
+            except (TypeError, ValueError):
+                pass
+
+        # ── Cards market evaluation (soccer) ───────────────
+        hyc = actual.get("home_yellow_cards")
+        ayc = actual.get("away_yellow_cards")
+        if hyc is not None and ayc is not None:
+            try:
+                total_cards = float(hyc) + float(ayc)
+                hrc = actual.get("home_red_cards", 0) or 0
+                arc = actual.get("away_red_cards", 0) or 0
+                total_cards += float(hrc) * 2 + float(arc) * 2
+                for line, key in [(3.5, "cards_over3_5"), (4.5, "cards_over4_5"), (5.5, "cards_over5_5")]:
+                    p = pred_dict.get(f"{key}_prob")
+                    if p is not None:
+                        record[f"{key}_correct"] = (float(p) >= 0.5) == (total_cards > line)
+            except (TypeError, ValueError):
+                pass
+
+        # ── Soccer H2 Goals evaluation ──────────────────────
+        h_h2 = actual.get("home_h2_score")
+        a_h2 = actual.get("away_h2_score")
+        if h_h2 is not None and a_h2 is not None:
+            try:
+                h2_total = float(h_h2) + float(a_h2)
+                for line, key in [(0.5, "soccer_h2_over0_5"), (1.5, "soccer_h2_over1_5"), (2.5, "soccer_h2_over2_5")]:
+                    p = pred_dict.get(f"{key}_prob")
+                    if p is not None:
+                        record[f"{key}_correct"] = (float(p) >= 0.5) == (h2_total > line)
+            except (TypeError, ValueError):
+                pass
+
+        # ── NBA/WNBA/NCAAB Three-Pointer market evaluation ─
+        h3m = actual.get("home_three_m", actual.get("home_three_pointers_made"))
+        a3m = actual.get("away_three_m", actual.get("away_three_pointers_made"))
+        if h3m is not None and a3m is not None:
+            try:
+                total_3p = float(h3m) + float(a3m)
+                for mk in ["threes_over_low", "threes_over_mid", "threes_over_high"]:
+                    p = pred_dict.get(f"{mk}_prob")
+                    line_val = pred_dict.get(f"{mk.replace('over_', '')}_line")
+                    if p is not None and line_val is not None:
+                        record[f"{mk}_correct"] = (float(p) >= 0.5) == (total_3p > float(line_val))
+            except (TypeError, ValueError):
+                pass
+
+        # ── NHL Shots market evaluation ──────────────────────
+        h_shots = actual.get("home_shots_game", actual.get("home_shots_on_goal"))
+        a_shots = actual.get("away_shots_game", actual.get("away_shots_on_goal"))
+        if h_shots is not None and a_shots is not None:
+            try:
+                total_shots = float(h_shots) + float(a_shots)
+                # Dynamic line model keys
+                for mk in ["shots_over_low", "shots_over_mid", "shots_over_high"]:
+                    p = pred_dict.get(f"{mk}_prob")
+                    line_val = pred_dict.get(f"{mk}_line")
+                    if p is not None and line_val is not None:
+                        record[f"{mk}_correct"] = (float(p) >= 0.5) == (total_shots > float(line_val))
+                # Also check old fixed-line keys for backwards compatibility
+                for line, key in [(55.5, "shots_over55_5"), (60.5, "shots_over60_5"), (65.5, "shots_over65_5")]:
+                    p = pred_dict.get(f"{key}_prob")
+                    if p is not None:
+                        record[f"{key}_correct"] = (float(p) >= 0.5) == (total_shots > line)
+                # Home shots advantage
+                p_ha = pred_dict.get("home_shots_advantage_prob")
+                if p_ha is not None:
+                    record["home_shots_advantage_correct"] = (float(p_ha) >= 0.5) == (float(h_shots) > float(a_shots))
+            except (TypeError, ValueError):
+                pass
+
+        # ── MLB Hits market evaluation ───────────────────────
+        h_hits = actual.get("home_hits")
+        a_hits = actual.get("away_hits")
+        if h_hits is not None and a_hits is not None:
+            try:
+                total_hits = float(h_hits) + float(a_hits)
+                for line, key in [(14.5, "hits_over14_5"), (16.5, "hits_over16_5"), (18.5, "hits_over18_5")]:
+                    p = pred_dict.get(f"{key}_prob")
+                    if p is not None:
+                        record[f"{key}_correct"] = (float(p) >= 0.5) == (total_hits > line)
+            except (TypeError, ValueError):
+                pass
+
+        # ── MLB Per-Inning Markets (NRFI×9, F7, Late Innings) ─
+        all_inn_cols = [f"home_i{i}" for i in range(1, 10)] + [f"away_i{i}" for i in range(1, 10)]
+        if all(actual.get(c) is not None for c in all_inn_cols):
+            try:
+                for inn in range(1, 10):
+                    hi = float(actual.get(f"home_i{inn}", 0) or 0)
+                    ai = float(actual.get(f"away_i{inn}", 0) or 0)
+                    p_nrfi = pred_dict.get(f"nrfi_i{inn}_prob")
+                    if p_nrfi is not None:
+                        actual_nrfi_inn = (hi + ai == 0)
+                        record[f"nrfi_i{inn}_correct"] = (float(p_nrfi) >= 0.5) == actual_nrfi_inn
+                # F7
+                h7 = sum(float(actual.get(f"home_i{i}", 0) or 0) for i in range(1, 8))
+                a7 = sum(float(actual.get(f"away_i{i}", 0) or 0) for i in range(1, 8))
+                total7 = h7 + a7
+                p_f7h = pred_dict.get("f7_home_win_prob")
+                if p_f7h is not None:
+                    record["f7_home_win_correct"] = (float(p_f7h) >= 0.5) == (h7 > a7)
+                p_f7ov = pred_dict.get("f7_over_prob")
+                f7_line = pred_dict.get("f7_over_line")
+                if p_f7ov is not None and f7_line is not None:
+                    record["f7_over_correct"] = (float(p_f7ov) >= 0.5) == (total7 > float(f7_line))
+                # Late innings (7-9)
+                h39 = sum(float(actual.get(f"home_i{i}", 0) or 0) for i in range(7, 10))
+                a39 = sum(float(actual.get(f"away_i{i}", 0) or 0) for i in range(7, 10))
+                late_total = h39 + a39
+                p_late = pred_dict.get("late_inning_over_prob")
+                late_line = pred_dict.get("late_inning_line")
+                if p_late is not None and late_line is not None:
+                    record["late_inning_over_correct"] = (float(p_late) >= 0.5) == (late_total > float(late_line))
+            except (TypeError, ValueError):
+                pass
+
+        # ── Close Game / Blowout Markets ─────────────────────
+        if ah_f is not None and aa_f is not None:
+            try:
+                margin = abs(ah_f - aa_f)
+                p_cg = pred_dict.get("close_game_prob")
+                cg_thresh = pred_dict.get("close_game_thresh")
+                if p_cg is not None and cg_thresh is not None:
+                    record["close_game_correct"] = (float(p_cg) >= 0.5) == (margin <= float(cg_thresh))
+                p_bw = pred_dict.get("blowout_win_prob")
+                if p_bw is not None:
+                    _sport_blo = record.get("sport", "")
+                    _blo_thresh = 17 if _sport_blo in {"nfl", "ncaaf"} else 20
+                    record["blowout_win_correct"] = (float(p_bw) >= 0.5) == (margin > _blo_thresh)
+                p_os = pred_dict.get("one_score_game_prob")
+                if p_os is not None:
+                    record["one_score_game_correct"] = (float(p_os) >= 0.5) == (margin <= 8)
+            except (TypeError, ValueError):
+                pass
+
+        # ── NFL Second-Half Total Market ──────────────────────
+        h_q3 = _safe_float(actual.get("home_q3"))
+        a_q3 = _safe_float(actual.get("away_q3"))
+        h_q4 = _safe_float(actual.get("home_q4"))
+        a_q4 = _safe_float(actual.get("away_q4"))
+        h_q1 = _safe_float(actual.get("home_q1"))
+        a_q1 = _safe_float(actual.get("away_q1"))
+        if h_q3 is not None and a_q3 is not None and h_q4 is not None and a_q4 is not None:
+            try:
+                total_2h = (h_q3 + a_q3) + (h_q4 + a_q4)
+                for mk in ["nfl_2h_over_low", "nfl_2h_over_mid", "nfl_2h_over_high"]:
+                    p = pred_dict.get(f"{mk}_prob")
+                    line_val = pred_dict.get(f"{mk}_line")
+                    if p is not None and line_val is not None:
+                        record[f"{mk}_correct"] = (float(p) >= 0.5) == (total_2h > float(line_val))
+                # Q3 period total
+                total_q3 = h_q3 + a_q3
+                for tier in ("low", "mid", "high"):
+                    p = pred_dict.get(f"q3_over_{tier}_prob")
+                    line_val = pred_dict.get(f"q3_over_{tier}_line")
+                    if p is not None and line_val is not None:
+                        record[f"q3_over_{tier}_correct"] = (float(p) >= 0.5) == (total_q3 > float(line_val))
+                # Q4 period total
+                total_q4 = h_q4 + a_q4
+                for tier in ("low", "mid", "high"):
+                    p = pred_dict.get(f"q4_over_{tier}_prob")
+                    line_val = pred_dict.get(f"q4_over_{tier}_line")
+                    if p is not None and line_val is not None:
+                        record[f"q4_over_{tier}_correct"] = (float(p) >= 0.5) == (total_q4 > float(line_val))
+            except (TypeError, ValueError):
+                pass
+        if h_q1 is not None and a_q1 is not None:
+            try:
+                total_q1 = h_q1 + a_q1
+                for tier in ("low", "mid", "high"):
+                    p = pred_dict.get(f"q1_total_over_{tier}_prob")
+                    line_val = pred_dict.get(f"q1_total_{tier}_line")
+                    if p is not None and line_val is not None:
+                        record[f"q1_total_over_{tier}_correct"] = (float(p) >= 0.5) == (total_q1 > float(line_val))
+                # Q1 winner
+                q1_win_p = pred_dict.get("q1_home_win_prob")
+                if q1_win_p is not None:
+                    pred_q1_home_wins = float(q1_win_p) >= 0.5
+                    actual_q1_home_wins = h_q1 > a_q1
+                    record["q1_winner_correct"] = pred_q1_home_wins == actual_q1_home_wins
+            except (TypeError, ValueError):
+                pass
+
+        # ── NHL Period Goals Market ───────────────────────────
+        for period, h_col, a_col in [("p1", "home_p1", "away_p1"), ("p2", "home_p2", "away_p2"), ("p3", "home_p3", "away_p3")]:
+            hp = _safe_float(actual.get(h_col))
+            ap = _safe_float(actual.get(a_col))
+            if hp is not None and ap is not None:
+                try:
+                    total_period = hp + ap
+                    for tier in ("low", "mid", "high"):
+                        p = pred_dict.get(f"nhl_{period}_goals_over_{tier}_prob")
+                        if p is not None:
+                            # Use fixed 0.5/1.5/2.5 lines if no dynamic line stored
+                            record[f"nhl_{period}_over_{tier}_correct"] = (float(p) >= 0.5) == (total_period > 0.5)
+                except (TypeError, ValueError):
+                    pass
+
+        # ── Soccer Total Shots Market ────────────────────────
+        h_shots = _safe_float(actual.get("home_shots"))
+        a_shots = _safe_float(actual.get("away_shots"))
+        if h_shots is not None and a_shots is not None:
+            try:
+                total_shots = h_shots + a_shots
+                for tier in ("low", "mid", "high"):
+                    p = pred_dict.get(f"shots_total_over_{tier}_prob")
+                    line_val = pred_dict.get(f"shots_total_{tier}_line")
+                    if p is not None and line_val is not None:
+                        record[f"shots_total_over_{tier}_correct"] = (float(p) >= 0.5) == (total_shots > float(line_val))
+            except (TypeError, ValueError):
+                pass
+
+        # ── Motorsport Extra Markets ──────────────────────────
+        for mkey in ["motor_podium", "motor_points", "motor_dnf", "motor_fastest_lap"]:
+            p_mkt = pred_dict.get(f"{mkey}_prob")
+            if p_mkt is not None:
+                # Get actual from the game record if available
+                col = mkey.replace("motor_", "")
+                actual_val = actual.get(col)
+                if actual_val is not None:
+                    try:
+                        record[f"{mkey}_correct"] = (float(p_mkt) >= 0.5) == (float(actual_val) > 0)
+                    except (TypeError, ValueError):
+                        pass
+
+        # ── High / Low Scoring Markets ────────────────────────
+        if ah_f is not None and aa_f is not None:
+            try:
+                total_actual = ah_f + aa_f
+                p_hs = pred_dict.get("high_scoring_prob")
+                if p_hs is not None:
+                    # Model stores p90 line — use pred_dict if available
+                    hs_line = pred_dict.get("high_scoring_line")
+                    if hs_line is not None:
+                        record["high_scoring_correct"] = (float(p_hs) >= 0.5) == (total_actual > float(hs_line))
+                p_ls = pred_dict.get("low_scoring_prob")
+                if p_ls is not None:
+                    ls_line = pred_dict.get("low_scoring_line")
+                    if ls_line is not None:
+                        record["low_scoring_correct"] = (float(p_ls) >= 0.5) == (total_actual < float(ls_line))
+                p_bsh = pred_dict.get("both_score_high_prob")
+                if p_bsh is not None and total_actual > 0:
+                    # both_score_high: both teams above median — approximate with above half of total
+                    median_half = total_actual / 2
+                    actual_bsh = (ah_f > median_half * 0.8) and (aa_f > median_half * 0.8)
+                    record["both_score_high_correct"] = (float(p_bsh) >= 0.5) == actual_bsh
+            except (TypeError, ValueError):
+                pass
+
+        # ── NFL Scoring Surge Market ──────────────────────────
+        h_q1 = _safe_float(actual.get("home_q1"))
+        a_q1 = _safe_float(actual.get("away_q1"))
+        h_q2 = _safe_float(actual.get("home_q2"))
+        a_q2 = _safe_float(actual.get("away_q2"))
+        h_q3_ev = _safe_float(actual.get("home_q3"))
+        a_q3_ev = _safe_float(actual.get("away_q3"))
+        h_q4_ev = _safe_float(actual.get("home_q4"))
+        a_q4_ev = _safe_float(actual.get("away_q4"))
+        if all(v is not None for v in [h_q1, a_q1, h_q2, a_q2, h_q3_ev, a_q3_ev, h_q4_ev, a_q4_ev]):
+            try:
+                first_half_total = h_q1 + a_q1 + h_q2 + a_q2
+                second_half_total = h_q3_ev + a_q3_ev + h_q4_ev + a_q4_ev
+                p_surge = pred_dict.get("nfl_scoring_surge_prob")
+                if p_surge is not None:
+                    record["nfl_scoring_surge_correct"] = (float(p_surge) >= 0.5) == (second_half_total > first_half_total)
+            except (TypeError, ValueError):
+                pass
+
+        # ── BTTS + Win Combo Markets ──────────────────────────
+        if ah_f is not None and aa_f is not None:
+            btts = (ah_f > 0 and aa_f > 0)
+            for mkey, cond in [
+                ("btts_home_win", btts and ah_f > aa_f),
+                ("btts_away_win", btts and aa_f > ah_f),
+                ("btts_draw", btts and ah_f == aa_f),
+            ]:
+                p_bw = pred_dict.get(f"{mkey}_prob")
+                if p_bw is not None:
+                    record[f"{mkey}_correct"] = (float(p_bw) >= 0.5) == bool(cond)
+
+        # ── eSports Sweep / Decider Map Evaluation ────────────
+        # home_score = home map wins (0-3), away_score = away map wins
+        if ah_f is not None and aa_f is not None and record.get("sport", "") in {"csgo", "lol", "dota2", "valorant"}:
+            try:
+                p_h20 = pred_dict.get("home_2_0_win_prob")
+                if p_h20 is not None:
+                    actual_h20 = (ah_f == 2 and aa_f == 0)
+                    record["home_2_0_win_correct"] = (float(p_h20) >= 0.5) == actual_h20
+                p_a20 = pred_dict.get("away_2_0_win_prob")
+                if p_a20 is not None:
+                    actual_a20 = (aa_f == 2 and ah_f == 0)
+                    record["away_2_0_win_correct"] = (float(p_a20) >= 0.5) == actual_a20
+                p_dec = pred_dict.get("esports_decider_map_prob")
+                if p_dec is not None:
+                    total_maps = ah_f + aa_f
+                    actual_dec = (total_maps >= 3)
+                    record["esports_decider_map_correct"] = (float(p_dec) >= 0.5) == actual_dec
+                # Also compute legacy clean sweep and map total
+                p_cs = pred_dict.get("esports_clean_sweep_prob")
+                if p_cs is not None:
+                    actual_cs = (ah_f > aa_f and aa_f == 0) or (aa_f > ah_f and ah_f == 0)
+                    record["esports_clean_sweep_correct"] = (float(p_cs) >= 0.5) == actual_cs
+                mt_pred = pred_dict.get("esports_map_total_pred")
+                if mt_pred is not None:
+                    actual_mt = ah_f + aa_f
+                    record["esports_map_total_error"] = abs(float(mt_pred) - actual_mt)
+                p_mt2 = pred_dict.get("esports_map_total_over2_prob")
+                if p_mt2 is not None:
+                    record["esports_map_total_over2_correct"] = (float(p_mt2) >= 0.5) == ((ah_f + aa_f) > 2)
+            except (TypeError, ValueError):
+                pass
 
         return record
 
@@ -1508,6 +1963,17 @@ class Backtester:
                 "accuracy": round(cs_a_c / len(cs_a_recs), 4),
             }
 
+        # BTTS variant markets
+        for bk2 in ("btts_over2_5", "home_over1_5", "away_over1_5", "home_win_score2plus", "away_win_score2plus"):
+            bk2_recs = [r for r in records if f"{bk2}_correct" in r]
+            if bk2_recs:
+                bk2_c = sum(1 for r in bk2_recs if r[f"{bk2}_correct"])
+                result[bk2] = {
+                    "total": len(bk2_recs),
+                    "correct": bk2_c,
+                    "accuracy": round(bk2_c / len(bk2_recs), 4),
+                }
+
         # ── UFC Method of Victory ─────────────────────────
         ufc_m_recs = [r for r in records if "ufc_method_correct" in r]
         if ufc_m_recs:
@@ -1518,7 +1984,23 @@ class Backtester:
                 "accuracy": round(ufc_mc / len(ufc_m_recs), 4),
             }
 
-        # ── Golf Top-10 ───────────────────────────────────
+        for ufc_mkt_key, label in [
+            ("ufc_early_finish_correct", "ufc_early_finish"),
+            ("ufc_round1_finish_correct", "ufc_round1_finish"),
+            ("ufc_rounds_over_1_5_correct", "ufc_rounds_over_1_5"),
+            ("ufc_rounds_over_2_5_correct", "ufc_rounds_over_2_5"),
+            ("ufc_rounds_over_3_5_correct", "ufc_rounds_over_3_5"),
+        ]:
+            recs_u = [r for r in records if ufc_mkt_key in r]
+            if recs_u:
+                c_u = sum(1 for r in recs_u if r[ufc_mkt_key])
+                result[label] = {
+                    "total": len(recs_u),
+                    "correct": c_u,
+                    "accuracy": round(c_u / len(recs_u), 4),
+                }
+
+
         golf_t10_recs = [r for r in records if "golf_top10_correct" in r]
         if golf_t10_recs:
             golf_t10_c = sum(1 for r in golf_t10_recs if r["golf_top10_correct"])
@@ -1736,6 +2218,146 @@ class Backtester:
                 "accuracy": round(mt2_c / len(mt2_recs), 4),
             }
 
+        # ── F5 Innings (MLB) ──────────────────────────────
+        for f5_key in ("f5_home_win", "f5_away_win", "f5_tie", "f5_over4_5"):
+            f5_recs = [r for r in records if f"{f5_key}_correct" in r]
+            if f5_recs:
+                f5_c = sum(1 for r in f5_recs if r[f"{f5_key}_correct"])
+                result[f5_key] = {
+                    "total": len(f5_recs),
+                    "correct": f5_c,
+                    "accuracy": round(f5_c / len(f5_recs), 4),
+                }
+
+        # ── Correct Score Bands (Soccer) ─────────────────
+        cs_keys = [
+            "score_nil_nil", "score_1_0", "score_0_1", "score_1_1",
+            "score_2plus_0", "score_0_2plus", "score_2_1", "score_1_2",
+            "score_3plus_total", "score_low_total",
+        ]
+        for cs_key in cs_keys:
+            cs_recs = [r for r in records if f"{cs_key}_correct" in r]
+            if cs_recs:
+                cs_c = sum(1 for r in cs_recs if r[f"{cs_key}_correct"])
+                result[cs_key] = {
+                    "total": len(cs_recs),
+                    "correct": cs_c,
+                    "accuracy": round(cs_c / len(cs_recs), 4),
+                }
+
+        # ── First Half O/U + Win Both Halves (Soccer) ────
+        for h1_key in ("h1_over0_5", "h1_over1_5", "win_both_halves_home", "win_both_halves_away"):
+            h1_recs = [r for r in records if f"{h1_key}_correct" in r]
+            if h1_recs:
+                h1_c = sum(1 for r in h1_recs if r[f"{h1_key}_correct"])
+                result[h1_key] = {
+                    "total": len(h1_recs),
+                    "correct": h1_c,
+                    "accuracy": round(h1_c / len(h1_recs), 4),
+                }
+
+        # ── Period BTTS (hockey/basketball) ──────────────
+        for p_key in ("btts_period1", "btts_period2", "btts_period3"):
+            p_recs = [r for r in records if f"{p_key}_correct" in r]
+            if p_recs:
+                p_c = sum(1 for r in p_recs if r[f"{p_key}_correct"])
+                result[p_key] = {
+                    "total": len(p_recs),
+                    "correct": p_c,
+                    "accuracy": round(p_c / len(p_recs), 4),
+                }
+
+        # ── Corners Markets (Soccer) ──────────────────────
+        for c_key in ("corners_over9_5", "corners_over10_5", "corners_over11_5"):
+            c_recs = [r for r in records if f"{c_key}_correct" in r]
+            if c_recs:
+                c_c = sum(1 for r in c_recs if r[f"{c_key}_correct"])
+                result[c_key] = {
+                    "total": len(c_recs),
+                    "correct": c_c,
+                    "accuracy": round(c_c / len(c_recs), 4),
+                }
+
+        # ── Cards Markets (Soccer) ────────────────────────
+        for k_key in ("cards_over3_5", "cards_over4_5", "cards_over5_5"):
+            k_recs = [r for r in records if f"{k_key}_correct" in r]
+            if k_recs:
+                k_c = sum(1 for r in k_recs if r[f"{k_key}_correct"])
+                result[k_key] = {
+                    "total": len(k_recs),
+                    "correct": k_c,
+                    "accuracy": round(k_c / len(k_recs), 4),
+                }
+
+        # ── Soccer H2 Goals Markets ───────────────────────
+        for h2_key in ("soccer_h2_over0_5", "soccer_h2_over1_5", "soccer_h2_over2_5"):
+            h2_recs = [r for r in records if f"{h2_key}_correct" in r]
+            if h2_recs:
+                h2_c = sum(1 for r in h2_recs if r[f"{h2_key}_correct"])
+                result[h2_key] = {
+                    "total": len(h2_recs),
+                    "correct": h2_c,
+                    "accuracy": round(h2_c / len(h2_recs), 4),
+                }
+
+        # ── NBA/WNBA/NCAAB Three-Pointer Markets ─────────
+        for tp_key in ("threes_over_low", "threes_over_mid", "threes_over_high"):
+            tp_recs = [r for r in records if f"{tp_key}_correct" in r]
+            if tp_recs:
+                tp_c = sum(1 for r in tp_recs if r[f"{tp_key}_correct"])
+                result[tp_key] = {
+                    "total": len(tp_recs),
+                    "correct": tp_c,
+                    "accuracy": round(tp_c / len(tp_recs), 4),
+                }
+
+        # ── NHL Shots Markets (dynamic + legacy fixed) ────
+        for sh_key in (
+            "shots_over_low", "shots_over_mid", "shots_over_high",
+            "home_shots_advantage",
+            "shots_over55_5", "shots_over60_5", "shots_over65_5",
+        ):
+            sh_recs = [r for r in records if f"{sh_key}_correct" in r]
+            if sh_recs:
+                sh_c = sum(1 for r in sh_recs if r[f"{sh_key}_correct"])
+                result[sh_key] = {
+                    "total": len(sh_recs),
+                    "correct": sh_c,
+                    "accuracy": round(sh_c / len(sh_recs), 4),
+                }
+
+        # ── MLB Per-Inning NRFI Markets ───────────────────
+        for inn in range(1, 10):
+            for ni_key in [f"nrfi_i{inn}"]:
+                ni_recs = [r for r in records if f"{ni_key}_correct" in r]
+                if ni_recs:
+                    ni_c = sum(1 for r in ni_recs if r[f"{ni_key}_correct"])
+                    result[ni_key] = {
+                        "total": len(ni_recs),
+                        "correct": ni_c,
+                        "accuracy": round(ni_c / len(ni_recs), 4),
+                    }
+        for fk in ("f7_home_win", "f7_over", "late_inning_over"):
+            fk_recs = [r for r in records if f"{fk}_correct" in r]
+            if fk_recs:
+                fk_c = sum(1 for r in fk_recs if r[f"{fk}_correct"])
+                result[fk] = {
+                    "total": len(fk_recs),
+                    "correct": fk_c,
+                    "accuracy": round(fk_c / len(fk_recs), 4),
+                }
+
+        # ── MLB Hits Markets ──────────────────────────────
+        for ht_key in ("hits_over14_5", "hits_over16_5", "hits_over18_5"):
+            ht_recs = [r for r in records if f"{ht_key}_correct" in r]
+            if ht_recs:
+                ht_c = sum(1 for r in ht_recs if r[f"{ht_key}_correct"])
+                result[ht_key] = {
+                    "total": len(ht_recs),
+                    "correct": ht_c,
+                    "accuracy": round(ht_c / len(ht_recs), 4),
+                }
+
         # ── Player props ──────────────────────────────────
         _PLAYER_PROP_KEYS = [
             ("nba_pts_over_20", "nba_pts_over_20_correct"),
@@ -1754,6 +2376,121 @@ class Backtester:
                     "total": len(prop_recs),
                     "correct": prop_c,
                     "accuracy": round(prop_c / len(prop_recs), 4),
+                }
+
+        # ── Close Game / Blowout / One-Score Markets ──────
+        for cg_key in ("close_game", "blowout_win", "one_score_game"):
+            cg_recs = [r for r in records if f"{cg_key}_correct" in r]
+            if cg_recs:
+                cg_c = sum(1 for r in cg_recs if r[f"{cg_key}_correct"])
+                result[cg_key] = {
+                    "total": len(cg_recs),
+                    "correct": cg_c,
+                    "accuracy": round(cg_c / len(cg_recs), 4),
+                }
+
+        # ── NFL Second-Half Total Markets ─────────────────
+        for sh2_key in ("nfl_2h_over_low", "nfl_2h_over_mid", "nfl_2h_over_high", "nfl_scoring_surge"):
+            sh2_recs = [r for r in records if f"{sh2_key}_correct" in r]
+            if sh2_recs:
+                sh2_c = sum(1 for r in sh2_recs if r[f"{sh2_key}_correct"])
+                result[sh2_key] = {
+                    "total": len(sh2_recs),
+                    "correct": sh2_c,
+                    "accuracy": round(sh2_c / len(sh2_recs), 4),
+                }
+
+        # ── Q1/Q3/Q4 Period Total Markets ─────────────────
+        for qt_key in [
+            "q1_total_over_low", "q1_total_over_mid", "q1_total_over_high",
+            "q3_over_low", "q3_over_mid", "q3_over_high",
+            "q4_over_low", "q4_over_mid", "q4_over_high",
+        ]:
+            qt_recs = [r for r in records if f"{qt_key}_correct" in r]
+            if qt_recs:
+                qt_c = sum(1 for r in qt_recs if r[f"{qt_key}_correct"])
+                result[qt_key] = {
+                    "total": len(qt_recs),
+                    "correct": qt_c,
+                    "accuracy": round(qt_c / len(qt_recs), 4),
+                }
+
+        # ── Q1 Winner Market ─────────────────────────────
+        q1w_recs = [r for r in records if "q1_winner_correct" in r]
+        if q1w_recs:
+            q1w_c = sum(1 for r in q1w_recs if r["q1_winner_correct"])
+            result["q1_winner"] = {
+                "total": len(q1w_recs),
+                "correct": q1w_c,
+                "accuracy": round(q1w_c / len(q1w_recs), 4),
+            }
+
+        # ── NHL Period Goals Markets ──────────────────────
+        for period in ("p1", "p2", "p3"):
+            for tier in ("low", "mid", "high"):
+                pg_key = f"nhl_{period}_over_{tier}"
+                pg_recs = [r for r in records if f"{pg_key}_correct" in r]
+                if pg_recs:
+                    pg_c = sum(1 for r in pg_recs if r[f"{pg_key}_correct"])
+                    result[pg_key] = {
+                        "total": len(pg_recs),
+                        "correct": pg_c,
+                        "accuracy": round(pg_c / len(pg_recs), 4),
+                    }
+
+        # ── Soccer Total Shots Markets ────────────────────
+        for ts_key in ("shots_total_over_low", "shots_total_over_mid", "shots_total_over_high"):
+            ts_recs = [r for r in records if f"{ts_key}_correct" in r]
+            if ts_recs:
+                ts_c = sum(1 for r in ts_recs if r[f"{ts_key}_correct"])
+                result[ts_key] = {
+                    "total": len(ts_recs),
+                    "correct": ts_c,
+                    "accuracy": round(ts_c / len(ts_recs), 4),
+                }
+
+
+        for hl_key in ("high_scoring", "low_scoring", "both_score_high"):
+            hl_recs = [r for r in records if f"{hl_key}_correct" in r]
+            if hl_recs:
+                hl_c = sum(1 for r in hl_recs if r[f"{hl_key}_correct"])
+                result[hl_key] = {
+                    "total": len(hl_recs),
+                    "correct": hl_c,
+                    "accuracy": round(hl_c / len(hl_recs), 4),
+                }
+
+        # ── BTTS + Win Combo Markets ──────────────────────
+        for bw_key in ("btts_home_win", "btts_away_win", "btts_draw"):
+            bw_recs = [r for r in records if f"{bw_key}_correct" in r]
+            if bw_recs:
+                bw_c = sum(1 for r in bw_recs if r[f"{bw_key}_correct"])
+                result[bw_key] = {
+                    "total": len(bw_recs),
+                    "correct": bw_c,
+                    "accuracy": round(bw_c / len(bw_recs), 4),
+                }
+
+        # ── eSports Series Markets ────────────────────────
+        for es_key in ("home_2_0_win", "away_2_0_win", "esports_decider_map"):
+            es_recs = [r for r in records if f"{es_key}_correct" in r]
+            if es_recs:
+                es_c = sum(1 for r in es_recs if r[f"{es_key}_correct"])
+                result[es_key] = {
+                    "total": len(es_recs),
+                    "correct": es_c,
+                    "accuracy": round(es_c / len(es_recs), 4),
+                }
+
+        # ── Motorsport Extra Markets ──────────────────────
+        for mo_key in ("motor_podium", "motor_points", "motor_dnf", "motor_fastest_lap"):
+            mo_recs = [r for r in records if f"{mo_key}_correct" in r]
+            if mo_recs:
+                mo_c = sum(1 for r in mo_recs if r[f"{mo_key}_correct"])
+                result[mo_key] = {
+                    "total": len(mo_recs),
+                    "correct": mo_c,
+                    "accuracy": round(mo_c / len(mo_recs), 4),
                 }
 
         return result
