@@ -161,8 +161,10 @@ def format_report(metrics: list[SportMetrics]) -> str:
     else:
         for m in critical:
             status = "📉" if m.has_large_gap else "⚠️ "
+            live_str = f"{m.live_acc*100:5.1f}%" if m.live_acc is not None else "  N/A"
+            gap_str = f"{m.gap*100:+6.1f}%" if m.gap is not None else "   N/A"
             lines.append(f"  {status} {m.sport.upper():12} backtest:{m.backtest_acc*100:5.1f}%  " +
-                        f"live:{m.live_acc*100:5.1f}%  gap:{m.gap*100 if m.gap else 0:+6.1f}%  " +
+                        f"live:{live_str}  gap:{gap_str}  " +
                         f"n={m.backtest_n}" + 
                         (f"  [Only {m.live_n} live samples]" if m.live_n and m.live_n < 10 else ""))
     

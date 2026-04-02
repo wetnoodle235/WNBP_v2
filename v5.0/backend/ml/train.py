@@ -60,9 +60,25 @@ _META_COLS = {
     "away_team_id",
     "home_score",
     "away_score",
-    # quarter/period/inning scores — targets for extra markets, not input features
+    # quarter/period/inning/half scores — targets for extra markets, not input features
     "home_q1", "home_q2", "home_q3", "home_q4", "home_ot",
     "away_q1", "away_q2", "away_q3", "away_q4", "away_ot",
+    "home_p1", "home_p2", "home_p3",
+    "away_p1", "away_p2", "away_p3",
+    "home_h1", "home_h2", "away_h1", "away_h2",
+    # MLB innings
+    "home_i1", "home_i2", "home_i3", "home_i4", "home_i5",
+    "home_i6", "home_i7", "home_i8", "home_i9",
+    "away_i1", "away_i2", "away_i3", "away_i4", "away_i5",
+    "away_i6", "away_i7", "away_i8", "away_i9",
+    # Per-game box-score stats (known only after game, not predictive features)
+    "home_hits_game", "away_hits_game",
+    "home_shots_game", "away_shots_game",
+    "home_reb_game", "away_reb_game",
+    "home_ast_game", "away_ast_game",
+    "home_to_game", "away_to_game",
+    "home_three_m_game", "away_three_m_game",
+    "home_turnovers_game", "away_turnovers_game",
 }
 
 # Sports that can legitimately end in a draw/tie at full time
@@ -260,8 +276,23 @@ class Trainer:
     def _split_xy(
         df: pd.DataFrame,
     ) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
-        """Split a DataFrame into (X_features, home_score, away_score)."""
-        feature_cols = [c for c in df.columns if c not in _META_COLS and c != "season"]
+        """Split a DataFrame into (X_features, home_score, away_score).
+
+        Drops _META_COLS plus any column that looks like a per-game result
+        (period/inning/half scores, per-game box-score stats) to prevent
+        data leakage from the game being predicted.
+        """
+        import re
+        _LEAKY_PATTERN = re.compile(
+            r"^(home|away)_(i\d+|p\d+|h\d+|q\d+|ot)$"       # period/inning/half scores
+            r"|^(home|away)_\w+_game$"                         # per-game box stats (home_hits_game, etc.)
+        )
+        feature_cols = [
+            c for c in df.columns
+            if c not in _META_COLS
+            and c != "season"
+            and not _LEAKY_PATTERN.search(c)
+        ]
         X = df[feature_cols].select_dtypes(include=[np.number]).fillna(0)
         X = _add_delta_features(X)
         home_score = df["home_score"] if "home_score" in df.columns else pd.Series(dtype=float)
@@ -1049,6 +1080,7 @@ class Trainer:
         Xv_va = X_val.loc[valid_va]
 
         # Low / mid / high total bands
+        any_band_fitted = False
         for name, cond_tr, cond_va in [
             ("total_low", total_tr <= p33, total_va <= p33),
             ("total_mid", (total_tr > p33) & (total_tr <= p67), (total_va > p33) & (total_va <= p67)),
@@ -1061,6 +1093,7 @@ class Trainer:
             m = self._fit_cls_safe(name, Xv_tr, y_tr, Xv_va, y_va)
             if m:
                 models[name] = m
+                any_band_fitted = True
 
         # Over/under median
         y_over_tr = (total_tr > median_t).astype(int)
@@ -1068,6 +1101,10 @@ class Trainer:
         m = self._fit_cls_safe("total_over_median", Xv_tr, y_over_tr, Xv_va, y_over_va)
         if m:
             models["total_over_median"] = m
+
+        # Store band thresholds so predictor/backtest can classify actual totals correctly
+        if any_band_fitted or "total_over_median" in models:
+            models["_total_band_thresholds"] = {"p33": p33, "p67": p67, "median": median_t}
             logger.info("  total_band models fitted (p33=%.1f, p67=%.1f, median=%.1f)", p33, p67, median_t)
 
     def _train_second_half_winner(
@@ -1328,6 +1365,37 @@ class Trainer:
         if m:
             models["esports_map_total_over2"] = m
             logger.info("  esports_map_total_over2 fitted (rate=%.1f%%)", 100 * float(y_over2_tr.mean()))
+
+        # Decider map: P(series goes to final map — bo3 map 3, bo5 map 5)
+        # series_max can be inferred: most common is bo3 (max 3) or bo5 (max 5)
+        # Use map_total == series_max as decider target
+        # Proxy: if both teams win at least 1 map each AND total >= max-1 maps
+        series_max_tr = map_total_tr.apply(lambda x: 3 if x <= 3 else 5)
+        series_max_va = map_total_va.apply(lambda x: 3 if x <= 3 else 5)
+        y_decider_tr = (map_total_tr == series_max_tr).astype(int)
+        y_decider_va = (map_total_va == series_max_va).astype(int)
+        if y_decider_tr.sum() >= 50:
+            m = self._fit_cls_safe("esports_decider_map", Xv_tr, y_decider_tr, Xv_va, y_decider_va)
+            if m:
+                models["esports_decider_map"] = m
+                logger.info("  esports_decider_map fitted (rate=%.1f%%)", 100 * float(y_decider_tr.mean()))
+
+        # Map handicap: home team wins by 2+ maps (dominant) vs loses at least 1
+        y_home_dominant_tr = (df_hs_tr >= 2) & (df_as_tr == 0)
+        y_home_dominant_va = (df_hs_va >= 2) & (df_as_va == 0)
+        m = self._fit_cls_safe("esports_home_dominant", Xv_tr, y_home_dominant_tr.astype(int),
+                               Xv_va, y_home_dominant_va.astype(int))
+        if m:
+            models["esports_home_dominant"] = m
+            logger.info("  esports_home_dominant fitted (rate=%.1f%%)", 100 * float(y_home_dominant_tr.mean()))
+
+        y_away_dominant_tr = (df_as_tr >= 2) & (df_hs_tr == 0)
+        y_away_dominant_va = (df_as_va >= 2) & (df_hs_va == 0)
+        m = self._fit_cls_safe("esports_away_dominant", Xv_tr, y_away_dominant_tr.astype(int),
+                               Xv_va, y_away_dominant_va.astype(int))
+        if m:
+            models["esports_away_dominant"] = m
+            logger.info("  esports_away_dominant fitted (rate=%.1f%%)", 100 * float(y_away_dominant_tr.mean()))
 
     def _train_dominant_win(
         self,
