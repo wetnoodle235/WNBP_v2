@@ -1,0 +1,16 @@
+# ──────────────────────────────────────────────────────────
+# SportStock V5.0 — Hourly Injuries Timer
+#
+# Fires hourly to keep injuries data fresh.
+# ──────────────────────────────────────────────────────────
+
+[Unit]
+Description=SportStock V5.0 — Hourly Injuries Timer
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=90
+
+[Install]
+WantedBy=timers.target

@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 
 from fastapi import FastAPI, Request
 from fastapi.openapi.docs import get_swagger_ui_oauth2_redirect_html
@@ -34,9 +35,12 @@ logger = logging.getLogger(__name__)
 
 INTERNAL_DOC_PATH_SUFFIXES = {
     "/advanced-stats",
+    "/advanced_stats",
     "/match-events",
+    "/match_events",
     "/ratings",
     "/team-stats",
+    "/team_stats",
     "/transactions",
     "/schedule",
     "/simulation",
@@ -50,8 +54,8 @@ SELLABLE_OPENAPI_PATHS = {
     "/v1/{sport}/standings",
     "/v1/{sport}/odds",
     "/v1/{sport}/injuries",
-    "/v1/{sport}/market-signals",
-    "/v1/{sport}/schedule-fatigue",
+    "/v1/{sport}/market_signals",
+    "/v1/{sport}/schedule_fatigue",
 }
 
 SELLABLE_OPENAPI_TAGS = {
@@ -64,6 +68,19 @@ SELLABLE_OPENAPI_TAGS = {
     "Injuries",
     "Advanced",
 }
+
+OPENAPI_PATH = "/openapi.json"
+
+
+def _is_local_request(request: Request) -> bool:
+    """Allow docs/schema access only from localhost clients."""
+    host = (request.client.host if request.client else "") or ""
+    if host in {"127.0.0.1", "::1", "localhost"}:
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except Exception:
+        return False
 
 
 DOCS_CSS = """
@@ -172,10 +189,10 @@ def _build_docs_html(openapi_url: str, oauth2_redirect_url: str | None, base_url
                 <p>Interactive API explorer for games, odds, standings, predictions, injuries, news, and model diagnostics.</p>
                 <div class=\"docs-chips\">
                     <span class=\"docs-chip\">Base URL: {base_url}</span>
-                    <span class=\"docs-chip\">Auth: X-API-Key header</span>
+                    <span class="docs-chip">Auth: localhost bypass, remote uses X-API-Key</span>
                     <span class=\"docs-chip\">Version: v5.0</span>
                     <span class=\"docs-chip\">Schema: {openapi_url}</span>
-                    <span class=\"docs-chip\">Customer-safe reference</span>
+                    <span class="docs-chip">Local-only developer reference</span>
                 </div>
             </section>
 
@@ -390,10 +407,6 @@ async def lifespan(app: FastAPI):
 
     # Periodically evict stale rate-limit buckets to prevent unbounded growth.
     _rl_middleware: RateLimitMiddleware | None = None
-    for mw in app.middleware_stack.__dict__.get("app", []):  # type: ignore[attr-defined]
-        if isinstance(mw, RateLimitMiddleware):
-            _rl_middleware = mw
-            break
 
     async def _cleanup_rate_limiter() -> None:
         while True:
@@ -453,6 +466,7 @@ def create_app() -> FastAPI:
         ),
         docs_url=None,
         redoc_url=None,
+        openapi_url=None,
         openapi_tags=TAGS_METADATA,
         lifespan=lifespan,
     )
@@ -460,7 +474,7 @@ def create_app() -> FastAPI:
     def custom_openapi():
         if app.openapi_schema:
             return app.openapi_schema
-        include_internal_docs = os.getenv("V5_INCLUDE_INTERNAL_DOCS", "false").lower() in {"1", "true", "yes"}
+        include_internal_docs = os.getenv("V5_INCLUDE_INTERNAL_DOCS", "true").lower() in {"1", "true", "yes"}
         schema = get_openapi(
             title=app.title,
             version=app.version,
@@ -541,21 +555,33 @@ def create_app() -> FastAPI:
 
     @app.api_route("/docs", methods=["GET", "HEAD"], include_in_schema=False)
     async def custom_docs(request: Request) -> HTMLResponse:
+        if not _is_local_request(request):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         base_url = str(request.base_url).rstrip("/")
         return HTMLResponse(
             _build_docs_html(
-                openapi_url=app.openapi_url,
+                openapi_url=OPENAPI_PATH,
                 oauth2_redirect_url=app.swagger_ui_oauth2_redirect_url,
                 base_url=base_url,
             )
         )
 
+    @app.get(OPENAPI_PATH, include_in_schema=False)
+    async def openapi_schema(request: Request) -> dict:
+        if not _is_local_request(request):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        return app.openapi()
+
     @app.get("/openapi-sellable.json", include_in_schema=False)
-    async def sellable_openapi() -> dict:
+    async def sellable_openapi(request: Request) -> dict:
+        if not _is_local_request(request):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         return _build_sellable_openapi(app)
 
     @app.get(app.swagger_ui_oauth2_redirect_url, include_in_schema=False)
-    async def swagger_ui_redirect() -> HTMLResponse:
+    async def swagger_ui_redirect(request: Request) -> HTMLResponse:
+        if not _is_local_request(request):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         return get_swagger_ui_oauth2_redirect_html()
 
     return app

@@ -71,24 +71,17 @@ class BaseballExtractor(BaseFeatureExtractor):
         self._pitcher_game_by_team: dict[str, pd.DataFrame] = {}
 
     def _load_pitcher_game_stats(self) -> pd.DataFrame:
-        """Load and cache pitcher_game_stats_*.parquet files."""
+        """Load and cache pitcher_game_stats parquets via DuckDB reader."""
         if self._pitcher_game_cache is not None:
             return self._pitcher_game_cache
-        sport_dir = self.data_dir / "normalized" / self.sport
-        frames = []
-        for p in sorted(sport_dir.glob("pitcher_game_stats_*.parquet")):
-            try:
-                df = pd.read_parquet(p)
-                frames.append(df)
-            except Exception:
-                pass
-        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        try:
+            combined = self._reader.load_all_seasons(self.sport, "pitcher_game_stats")
+        except Exception:
+            combined = pd.DataFrame()
         if not combined.empty:
             for col in ("game_id", "team_id", "player_id"):
                 if col in combined.columns:
                     combined[col] = combined[col].astype(str)
-            # Map MLB Stats API team IDs (108-158) to abbreviations to match
-            # the same abbreviation key used in _pitcher_idx
             if "team_id" in combined.columns:
                 combined["team_abbrev"] = combined["team_id"].map(_MLB_API_TEAM_MAP).fillna(combined["team_id"])
         self._pitcher_game_cache = combined
@@ -184,40 +177,16 @@ class BaseballExtractor(BaseFeatureExtractor):
         except Exception:
             return defaults
 
-    def _load_all_games(self) -> pd.DataFrame:
-        """Load and cache all seasons' game data for cross-season form calculations."""
-        if self._all_games_cache is not None:
-            return self._all_games_cache
-        sport_dir = self.data_dir / "normalized" / self.sport
-        frames = []
-        for p in sorted(sport_dir.glob("games_*.parquet")):
-            try:
-                df = pd.read_parquet(p)
-                frames.append(df)
-            except Exception:
-                pass
-        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        if not combined.empty and "date" in combined.columns:
-            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
-            combined.sort_values("date", inplace=True, ignore_index=True)
-        self._all_games_cache = combined
-        return combined
-
     def _load_all_player_stats(self) -> pd.DataFrame:
         """Load and cache all MLB player stats parquets, building per-team indexes."""
         if self._all_pstats_cache is not None:
             return self._all_pstats_cache
-        sport_dir = self.data_dir / "normalized" / self.sport
-        frames = []
-        for p in sorted(sport_dir.glob("player_stats_*.parquet")):
-            try:
-                df = pd.read_parquet(p)
-                df["date"] = pd.to_datetime(df["date"], errors="coerce")
-                frames.append(df)
-            except Exception:
-                pass
-        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        try:
+            combined = self._reader.load_all_seasons(self.sport, "player_stats")
+        except Exception:
+            combined = pd.DataFrame()
         if not combined.empty and "date" in combined.columns:
+            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
             combined.sort_values("date", inplace=True, ignore_index=True)
             combined = combined.reset_index(drop=True)
             # Build per-team pitcher/batter indexes for O(log n) lookups
@@ -644,9 +613,8 @@ class BaseballExtractor(BaseFeatureExtractor):
     ) -> dict[str, float]:
         """Season-level win%, games back, and streak from standings or rolling games."""
         try:
-            standings_path = self.data_dir / self.sport / f"standings_{season}.parquet"
-            if standings_path.exists():
-                std = pd.read_parquet(standings_path)
+            std = self.load_standings(season)
+            if not std.empty:
                 row = std[std["team_id"].astype(str) == str(team_id)]
                 if not row.empty:
                     row = row.iloc[0]
@@ -702,30 +670,25 @@ class BaseballExtractor(BaseFeatureExtractor):
         the aggregate Lahman-based advanced_batting.parquet.
         """
         defaults = {"woba": 0.0, "wrc_plus": 100.0, "iso": 0.0, "babip": 0.0, "bb_pct": 0.0, "k_pct": 0.0}
-        # Try season-specific file first
-        season_path = self.data_dir / "normalized" / self.sport / f"advanced_batting_{season}.parquet"
-        agg_path = self.data_dir / "normalized" / self.sport / "advanced_batting.parquet"
         cache_key = f"adv_batting_{season}"
         if not hasattr(self, "_adv_batting_season_cache"):
             self._adv_batting_season_cache: dict[str, pd.DataFrame] = {}
         if cache_key not in self._adv_batting_season_cache:
             df: pd.DataFrame | None = None
-            if season_path.exists():
-                try:
-                    df = pd.read_parquet(season_path)
-                except Exception:
-                    df = None
+            # Try via DuckDB reader (season-specific curated first)
+            try:
+                df = self.load_advanced_batting(season)
+            except Exception:
+                df = None
             if df is None or df.empty:
-                # Fall back to aggregate file filtered by season
+                # Fall back to aggregate via reader (all seasons)
                 if not hasattr(self, "_adv_batting_cache"):
-                    if agg_path.exists():
-                        try:
-                            full = pd.read_parquet(agg_path)
+                    try:
+                        full = self._reader.load_all_seasons(self.sport, "advanced_batting")
+                        if not full.empty:
                             full["season"] = pd.to_numeric(full["season"], errors="coerce")
-                            self._adv_batting_cache = full
-                        except Exception:
-                            self._adv_batting_cache = pd.DataFrame()
-                    else:
+                        self._adv_batting_cache = full
+                    except Exception:
                         self._adv_batting_cache = pd.DataFrame()
                 agg = self._adv_batting_cache
                 if not agg.empty and "season" in agg.columns:
@@ -999,12 +962,14 @@ class BaseballExtractor(BaseFeatureExtractor):
             "tgs_scoring_rate": 0.0,
         }
         try:
-            sport_dir = self.data_dir / "normalized" / self.sport
             frames = []
             for s in range(max(2020, season - 2), season + 1):
-                p = sport_dir / f"team_game_stats_{s}.parquet"
-                if p.exists():
-                    frames.append(pd.read_parquet(p))
+                try:
+                    tgs_s = self._reader.load(self.sport, "team_game_stats", season=s)
+                    if not tgs_s.empty:
+                        frames.append(tgs_s)
+                except Exception:
+                    pass
             if not frames:
                 return defaults
             tgs = pd.concat(frames, ignore_index=True)
@@ -1090,12 +1055,14 @@ class BaseballExtractor(BaseFeatureExtractor):
             "bat_rbi_pg": 4.5,
         }
         try:
-            sport_dir = self.data_dir / "normalized" / self.sport
             frames = []
             for s in range(max(2020, season - 1), season + 1):
-                p = sport_dir / f"batter_game_stats_{s}.parquet"
-                if p.exists():
-                    frames.append(pd.read_parquet(p))
+                try:
+                    bgs_s = self._reader.load(self.sport, "batter_game_stats", season=s)
+                    if not bgs_s.empty:
+                        frames.append(bgs_s)
+                except Exception:
+                    pass
             if not frames:
                 return defaults
             bgs = pd.concat(frames, ignore_index=True)

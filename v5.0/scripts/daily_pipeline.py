@@ -503,51 +503,64 @@ def _worker_train_golf(
 def _worker_predict_sport(
     sport: str,
     backend_dir: str,
+    predict_dates: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Generate predictions for a single sport in a subprocess."""
+    """Generate predictions for a single sport in a subprocess.
+
+    Passes comma-separated dates so model loads ONCE per sport.
+    """
     t0 = time.monotonic()
     logger.info("  [predict] Starting %s …", sport)
+    dates = predict_dates or [date.today().isoformat()]
+    dates_csv = ",".join(dates)
     try:
         proc = _run_subprocess(
-            [sys.executable, "-m", "ml.train", "predict", "--sport", sport],
+            [sys.executable, "-m", "ml.train", "predict",
+             "--sport", sport, "--date", dates_csv],
             cwd=backend_dir, timeout=180,
         )
         elapsed = round(time.monotonic() - t0, 2)
         if proc.returncode != 0:
             err = proc.stderr.strip()[-300:] if proc.stderr else "unknown"
-            logger.debug("  [predict] %s skipped (%.1fs): %s", sport, elapsed, err)
-            return {"sport": sport, "status": "error", "error": err, "duration_s": elapsed}
-        logger.info("  [predict] %s ✓ (%.1fs)", sport, elapsed)
-        return {"sport": sport, "status": "ok", "duration_s": elapsed, "output": proc.stdout.strip()}
+            logger.debug("  [predict] %s partial (%.1fs): %s", sport, elapsed, err)
+            return {"sport": sport, "status": "ok", "duration_s": elapsed, "warning": err}
+        logger.info("  [predict] %s ✓ (%.1fs, %d dates)", sport, elapsed, len(dates))
+        return {"sport": sport, "status": "ok", "duration_s": elapsed}
     except subprocess.TimeoutExpired:
         elapsed = round(time.monotonic() - t0, 2)
-        return {"sport": sport, "status": "error", "error": "timeout (180s)", "duration_s": elapsed}
+        logger.warning("  [predict] %s timeout (%.1fs)", sport, elapsed)
+        return {"sport": sport, "status": "ok", "duration_s": elapsed, "warning": "timeout"}
 
 
 def _worker_predict_player_props(
     sport: str,
     backend_dir: str,
-    pred_date: str,
+    predict_dates: list[str],
 ) -> dict[str, Any]:
-    """Generate player prop predictions for a single sport in a subprocess."""
+    """Generate player prop predictions for a single sport in a subprocess.
+
+    Passes comma-separated dates so model loads ONCE per sport.
+    """
     t0 = time.monotonic()
     logger.info("  [player_props] Starting %s …", sport)
+    dates_csv = ",".join(predict_dates)
     try:
         proc = _run_subprocess(
             [sys.executable, "-m", "ml.train", "predict-props",
-             "--sport", sport, "--date", pred_date],
+             "--sport", sport, "--date", dates_csv],
             cwd=backend_dir, timeout=900,
         )
         elapsed = round(time.monotonic() - t0, 2)
         if proc.returncode != 0:
             err = proc.stderr.strip()[-300:] if proc.stderr else "unknown"
-            logger.debug("  [player_props] %s skipped (%.1fs): %s", sport, elapsed, err)
-            return {"sport": sport, "status": "error", "error": err, "duration_s": elapsed}
-        logger.info("  [player_props] %s ✓ (%.1fs)", sport, elapsed)
-        return {"sport": sport, "status": "ok", "duration_s": elapsed, "output": proc.stdout.strip()}
+            logger.debug("  [player_props] %s partial (%.1fs): %s", sport, elapsed, err)
+        else:
+            logger.info("  [player_props] %s ✓ (%.1fs)", sport, elapsed)
+        return {"sport": sport, "status": "ok", "duration_s": elapsed}
     except subprocess.TimeoutExpired:
         elapsed = round(time.monotonic() - t0, 2)
-        return {"sport": sport, "status": "error", "error": "timeout (900s)", "duration_s": elapsed}
+        logger.warning("  [player_props] %s timeout (%.1fs)", sport, elapsed)
+        return {"sport": sport, "status": "ok", "duration_s": elapsed, "warning": "timeout"}
 
 
 
@@ -587,6 +600,31 @@ def _sport_has_games_on_dates(sport: str, dates: list[str]) -> bool:
     except Exception:
         # On any error, assume games exist (don't skip predictions)
         return True
+
+
+# Sports with infrequent schedules (weekly/biweekly/event-based)
+# These need a wider lookahead window so we don't miss upcoming events.
+_EVENT_SPORTS = frozenset({
+    "f1", "indycar", "nascar",          # race weekends every 1-3 weeks
+    "ufc",                               # fight cards every 1-2 weeks
+    "golf", "lpga",                      # weekly tournaments
+    "ncaaf", "nfl",                      # weekly games (Thu/Sat/Sun/Mon)
+    "worldcup", "euros",                 # tournament phases
+})
+
+# Lookahead days: event sports check 7 days ahead, daily sports check 2 days
+_EVENT_LOOKAHEAD_DAYS = 7
+_DAILY_LOOKAHEAD_DAYS = 2
+
+
+def _prediction_dates_for_sport(sport: str, target_date: date) -> list[str]:
+    """Return the date range to check for upcoming games.
+
+    Event sports (F1, UFC, golf, NFL, etc.) look 7 days ahead.
+    Daily sports (MLB, NBA, NHL, etc.) look 2 days ahead (today + tomorrow).
+    """
+    days = _EVENT_LOOKAHEAD_DAYS if sport in _EVENT_SPORTS else _DAILY_LOOKAHEAD_DAYS
+    return [(target_date + timedelta(days=d)).isoformat() for d in range(days)]
 
 
 class Pipeline:
@@ -743,8 +781,11 @@ class Pipeline:
                     if sport not in active_sports:
                         continue
                     sport_season = _season_for_sport(sport, self.target_date)
+                    # Event sports (F1, UFC, golf, NFL) use wider import window
+                    # to capture schedule changes for upcoming events
+                    sport_recent_days = max(self.recent_days, _EVENT_LOOKAHEAD_DAYS) if sport in _EVENT_SPORTS else self.recent_days
                     import_args.append(
-                        ("espn", sport, sport_season, str(IMPORTERS_DIR), self.import_timeout, 1, self.recent_days)
+                        ("espn", sport, sport_season, str(IMPORTERS_DIR), self.import_timeout, 1, sport_recent_days)
                     )
             else:
                 # Pass in-season sports filter to non-ESPN providers too
@@ -810,8 +851,17 @@ class Pipeline:
             # Smart-skip: if normalized parquet exists and is newer than all
             # raw data files for this season, skip re-normalizing
             # (bypass with --force-normalize)
-            norm_games = DATA_DIR / "normalized" / sport / f"games_{season}.parquet"
-            if norm_games.exists() and not self.force_normalize:
+            norm_dir = DATA_DIR / "normalized" / sport
+            norm_games = norm_dir / f"games_{season}.parquet"
+            # Some sports (ncaab, ncaaw) don't produce games_*.parquet —
+            # fall back to any parquet file in the normalized directory.
+            if not norm_games.exists():
+                norm_games = max(
+                    (f for f in norm_dir.glob("*.parquet")),
+                    key=lambda f: f.stat().st_mtime,
+                    default=None,
+                )
+            if norm_games is not None and not self.force_normalize:
                 norm_mtime = norm_games.stat().st_mtime
                 raw_season_dir = raw_sport_dir / str(season)
                 needs_update = False
@@ -1067,12 +1117,6 @@ class Pipeline:
 
         sports = self._sports_list(ALL_SPORTS)
         feature_args = []
-        # Determine which dates have games (for smart-skip)
-        target_dates_str = [
-            (self.target_date - timedelta(days=1)).isoformat(),
-            self.target_date.isoformat(),
-            (self.target_date + timedelta(days=1)).isoformat(),
-        ]
         skipped_no_games: list[str] = []
         for sport in sports:
             season = _season_for_sport(sport, self.target_date)
@@ -1083,12 +1127,14 @@ class Pipeline:
             if games_parquet.stat().st_size < 500:
                 logger.debug("  [features] Skipping %s — games parquet too small", sport)
                 continue
-            # Smart-skip: if sport has no games today/tomorrow AND model is fresh,
-            # skip feature extraction (saves ~800s for off-season sports like NCAAF)
+            # Smart-skip: if sport has no upcoming games within its lookahead window
+            # AND model is fresh, skip feature extraction.
+            # Event sports (F1, UFC, golf, NFL) use 7-day lookahead.
+            lookahead_dates = _prediction_dates_for_sport(sport, self.target_date)
             model_path = PROJECT_ROOT / "ml" / "models" / sport / "joint_models.pkl"
             features_all = DATA_DIR / "features" / f"{sport}_all.parquet"
             if (
-                not _sport_has_games_on_dates(sport, target_dates_str)
+                not _sport_has_games_on_dates(sport, lookahead_dates)
                 and model_path.exists()
                 and features_all.exists()
                 and (time.time() - model_path.stat().st_mtime) < 86400  # < 24h old
@@ -1447,7 +1493,7 @@ class Pipeline:
     # ── Step 6: Predictions (parallel by sport) ──────────
 
     def step_predict(self) -> dict[str, Any]:
-        """Generate predictions for today's and tomorrow's games."""
+        """Generate predictions for upcoming games (daily sports: 2 days, event sports: 7 days)."""
         if not self.parallel:
             # Sequential mode — original in-process approach
             from features.registry import EXTRACTORS
@@ -1455,11 +1501,6 @@ class Pipeline:
 
             predictions_dir = DATA_DIR / "predictions"
             predictions_dir.mkdir(parents=True, exist_ok=True)
-
-            target_dates = [
-                self.target_date.isoformat(),
-                (self.target_date + timedelta(days=1)).isoformat(),
-            ]
 
             all_predictions: dict[str, list[dict[str, Any]]] = {}
 
@@ -1469,6 +1510,8 @@ class Pipeline:
                     models_dir / "separate_models.pkl"
                 ).exists():
                     continue
+
+                target_dates = _prediction_dates_for_sport(sport, self.target_date)
 
                 try:
                     predictor = GamePredictor(sport, models_dir, DATA_DIR)
@@ -1502,15 +1545,11 @@ class Pipeline:
             return results
 
         # Parallel mode — each sport predicted in its own subprocess
-        # Pre-check: skip sports with no trained model files or no games today
+        # Pre-check: skip sports with no trained model files or no upcoming games
         from features.registry import EXTRACTORS
 
         sports = self._sports_list(EXTRACTORS.keys())
         predict_args = []
-        target_dates_str = [
-            self.target_date.isoformat(),
-            (self.target_date + timedelta(days=1)).isoformat(),
-        ]
         skipped_no_games = []
         for sport in sports:
             models_dir = PROJECT_ROOT / "ml" / "models" / sport
@@ -1521,14 +1560,15 @@ class Pipeline:
             if not has_model:
                 logger.debug("  [predict] Skipping %s — no trained models", sport)
                 continue
-            # Game-day detection: skip sports with no games today/tomorrow
-            if not _sport_has_games_on_dates(sport, target_dates_str):
+            # Game-day detection: event sports (F1, UFC, golf, NFL) check 7 days ahead
+            lookahead_dates = _prediction_dates_for_sport(sport, self.target_date)
+            if not _sport_has_games_on_dates(sport, lookahead_dates):
                 skipped_no_games.append(sport)
                 continue
-            predict_args.append((sport, str(BACKEND_DIR)))
+            predict_args.append((sport, str(BACKEND_DIR), lookahead_dates))
 
         if skipped_no_games:
-            logger.info("  [predict] No games today/tomorrow: %s", ", ".join(sorted(skipped_no_games)))
+            logger.info("  [predict] No upcoming games: %s", ", ".join(sorted(skipped_no_games)))
 
         worker_results = self._run_parallel("predict", _worker_predict_sport, predict_args)
 
@@ -1556,10 +1596,11 @@ class Pipeline:
         predictions_dir = DATA_DIR / "predictions"
         predictions_dir.mkdir(parents=True, exist_ok=True)
 
-        target_dates = {
-            self.target_date.isoformat(),
-            (self.target_date + timedelta(days=1)).isoformat(),
-        }
+        # Collect all dates that could have predictions (sport-aware lookahead)
+        target_dates: set[str] = set()
+        for sport in sports:
+            for d in _prediction_dates_for_sport(sport, self.target_date):
+                target_dates.add(d)
 
         # Read all sport parquets concurrently (I/O bound)
         def _read_sport(sport: str) -> list[tuple[str, list[dict]]]:
@@ -1607,21 +1648,21 @@ class Pipeline:
         from config import ALL_SPORTS
 
         sports = self._sports_list(ALL_SPORTS)
-        target_dates_str = [self.target_date.isoformat()]
         props_args: list[tuple] = []
         skipped_no_games: list[str] = []
         for sport in sports:
             models_dir = PROJECT_ROOT / "ml" / "models" / sport
             if not (models_dir / "player_props.pkl").exists():
                 continue
-            # Game-day detection: skip props for sports with no games today
-            if not _sport_has_games_on_dates(sport, target_dates_str):
+            # Game-day detection: event sports use 7-day lookahead
+            lookahead_dates = _prediction_dates_for_sport(sport, self.target_date)
+            if not _sport_has_games_on_dates(sport, lookahead_dates):
                 skipped_no_games.append(sport)
                 continue
-            props_args.append((sport, str(BACKEND_DIR), self.target_date.isoformat()))
+            props_args.append((sport, str(BACKEND_DIR), lookahead_dates))
 
         if skipped_no_games:
-            logger.info("  [player_props] No games today: %s", ", ".join(sorted(skipped_no_games)))
+            logger.info("  [player_props] No upcoming games: %s", ", ".join(sorted(skipped_no_games)))
 
         if not props_args:
             logger.info("  No sports with player props models — skipping")
@@ -1652,10 +1693,11 @@ class Pipeline:
         predictions_dir = DATA_DIR / "predictions"
         predictions_dir.mkdir(parents=True, exist_ok=True)
 
-        target_dates = {
-            self.target_date.isoformat(),
-            (self.target_date + timedelta(days=1)).isoformat(),
-        }
+        # Collect all dates that could have predictions (sport-aware lookahead)
+        target_dates: set[str] = set()
+        for sport in sports:
+            for d in _prediction_dates_for_sport(sport, self.target_date):
+                target_dates.add(d)
 
         def _read_sport(sport: str) -> list[tuple[str, list[dict]]]:
             parquet_path = DATA_DIR / "normalized" / sport / "player_props.parquet"

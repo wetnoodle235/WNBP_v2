@@ -57,21 +57,19 @@ class BasketballExtractor(BaseFeatureExtractor):
         if self._team_id_alias_cache is not None:
             return self._team_id_alias_cache
         aliases: dict[str, list[str]] = {}
-        sport_dir = self.data_dir / "normalized" / self.sport
-        # NBA team full-name to abbreviation from teams parquet
+        # Load all teams data via DuckDB reader
         name_to_abbrev: dict[str, str] = {}
-        for teams_path in sorted(sport_dir.glob("teams_*.parquet")):
-            try:
-                tf = pd.read_parquet(teams_path)
-                if "name" in tf.columns and "abbreviation" in tf.columns:
-                    for _, row in tf.iterrows():
-                        name_to_abbrev[str(row["name"]).lower()] = str(row["abbreviation"])
-            except Exception:
-                pass
+        try:
+            tf = self._reader.load_all_seasons(self.sport, "teams")
+            if not tf.empty and "name" in tf.columns and "abbreviation" in tf.columns:
+                for _, row in tf.iterrows():
+                    name_to_abbrev[str(row["name"]).lower()] = str(row["abbreviation"])
+        except Exception:
+            pass
         # Build numeric_id -> full_name from games, then map to abbrev
-        for games_path in sorted(sport_dir.glob("games_*.parquet")):
-            try:
-                gf = pd.read_parquet(games_path, columns=["home_team", "home_team_id", "away_team", "away_team_id"])
+        try:
+            gf = self._reader.load_all_seasons(self.sport, "games")
+            if not gf.empty:
                 for col_id, col_name in [("home_team_id", "home_team"), ("away_team_id", "away_team")]:
                     if col_id not in gf.columns:
                         continue
@@ -88,8 +86,8 @@ class BasketballExtractor(BaseFeatureExtractor):
                             aliases[nid] = existing
                         else:
                             aliases.setdefault(nid, [nid])
-            except Exception:
-                pass
+        except Exception:
+            pass
         self._team_id_alias_cache = aliases
         return aliases
 
@@ -111,25 +109,6 @@ class BasketballExtractor(BaseFeatureExtractor):
                     all_ids.update(alias_list)
         mask = ps["team_id"].astype(str).isin(all_ids)
         return ps.loc[mask]
-
-    def _load_all_games(self) -> pd.DataFrame:
-        """Load and cache all seasons' game data for cross-season form calculations."""
-        if self._all_games_cache is not None:
-            return self._all_games_cache
-        sport_dir = self.data_dir / "normalized" / self.sport
-        frames = []
-        for p in sorted(sport_dir.glob("games_*.parquet")):
-            try:
-                df = pd.read_parquet(p)
-                frames.append(df)
-            except Exception:
-                pass
-        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        if not combined.empty and "date" in combined.columns:
-            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
-            combined.sort_values("date", inplace=True, ignore_index=True)
-        self._all_games_cache = combined
-        return combined
 
     # ── Score-Based Advanced Helpers ──────────────────────
 

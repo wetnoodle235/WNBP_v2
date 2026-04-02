@@ -14,6 +14,7 @@
 :: Schedule (all times local / EST):
 ::   12:05 AM daily   — Opening odds
 ::   Every hour 6-23  — Current odds snapshots
+::   Every hour       — Injuries imports (all supported providers)
 ::   Every 1 min 12-23 — Closing odds (dynamic skip if no games)
 ::   6:00 AM daily    — Full daily pipeline
 ::   8:00 AM Tuesday  — Season simulator
@@ -66,6 +67,10 @@ echo.
 echo   %PREFIX%_CurrentOdds
 echo     Trigger: Daily, hourly 06:00-23:00
 echo     Action:  %WINDOWS_DIR%collect_odds.bat current
+echo.
+echo   %PREFIX%_InjuriesHourly
+echo     Trigger: Hourly (every hour)
+echo     Action:  %WINDOWS_DIR%injuries_hourly.bat
 echo.
 echo   %PREFIX%_ClosingOdds
 echo     Trigger: Daily, every minute 12:00-23:59
@@ -123,6 +128,13 @@ for %%H in (06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23) do (
         /rl HIGHEST /ru "%USERNAME%" >nul
 )
 echo [scheduler]   Created: %PREFIX%_CurrentOdds_*  (hourly 06:00-23:00)
+
+:: ── Injuries import: every hour ─────────────────────────
+schtasks /create /f /tn "%PREFIX%_InjuriesHourly" ^
+    /tr "\"%WINDOWS_DIR%injuries_hourly.bat\"" ^
+    /sc HOURLY /mo 1 /st 00:00 ^
+    /rl HIGHEST /ru "%USERNAME%" >nul
+echo [scheduler]   Created: %PREFIX%_InjuriesHourly  (hourly)
 
 :: ── Closing odds: every minute 12 PM – 12 AM ─────────────
 :: Use a single task with /ri (repeat interval) 1 minute, duration 12 hours

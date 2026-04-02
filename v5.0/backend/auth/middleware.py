@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import time
 from collections import defaultdict
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +47,18 @@ def _auth_enabled() -> bool:
 
 def _get_platform_api_key() -> str:
     return os.getenv("PLATFORM_API_KEY", "")
+
+
+def _is_local_request(request: Request | None) -> bool:
+    if request is None:
+        return False
+    host = (request.client.host if request.client else "") or ""
+    if host in {"127.0.0.1", "::1", "localhost"}:
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except Exception:
+        return False
 
 
 # ── In-memory sliding-window rate limiter ────────────────
@@ -107,6 +120,9 @@ def _make_anonymous_key_info() -> APIKeyInfo:
 async def resolve_api_key_user(request: Request) -> Optional[User]:
     """Try to resolve a User from the API key in request (X-API-Key header or api_key param).
     Returns None if no key provided. Raises 401 for invalid keys."""
+    if _is_local_request(request):
+        return None
+
     raw_key: Optional[str] = request.headers.get("X-API-Key")
     if raw_key is None:
         raw_key = request.query_params.get("api_key")
@@ -136,6 +152,9 @@ async def resolve_api_key_user(request: Request) -> Optional[User]:
 async def get_api_key(request: Request) -> Optional[APIKeyInfo]:
     """Extract and validate API key from X-API-Key header or ?api_key= param.
     Returns None when auth is disabled or no key is provided."""
+    if _is_local_request(request):
+        return _make_anonymous_key_info()
+
     raw_key: Optional[str] = request.headers.get("X-API-Key")
     if raw_key is None:
         raw_key = request.query_params.get("api_key")
@@ -170,9 +189,12 @@ async def get_api_key(request: Request) -> Optional[APIKeyInfo]:
 
 
 async def require_api_key(
+    request: Request,
     api_key: Optional[APIKeyInfo] = Depends(get_api_key),
 ) -> APIKeyInfo:
     """Dependency that requires a valid API key when auth is enabled."""
+    if _is_local_request(request):
+        return api_key or _make_anonymous_key_info()
     if not _auth_enabled():
         return api_key or _make_anonymous_key_info()
     if api_key is None:

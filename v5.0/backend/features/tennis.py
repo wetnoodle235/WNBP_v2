@@ -140,15 +140,10 @@ class TennisExtractor(BaseFeatureExtractor):
         """Load and cache all seasons' game data for cross-season form calculations."""
         if self._all_games_cache is not None:
             return self._all_games_cache
-        sport_dir = self.data_dir / "normalized" / self.sport
-        frames = []
-        for p in sorted(sport_dir.glob("games_*.parquet")):
-            try:
-                df = pd.read_parquet(p)
-                frames.append(df)
-            except Exception:
-                pass
-        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        try:
+            combined = self._reader.load_all_seasons(self.sport, "games")
+        except Exception:
+            combined = pd.DataFrame()
         if not combined.empty and "date" in combined.columns:
             combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
             combined.sort_values("date", inplace=True, ignore_index=True)
@@ -515,17 +510,15 @@ class TennisExtractor(BaseFeatureExtractor):
             return self._all_pstats_cache
             
         sport_dir = self.data_dir / "normalized" / self.sport
-        frames = []
-        for p in sorted(sport_dir.glob("player_stats_*.parquet")):
-            try:
-                frames.append(pd.read_parquet(p))
-            except Exception:
-                pass
-        if not frames:
+        try:
+            combined_raw = self._reader.load_all_seasons(self.sport, "player_stats")
+        except Exception:
+            combined_raw = pd.DataFrame()
+        if combined_raw.empty:
             self._all_pstats_cache = pd.DataFrame()
-            # Still build name-to-ID bridge from games even if no player_stats files
             self._build_name_id_bridge(sport_dir)
             return self._all_pstats_cache
+        frames = [combined_raw]
         combined = pd.concat(frames, ignore_index=True)
 
         # Merge extra quality columns from player_stats.parquet (non-year-specific)
@@ -543,15 +536,11 @@ class TennisExtractor(BaseFeatureExtractor):
 
         # date is typically null — enrich from games files via game_id → id join
         if "game_id" in combined.columns:
-            game_frames = []
-            for p in sorted(sport_dir.glob("games_*.parquet")):
-                try:
-                    gdf = pd.read_parquet(p, columns=["id", "date"])
-                    game_frames.append(gdf)
-                except Exception:
-                    pass
-            if game_frames:
-                games_lookup = pd.concat(game_frames, ignore_index=True).drop_duplicates("id")
+            try:
+                games_lookup = self._load_all_games()[["id", "date"]].drop_duplicates("id") if "id" in self._load_all_games().columns else pd.DataFrame()
+            except Exception:
+                games_lookup = pd.DataFrame()
+            if not games_lookup.empty:
                 games_lookup["date"] = pd.to_datetime(games_lookup["date"], errors="coerce")
                 combined = combined.drop(columns=["date"], errors="ignore").merge(
                     games_lookup.rename(columns={"id": "game_id"}),
@@ -578,28 +567,24 @@ class TennisExtractor(BaseFeatureExtractor):
         self._all_pstats_cache = combined
         return combined
 
-    def _build_name_id_bridge(self, sport_dir: Path) -> None:
-        """Build player_name → numeric_player_id bridge from games with numeric IDs.
-        
-        2025/2026 games use UUID-based home_team_id but player_stats use numeric ESPN IDs.
-        This bridge enables UUID → numeric ID resolution via player name.
-        """
+    def _build_name_id_bridge(self, sport_dir: Path | None = None) -> None:
+        """Build player_name → numeric_player_id bridge from games with numeric IDs."""
         if self._name_to_player_id:
             return  # Already built
-        for p in sorted(sport_dir.glob("games_*.parquet")):
-            try:
-                gdf = pd.read_parquet(p, columns=["home_team", "home_team_id", "away_team", "away_team_id"])
-                # Only use rows where IDs look numeric (not UUID)
-                for name_col, id_col in [("home_team", "home_team_id"), ("away_team", "away_team_id")]:
-                    if name_col in gdf.columns and id_col in gdf.columns:
-                        pairs = gdf[[name_col, id_col]].dropna()
-                        numeric_mask = pairs[id_col].astype(str).str.match(r"^\d+$")
-                        for _, row in pairs[numeric_mask].iterrows():
-                            name_key = str(row[name_col]).strip().lower()
-                            if name_key and name_key not in self._name_to_player_id:
-                                self._name_to_player_id[name_key] = str(row[id_col])
-            except Exception:
-                pass
+        try:
+            gdf = self._load_all_games()
+            if gdf.empty:
+                return
+            for name_col, id_col in [("home_team", "home_team_id"), ("away_team", "away_team_id")]:
+                if name_col in gdf.columns and id_col in gdf.columns:
+                    pairs = gdf[[name_col, id_col]].dropna()
+                    numeric_mask = pairs[id_col].astype(str).str.match(r"^\d+$")
+                    for _, row in pairs[numeric_mask].iterrows():
+                        name_key = str(row[name_col]).strip().lower()
+                        if name_key and name_key not in self._name_to_player_id:
+                            self._name_to_player_id[name_key] = str(row[id_col])
+        except Exception:
+            pass
 
     def _resolve_player_id(self, player_id: str, player_name: str = "") -> str:
         """Resolve UUID-based player IDs to numeric IDs using name bridge.

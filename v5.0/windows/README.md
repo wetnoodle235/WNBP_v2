@@ -28,6 +28,7 @@ Both `.bat` (Command Prompt) and `.ps1` (PowerShell) versions are provided.
 | `stop.bat` / `stop.ps1` | `scripts/stop.sh` | Stop all running services |
 | `daily-pipeline.bat` | `scripts/daily-pipeline.sh` | Import → normalize → extract features |
 | `collect_odds.bat` | `scripts/collect_odds.sh` | Odds collection (opening/closing/current) |
+| `injuries_hourly.bat` | `importers/src/live/injuries_hourly.ts` | Injuries-only import across supported providers |
 | `backfill.bat` | `scripts/backfill.sh` | Backfill historical data 2023–2026 |
 | `live_model.bat` | `scripts/live_model.py --daemon` | Live win-probability model (daemon) |
 | `season_simulator.bat` | `scripts/season_simulator.py` | Monte Carlo season projections |
@@ -70,6 +71,7 @@ The following tasks are registered under the `SportStock_V5` prefix:
 |------|----------|-------------|
 | `SportStock_V5_OpeningOdds` | Daily 00:05 | Opening lines collection |
 | `SportStock_V5_CurrentOdds_*` | Hourly 06:00–23:00 | Hourly odds snapshots |
+| `SportStock_V5_InjuriesHourly` | Hourly | Injuries-only refresh across providers |
 | `SportStock_V5_ClosingOdds` | Every 1 min, 12:00–00:00 | Closing lines (skips if no games) |
 | `SportStock_V5_DailyPipeline` | Daily 06:00 | Full data → normalize → features |
 | `SportStock_V5_SeasonSimulator` | Tuesday 08:00 | Monte Carlo projections |

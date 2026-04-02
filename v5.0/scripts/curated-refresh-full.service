@@ -1,0 +1,18 @@
+[Unit]
+Description=SportStock V5.0 - Full Curated Rebuild and DuckDB Bulk Refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/derek/Documents/stock/v5.0
+ExecStart=/home/derek/Documents/stock/.venv/bin/python3 scripts/recurring_curated_refresh.py --mode full
+Environment=PATH=/home/derek/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/derek
+EnvironmentFile=-/home/derek/Documents/stock/v5.0/.env
+StandardOutput=append:/home/derek/Documents/stock/v5.0/logs/curated_refresh_full.log
+StandardError=append:/home/derek/Documents/stock/v5.0/logs/curated_refresh_full.log
+TimeoutStartSec=10800
+
+[Install]
+WantedBy=default.target

@@ -14,6 +14,7 @@
 # Schedule overview (all times EST):
 #   12:05 AM  — Opening odds (daily)
 #   Every hour 6 AM – 11 PM — Current odds snapshots
+#   Every hour — Injuries imports (all supported providers)
 #   Every min 12 PM – 12 AM — Closing odds (dynamic)
 #   6:00 AM   — Full daily pipeline
 #   Continuous — Live importer (systemd service)
@@ -57,6 +58,10 @@ PROJECT=$ROOT
 # Hourly snapshots to track line movement throughout the day
 0 6-23 * * *  cd \$PROJECT && ./scripts/collect_odds.sh current >> logs/cron_current.log 2>&1 $CRON_TAG
 
+# ── Injuries Imports (every hour) ───────────────────────
+# Runs injuries-only import across all providers that expose injuries
+0 * * * *  cd \$PROJECT/importers && npm run import:injuries:hourly >> ../logs/cron_injuries.log 2>&1 $CRON_TAG
+
 # ── Closing Odds (every minute, peak game hours 12 PM – 12 AM EST)
 # Polls for games starting soon; skips if no imminent games
 * 12-23 * * *  cd \$PROJECT && ./scripts/collect_odds.sh closing >> logs/cron_closing.log 2>&1 $CRON_TAG
@@ -64,6 +69,14 @@ PROJECT=$ROOT
 # ── Full Daily Pipeline (6:00 AM EST) ───────────────────
 # Import all data, normalize, extract features, predictions
 0 6 * * *  cd \$PROJECT && python3 scripts/daily_pipeline.py >> logs/cron_pipeline.log 2>&1 $CRON_TAG
+
+# ── Recurring Curated + DuckDB Refresh (every 30 min) ───
+# Auto-detects changed normalized inputs and bulk-refreshes curated + DuckDB once.
+*/30 * * * *  cd \$PROJECT && /home/derek/Documents/stock/.venv/bin/python3 scripts/recurring_curated_refresh.py --mode auto >> logs/cron_curated_refresh.log 2>&1 $CRON_TAG
+
+# ── Full Curated Rebuild (daily) ─────────────────────────
+# Rebuild all categories across all sports and bulk-refresh DuckDB catalog.
+25 6 * * *  cd \$PROJECT && /home/derek/Documents/stock/.venv/bin/python3 scripts/recurring_curated_refresh.py --mode full >> logs/cron_curated_refresh_full.log 2>&1 $CRON_TAG
 
 # ── Log rotation (weekly, keep 30 days) ─────────────────
 0 3 * * 0  find \$PROJECT/logs -name "*.log" -mtime +30 -delete $CRON_TAG
@@ -120,8 +133,11 @@ install_crontab() {
     echo "  Schedule (EST):"
     echo "    12:05 AM daily   — Opening odds"
     echo "    Every hour 6-11  — Current odds"
+    echo "    Every hour       — Injuries imports"
     echo "    Every min 12-12  — Closing odds (dynamic)"
     echo "    6:00 AM daily    — Full pipeline"
+    echo "    Every 30 min     — Curated auto refresh + DuckDB bulk refresh"
+    echo "    6:25 AM daily    — Full curated rebuild + DuckDB bulk refresh"
     echo "    3:00 AM Sunday   — Log cleanup"
 }
 
@@ -168,6 +184,12 @@ install_systemd() {
         "oddsapi-snapshot-opening.timer"
         "oddsapi-snapshot-closing.service"
         "oddsapi-snapshot-closing.timer"
+        "injuries-hourly.service"
+        "injuries-hourly.timer"
+        "curated-refresh.service"
+        "curated-refresh.timer"
+        "curated-refresh-full.service"
+        "curated-refresh-full.timer"
         "autobet.service"
     )
 
@@ -215,6 +237,9 @@ SVCEOF
     systemctl --user enable sgo-snapshot-closing.timer 2>/dev/null || true
     systemctl --user enable oddsapi-snapshot-opening.timer 2>/dev/null || true
     systemctl --user enable oddsapi-snapshot-closing.timer 2>/dev/null || true
+    systemctl --user enable injuries-hourly.timer 2>/dev/null || true
+    systemctl --user enable curated-refresh.timer 2>/dev/null || true
+    systemctl --user enable curated-refresh-full.timer 2>/dev/null || true
     log "Enabled all timers"
 
     # Start timers
@@ -224,6 +249,9 @@ SVCEOF
     systemctl --user start sgo-snapshot-closing.timer 2>/dev/null || true
     systemctl --user start oddsapi-snapshot-opening.timer 2>/dev/null || true
     systemctl --user start oddsapi-snapshot-closing.timer 2>/dev/null || true
+    systemctl --user start injuries-hourly.timer 2>/dev/null || true
+    systemctl --user start curated-refresh.timer 2>/dev/null || true
+    systemctl --user start curated-refresh-full.timer 2>/dev/null || true
     log "Started all timers"
 
     # Enable continuous services
@@ -238,6 +266,7 @@ SVCEOF
     echo "    systemctl --user list-timers                          # view all timers"
     echo "    systemctl --user status sgo-snapshot-opening.timer    # check SGO opening"
     echo "    systemctl --user status oddsapi-snapshot-closing.timer # check OddsAPI closing"
+    echo "    systemctl --user status injuries-hourly.timer          # check hourly injuries"
     echo "    systemctl --user start sgo-poller.service             # start SGO odds poller"
     echo "    systemctl --user start autobet.service                # start autobet scheduler"
     echo "    systemctl --user start live-importer.service          # start live importer"

@@ -33,6 +33,7 @@
     "import:opendota": "tsx src/cli.ts --provider=opendota",
     "import:weather": "tsx src/cli.ts --provider=weather",
     "import:all": "tsx src/cli.ts --all",
+    "import:injuries:hourly": "tsx src/live/injuries_hourly.ts",
     "list": "tsx src/cli.ts --list",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/"

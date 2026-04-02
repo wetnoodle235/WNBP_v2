@@ -24,11 +24,13 @@ class Settings(BaseSettings):
     data_dir: Optional[Path] = Field(default=None)
     raw_dir: Optional[Path] = Field(default=None)
     normalized_dir: Optional[Path] = Field(default=None)
+    normalized_curated_dir: Optional[Path] = Field(default=None)
 
     # Data reader backend
-    backend_reader: str = "parquet"  # parquet | duckdb
+    backend_reader: str = "duckdb"  # parquet | duckdb
     duckdb_path: Optional[Path] = Field(default=None)
     duckdb_enabled_sports: str = ""  # comma-separated, empty = all sports
+    duckdb_use_curated: bool = True
 
     # Server
     host: str = "0.0.0.0"
@@ -67,6 +69,8 @@ class Settings(BaseSettings):
             self.raw_dir = self.data_dir / "raw"
         if self.normalized_dir is None:
             self.normalized_dir = self.data_dir / "normalized"
+        if self.normalized_curated_dir is None:
+            self.normalized_curated_dir = self.data_dir / "normalized_curated"
         if self.duckdb_path is None:
             self.duckdb_path = self.data_dir / "normalized.duckdb"
 

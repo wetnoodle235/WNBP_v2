@@ -3,5 +3,6 @@
 # ──────────────────────────────────────────────────────────
 
 from .normalizer import Normalizer
+from .curated_parquet_builder import CuratedParquetBuilder
 
-__all__ = ["Normalizer"]
+__all__ = ["Normalizer", "CuratedParquetBuilder"]

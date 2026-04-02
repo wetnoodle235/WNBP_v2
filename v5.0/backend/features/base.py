@@ -6,6 +6,10 @@
 # data.  Every sport-specific extractor inherits from this
 # class and implements ``extract_game_features`` plus
 # ``get_feature_names``.
+#
+# Data is read via CuratedDataReader (DuckDB over
+# normalized_curated hive-partitioned parquets) with automatic
+# fallback to legacy data/normalized/ flat parquets.
 # ──────────────────────────────────────────────────────────
 
 from __future__ import annotations
@@ -18,6 +22,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from features.data_reader import get_reader, CuratedDataReader
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +59,8 @@ class BaseFeatureExtractor(ABC):
     def __init__(self, data_dir: Path | str) -> None:
         self.data_dir = Path(data_dir) if not isinstance(data_dir, Path) else data_dir
         self.normalized_dir = self.data_dir / "normalized"
+        # DuckDB-backed curated reader (shared per-thread singleton)
+        self._reader: CuratedDataReader = get_reader(self.data_dir)
         self._games_cache: dict[str, pd.DataFrame] = {}
         self._team_stats_cache: dict[str, pd.DataFrame] = {}
         self._player_stats_cache: dict[str, pd.DataFrame] = {}
@@ -73,24 +81,29 @@ class BaseFeatureExtractor(ABC):
     # ── Data Loaders (with per-season caching) ────────────
 
     def _parquet_path(self, data_type: str, season: int) -> Path:
+        """Legacy path helper — kept for any direct usages in subclasses."""
         return self.normalized_dir / self.sport / f"{data_type}_{season}.parquet"
 
     def _load_all_games(self) -> pd.DataFrame:
-        """Load and concatenate all season game parquets for cross-season form/H2H.
+        """Load all seasons of game data via DuckDB/curated with legacy fallback.
 
-        Results are cached on the instance.  Subclasses that override ``__init__``
-        must call ``super().__init__`` to ensure ``_all_games_cache`` exists.
+        Results are cached on the instance.  Provides cross-season form/H2H
+        lookback.  Curated parquets have multi-season coverage (e.g. NBA
+        2020-2026) vs old normalized which only has current season.
         """
         if getattr(self, "_all_games_cache", None) is not None:
             return self._all_games_cache  # type: ignore[return-value]
-        sport_dir = self.normalized_dir / self.sport
-        frames: list[pd.DataFrame] = []
-        for p in sorted(sport_dir.glob("games_*.parquet")):
-            try:
-                frames.append(pd.read_parquet(p))
-            except Exception:
-                pass
-        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        combined = self._reader.load_all_seasons(self.sport, "games")
+        if combined.empty:
+            # Hard legacy fallback
+            sport_dir = self.normalized_dir / self.sport
+            frames: list[pd.DataFrame] = []
+            for p in sorted(sport_dir.glob("games_*.parquet")):
+                try:
+                    frames.append(pd.read_parquet(p))
+                except Exception:
+                    pass
+            combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         if not combined.empty and "date" in combined.columns:
             combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
             combined.sort_values("date", inplace=True, ignore_index=True)
@@ -98,7 +111,7 @@ class BaseFeatureExtractor(ABC):
         return combined
 
     def _parquet_path_fallback(self, data_type: str, season: int) -> Path | None:
-        """Return the path for a data type, trying season-suffixed first, then bare."""
+        """Legacy path helper — used only when curated is unavailable."""
         path = self._parquet_path(data_type, season)
         if path.exists():
             return path
@@ -130,18 +143,20 @@ class BaseFeatureExtractor(ABC):
         ps_unique = player_stats[["player_name", "team_id"]].drop_duplicates("player_name").copy()
         ps_unique["name_lower"] = ps_unique["player_name"].str.lower().str.strip()
 
-        # Also try the players roster file for broader coverage
-        players_path = self._parquet_path_fallback("players", season)
-        if players_path:
-            try:
-                players_df = pd.read_parquet(players_path)
-                if "name" in players_df.columns and "team_id" in players_df.columns:
-                    p_unique = players_df[["name", "team_id"]].drop_duplicates("name").copy()
-                    p_unique.columns = ["player_name", "team_id"]
-                    p_unique["name_lower"] = p_unique["player_name"].str.lower().str.strip()
-                    ps_unique = pd.concat([ps_unique, p_unique], ignore_index=True).drop_duplicates("name_lower")
-            except Exception:
-                pass
+        # Also try the players roster from curated (broader coverage)
+        players_df = self._reader.load(self.sport, "players", season=season)
+        if players_df.empty:
+            players_path = self._parquet_path_fallback("players", season)
+            if players_path:
+                try:
+                    players_df = pd.read_parquet(players_path)
+                except Exception:
+                    players_df = pd.DataFrame()
+        if not players_df.empty and "name" in players_df.columns and "team_id" in players_df.columns:
+            p_unique = players_df[["name", "team_id"]].drop_duplicates("name").copy()
+            p_unique.columns = ["player_name", "team_id"]
+            p_unique["name_lower"] = p_unique["player_name"].str.lower().str.strip()
+            ps_unique = pd.concat([ps_unique, p_unique], ignore_index=True).drop_duplicates("name_lower")
 
         inj_df = injuries[["player_name", "team_id"]].copy()
         inj_df["name_lower"] = inj_df["player_name"].str.lower().str.strip()
@@ -164,14 +179,24 @@ class BaseFeatureExtractor(ABC):
         logger.debug("Built team ID map with %d entries", len(self._team_id_map))
 
     def _load_team_name_map(self, season: int | str) -> dict[str, str]:
-        """Build team name → team_id mapping from teams parquet files."""
+        """Build team name → team_id mapping from teams data."""
         season_int = int(season) if not isinstance(season, int) else season
-        for s in [season_int, season_int - 1, season_int + 1, season_int - 2]:
-            path = self.normalized_dir / self.sport / f"teams_{s}.parquet"
-            if path.exists():
-                teams_df = pd.read_parquet(path)
-                if "name" in teams_df.columns and "id" in teams_df.columns:
-                    return dict(zip(teams_df["name"], teams_df["id"].astype(str)))
+        teams_df = self._reader.load(self.sport, "teams", season=season_int)
+        if teams_df.empty:
+            # Fallback: try adjacent seasons
+            for s in [season_int - 1, season_int + 1, season_int - 2]:
+                path = self.normalized_dir / self.sport / f"teams_{s}.parquet"
+                if path.exists():
+                    try:
+                        teams_df = pd.read_parquet(path)
+                        break
+                    except Exception:
+                        pass
+        if not teams_df.empty:
+            name_col = "name" if "name" in teams_df.columns else ("team_name" if "team_name" in teams_df.columns else None)
+            id_col = "id" if "id" in teams_df.columns else ("team_id" if "team_id" in teams_df.columns else None)
+            if name_col and id_col:
+                return dict(zip(teams_df[name_col], teams_df[id_col].astype(str)))
         return {}
 
     def _resolve_team_ids(self, df: pd.DataFrame, season: int) -> pd.DataFrame:
@@ -209,103 +234,145 @@ class BaseFeatureExtractor(ABC):
     def load_games(self, season: int | str) -> pd.DataFrame:
         cache_key = str(season)
         if cache_key not in self._games_cache:
-            path = self._parquet_path("games", season)
-            if not path.exists():
-                logger.warning("Games file not found: %s", path)
-                self._games_cache[cache_key] = pd.DataFrame()
+            df = self._reader.load(self.sport, "games", season=season)
+            if df.empty:
+                logger.warning("Games not found for %s season %s", self.sport, season)
             else:
-                df = pd.read_parquet(path)
                 if "date" in df.columns:
                     df["date"] = pd.to_datetime(df["date"], errors="coerce")
                     df.sort_values("date", inplace=True)
                 df = self._resolve_team_ids(df, season)
-                self._games_cache[cache_key] = df
+            self._games_cache[cache_key] = df
         return self._games_cache[cache_key]
 
     def load_team_stats(self, season: int | str) -> pd.DataFrame:
         cache_key = str(season)
         if cache_key not in self._team_stats_cache:
-            path = self._parquet_path("team_stats", season)
-            if not path.exists():
-                path = self._parquet_path("standings", season)
-            if not path.exists():
-                logger.warning("Team stats file not found for season %s", season)
-                self._team_stats_cache[cache_key] = pd.DataFrame()
-            else:
-                self._team_stats_cache[cache_key] = pd.read_parquet(path)
+            df = self._reader.load(self.sport, "team_stats", season=season)
+            if df.empty:
+                # team_season_averages is richer; try it as fallback
+                df = self._reader.load(self.sport, "team_season_averages", season=season)
+            if df.empty:
+                df = self._reader.load(self.sport, "standings", season=season)
+            if df.empty:
+                logger.warning("Team stats not found for %s season %s", self.sport, season)
+            self._team_stats_cache[cache_key] = df
         return self._team_stats_cache[cache_key]
+
+    def load_team_season_averages(self, season: int | str) -> pd.DataFrame:
+        """Load pre-computed team season averages from curated data.
+
+        Available for NBA, NFL, and other sports with detailed box scores.
+        Columns: avg_points, avg_rebounds, avg_assists, field_goal_pct, etc.
+        """
+        return self._reader.load(self.sport, "team_season_averages", season=season)
 
     def load_player_stats(self, season: int | str) -> pd.DataFrame:
         cache_key = str(season)
         if cache_key not in self._player_stats_cache:
-            path = self._parquet_path("player_stats", season)
-            if not path.exists():
-                logger.warning("Player stats file not found for season %s", season)
-                self._player_stats_cache[cache_key] = pd.DataFrame()
-            else:
-                self._player_stats_cache[cache_key] = pd.read_parquet(path)
+            df = self._reader.load(self.sport, "player_stats", season=season)
+            if df.empty:
+                logger.warning("Player stats not found for %s season %s", self.sport, season)
+            self._player_stats_cache[cache_key] = df
         return self._player_stats_cache[cache_key]
 
     def load_odds(self, season: int | str) -> pd.DataFrame:
         cache_key = str(season)
         if cache_key not in self._odds_cache:
-            path = self._parquet_path("odds", season)
-            if not path.exists():
-                logger.warning("Odds file not found for season %s", season)
-                self._odds_cache[cache_key] = pd.DataFrame()
-            else:
-                self._odds_cache[cache_key] = pd.read_parquet(path)
+            df = self._reader.load(self.sport, "odds", season=season)
+            if df.empty:
+                logger.debug("Odds not found for %s season %s", self.sport, season)
+            self._odds_cache[cache_key] = df
         return self._odds_cache[cache_key]
 
     def load_injuries(self, season: int | str) -> pd.DataFrame:
         cache_key = str(season)
         if cache_key not in self._injuries_cache:
-            path = self._parquet_path_fallback("injuries", int(season))
-            if path is None:
-                logger.debug("Injuries file not found for %s season %s", self.sport, season)
-                self._injuries_cache[cache_key] = pd.DataFrame()
-            else:
-                df = pd.read_parquet(path)
-                if "team_id" in df.columns:
-                    df["team_id"] = df["team_id"].astype(str)
-                self._injuries_cache[cache_key] = df
+            df = self._reader.load(self.sport, "injuries", season=season)
+            if df.empty:
+                logger.debug("Injuries not found for %s season %s", self.sport, season)
+            elif "team_id" in df.columns:
+                df["team_id"] = df["team_id"].astype(str)
+            self._injuries_cache[cache_key] = df
         return self._injuries_cache[cache_key]
 
     def load_market_signals(self, season: int | str) -> pd.DataFrame:
         cache_key = str(season)
         if cache_key not in self._market_signals_cache:
-            path = self._parquet_path("market_signals", season)
-            if not path.exists():
-                logger.debug("Market signals file not found for %s season %s", self.sport, season)
-                self._market_signals_cache[cache_key] = pd.DataFrame()
-            else:
-                self._market_signals_cache[cache_key] = pd.read_parquet(path)
+            df = self._reader.load(self.sport, "market_signals", season=season)
+            if df.empty:
+                logger.debug("Market signals not found for %s season %s", self.sport, season)
+            self._market_signals_cache[cache_key] = df
         return self._market_signals_cache[cache_key]
 
     def load_schedule_fatigue(self, season: int | str) -> pd.DataFrame:
         cache_key = str(season)
         if cache_key not in self._schedule_fatigue_cache:
-            path = self._parquet_path("schedule_fatigue", season)
-            if not path.exists():
-                logger.debug("Schedule fatigue file not found for %s season %s", self.sport, season)
-                self._schedule_fatigue_cache[cache_key] = pd.DataFrame()
-            else:
-                self._schedule_fatigue_cache[cache_key] = pd.read_parquet(path)
+            df = self._reader.load(self.sport, "schedule_fatigue", season=season)
+            if df.empty:
+                logger.debug("Schedule fatigue not found for %s season %s", self.sport, season)
+            self._schedule_fatigue_cache[cache_key] = df
         return self._schedule_fatigue_cache[cache_key]
 
     def load_standings(self, season: int | str) -> pd.DataFrame:
         cache_key = str(season)
         if cache_key not in self._standings_cache:
-            path = self._parquet_path_fallback("standings", int(season))
-            if path is None:
-                logger.debug("Standings file not found for %s season %s", self.sport, season)
-                self._standings_cache[cache_key] = pd.DataFrame()
-            else:
-                df = pd.read_parquet(path)
-                if "team_id" in df.columns:
-                    df["team_id"] = df["team_id"].astype(str)
-                self._standings_cache[cache_key] = df
+            df = self._reader.load(self.sport, "standings", season=season)
+            if df.empty:
+                logger.debug("Standings not found for %s season %s", self.sport, season)
+            elif "team_id" in df.columns:
+                df["team_id"] = df["team_id"].astype(str)
+            self._standings_cache[cache_key] = df
         return self._standings_cache[cache_key]
+
+    def load_match_events(self, season: int | str) -> pd.DataFrame:
+        """Load match events (goals, cards, etc.) — available for soccer leagues.
+
+        Columns: match_id, event_type, minute, second, player_id, team_id.
+        Supported: bundesliga, laliga, ligue1, mls.
+        """
+        return self._reader.load(self.sport, "match_events", season=season)
+
+    def load_weather(self, season: int | str) -> pd.DataFrame:
+        """Load weather data — available for mlb, nwsl.
+
+        Columns: game_id, temp_f, wind_mph, wind_direction, humidity_pct,
+                 precipitation, condition, dome.
+        """
+        return self._reader.load(self.sport, "weather", season=season)
+
+    def load_batter_game_stats(self, season: int | str) -> pd.DataFrame:
+        """Load per-game batter stats — MLB only.
+
+        Columns: game_id, player_id, team_id, ab, hits, hr, rbi, runs, bb, etc.
+        """
+        return self._reader.load(self.sport, "batter_game_stats", season=season)
+
+    def load_pitcher_game_stats(self, season: int | str) -> pd.DataFrame:
+        """Load per-game pitcher stats — MLB only.
+
+        Columns: game_id, player_id, team_id, innings, earned_runs,
+                 strikeouts, walks, home_runs_allowed, batters_faced, etc.
+        """
+        return self._reader.load(self.sport, "pitcher_game_stats", season=season)
+
+    def load_advanced_batting(self, season: int | str) -> pd.DataFrame:
+        """Load season-level advanced batting stats — MLB only.
+
+        Columns: player_id, season, team_id, iso, babip, bb_pct, k_pct, woba.
+        """
+        return self._reader.load(self.sport, "advanced_batting", season=season)
+
+    def load_ratings(self, season: int | str) -> pd.DataFrame:
+        """Load power ratings — NBA only currently.
+
+        Columns: sport, source, rating_type, team_or_player, value, date, season.
+        """
+        return self._reader.load(self.sport, "ratings", season=season)
+
+    def available_seasons(self) -> list[int]:
+        """Return all available seasons from curated data."""
+        return self._reader.available_seasons(self.sport, "games")
 
     # ── Vectorized Helpers ────────────────────────────────
 

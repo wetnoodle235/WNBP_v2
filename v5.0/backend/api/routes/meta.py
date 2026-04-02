@@ -10,7 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from config import SPORT_DEFINITIONS, get_settings, get_available_seasons, get_current_season
+from config import SPORT_DEFINITIONS, get_available_seasons, get_current_season
 from services.data_service import DataService, get_data_service
 
 router = APIRouter(prefix="/v1")
@@ -148,18 +148,38 @@ async def get_sport(sport: str, ds: DS):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown sport '{sport}'",
         )
-    settings = get_settings()
     defn = SPORT_DEFINITIONS[sport]
 
     available: dict[str, dict] = {}
-    for kind in ("games", "teams", "standings", "players", "player_stats", "odds", "predictions", "injuries", "news"):
-        sport_dir = settings.normalized_dir / sport
-        files = sorted(sport_dir.glob(f"{kind}_*.parquet")) if sport_dir.is_dir() else []
-        if files:
-            seasons = [f.stem.replace(f"{kind}_", "") for f in files]
-            available[kind] = {"available": True, "seasons": seasons, "file_count": len(files)}
-        else:
-            available[kind] = {"available": False, "seasons": [], "file_count": 0}
+    sport_inventory = next((row for row in ds.list_available_sports() if row.get("key") == sport), None)
+    kind_counts = sport_inventory.get("data_types", {}) if sport_inventory else {}
+
+    for kind in (
+        "games",
+        "teams",
+        "standings",
+        "players",
+        "player_stats",
+        "odds",
+        "predictions",
+        "injuries",
+        "news",
+        "advanced_stats",
+        "advanced_batting",
+        "match_events",
+        "ratings",
+        "market_signals",
+        "schedule_fatigue",
+        "team_stats",
+        "team_game_stats",
+        "batter_game_stats",
+        "pitcher_game_stats",
+        "transactions",
+        "weather",
+    ):
+        count = int(kind_counts.get(kind, 0))
+        seasons = ds.get_seasons(sport, kind=kind) if count else []
+        available[kind] = {"available": count > 0, "seasons": seasons, "file_count": count}
 
     return {
         "success": True,

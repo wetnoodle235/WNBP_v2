@@ -30,27 +30,6 @@ class EsportsExtractor(BaseFeatureExtractor):
         self.sport = sport
         self._all_games_cache: pd.DataFrame | None = None
 
-    def _load_all_games(self) -> pd.DataFrame:
-        """Load and concatenate games from all available seasons for cross-season history."""
-        if self._all_games_cache is not None:
-            return self._all_games_cache
-        sport_dir = self.data_dir / "normalized" / self.sport
-        frames = []
-        for p in sorted(sport_dir.glob("games_*.parquet")):
-            try:
-                season = int(p.stem.split("_")[-1])
-            except ValueError:
-                continue
-            df = self.load_games(season)
-            if not df.empty:
-                frames.append(df)
-        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        if not combined.empty and "date" in combined.columns:
-            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
-            combined.sort_values("date", inplace=True, ignore_index=True)
-        self._all_games_cache = combined
-        return combined
-
     # ── Helpers ────────────────────────────────────────────
 
     def _match_stats(
@@ -475,20 +454,12 @@ class EsportsExtractor(BaseFeatureExtractor):
 
     def _load_schedule_fatigue(self, season: int) -> pd.DataFrame:
         """Load schedule fatigue file for a season (team-level rows)."""
-        sport_dir = self.data_dir / "normalized" / self.sport
-        p = sport_dir / f"schedule_fatigue_{season}.parquet"
-        if p.exists():
-            try:
-                return pd.read_parquet(p)
-            except Exception:
-                pass
-        # Also try without season suffix
-        p2 = sport_dir / "schedule_fatigue.parquet"
-        if p2.exists():
-            try:
-                return pd.read_parquet(p2)
-            except Exception:
-                pass
+        try:
+            df = self._reader.load(self.sport, "schedule_fatigue", season=season)
+            if not df.empty:
+                return df
+        except Exception:
+            pass
         return pd.DataFrame()
 
     def _fatigue_features(self, team_id: str, game_id: str, season: int) -> dict[str, float]:

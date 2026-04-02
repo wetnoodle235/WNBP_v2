@@ -3,14 +3,20 @@
 # V5.0 Backend — Player Props ML Training Module
 # ──────────────────────────────────────────────────────────
 """
-Train player prop prediction models for NBA, NFL, MLB, and NHL.
+Train INDIVIDUAL player prop prediction models for all sports.
 
-For each sport, loads:
-  - Game features from data/features/{sport}_all.parquet
-  - Player stats from data/normalized/{sport}/player_stats_{year}.parquet
+Architecture (player-centric, separate from game prediction):
+  - Per-player rolling features (last 5/10 games): form, consistency, streak
+  - Opponent defensive context: how well the opponent suppresses this stat
+  - Usage/role context: minutes, position, starter status
+  - Home/away splits, rest days
+  - Game-level context features appended from pre-computed game features
 
-Computes team-level rolling averages (last 5 games) per team as features,
-then trains classifiers/regressors for sport-specific prop targets.
+This is intentionally SEPARATE from game prediction because:
+  - Game models predict team-level outcomes (win/loss, total, spread)
+  - Player models predict individual performance vs a threshold
+  - Feature selection differs: player form matters far more than team momentum
+    for prop prediction; meanwhile game prediction cares about team matchup depth
 
 Models saved to: ml/models/{sport}/player_props.pkl
 
@@ -22,6 +28,9 @@ Usage
     python3 backend/ml/train_player_props.py --sport nfl --seasons 2022,2023,2024,2025
     python3 backend/ml/train_player_props.py --sport mlb --seasons 2022,2023,2024
     python3 backend/ml/train_player_props.py --sport nhl --seasons 2022,2023,2024,2025
+    python3 backend/ml/train_player_props.py --sport epl  --seasons 2022,2023,2024,2025
+    python3 backend/ml/train_player_props.py --sport ufc  --seasons 2022,2023,2024,2025
+    python3 backend/ml/train_player_props.py --all
 """
 from __future__ import annotations
 
@@ -299,31 +308,28 @@ _PROP_SPECS: dict[str, list[tuple[str, str, float, str, str]]] = {
 
 
 def _load_player_stats(sport: str, seasons: list[int]) -> pd.DataFrame | None:
-    """Load and concatenate player stats for given seasons."""
-    norm_dir = _DATA_DIR / "normalized" / sport
-    if not norm_dir.exists():
-        logger.warning("No normalized directory for %s", sport)
-        return None
-
+    """Load and concatenate player stats for given seasons via DuckDB curated reader."""
+    from features.data_reader import get_reader
+    reader = get_reader(_DATA_DIR)
     frames: list[pd.DataFrame] = []
     for season in seasons:
-        path = norm_dir / f"player_stats_{season}.parquet"
-        if path.exists():
-            df = pd.read_parquet(path)
+        try:
+            df = reader.load(sport, "player_stats", season=season)
             if len(df) > 0:
                 frames.append(df)
-                logger.info("  Loaded player stats: %s (%d rows)", path.name, len(df))
-        else:
-            logger.debug("  No player stats for %s season %d", sport, season)
+                logger.info("  Loaded player_stats %s/%d: %d rows", sport, season, len(df))
+        except Exception as e:
+            logger.debug("  No player stats for %s season %d: %s", sport, season, e)
 
     if not frames:
-        # Try single combined file
-        combined = norm_dir / "player_stats.parquet"
-        if combined.exists():
-            df = pd.read_parquet(combined)
+        # Fallback: load all seasons at once
+        try:
+            df = reader.load_all_seasons(sport, "player_stats")
             if len(df) > 0:
                 frames.append(df)
-                logger.info("  Loaded player stats: %s (%d rows)", combined.name, len(df))
+                logger.info("  Loaded player_stats %s (all seasons): %d rows", sport, len(df))
+        except Exception:
+            pass
 
     return pd.concat(frames, ignore_index=True) if frames else None
 
@@ -357,11 +363,8 @@ def _build_team_rolling_stats(
     stat_cols: list[str],
     window: int = 5,
 ) -> pd.DataFrame:
-    """Compute team-level rolling mean of player stats (last N games).
-
-    Groups player stats by (team_id, game_id) to get per-game team aggregates,
-    then computes a rolling mean over the last `window` games per team.
-
+    """LEGACY: Compute team-level rolling mean of player stats (last N games).
+    Kept as a fallback path; primary per-player features use _build_player_rolling_features.
     Returns a DataFrame indexed by (team_id, game_id) with rolling features.
     """
     required = {"game_id", "team_id", "date"}
@@ -374,13 +377,11 @@ def _build_team_rolling_stats(
     if not available_stats:
         return pd.DataFrame()
 
-    # Convert numeric
     ps = player_stats.copy()
     for col in available_stats:
         ps[col] = pd.to_numeric(ps[col], errors="coerce")
 
-    # Team per-game aggregates: sum all player stats for that team in that game
-    agg_cols = {col: "sum" for col in available_stats}
+    agg_cols: dict[str, Any] = {col: "sum" for col in available_stats}
     agg_cols["date"] = "first"
     team_game = (
         ps.groupby(["team_id", "game_id"])
@@ -388,11 +389,9 @@ def _build_team_rolling_stats(
         .reset_index()
     )
 
-    # Sort by team + date for rolling
     team_game["date"] = pd.to_datetime(team_game["date"], errors="coerce")
     team_game = team_game.sort_values(["team_id", "date"])
 
-    # Rolling mean over last N games (shift by 1 so we use prior games as features)
     rolling_frames: list[pd.DataFrame] = []
     for team_id, grp in team_game.groupby("team_id"):
         rolled = grp[available_stats].shift(1).rolling(window, min_periods=1).mean()
@@ -406,6 +405,160 @@ def _build_team_rolling_stats(
 
     roll_df = pd.concat(rolling_frames, ignore_index=True)
     return roll_df.set_index(["team_id", "game_id"])
+
+
+def _build_player_rolling_features(
+    player_stats: pd.DataFrame,
+    stat_cols: list[str],
+    window_short: int = 5,
+    window_long: int = 15,
+) -> pd.DataFrame:
+    """Build per-player, per-game rolling feature vectors.
+
+    For each (player, game) pair, computes:
+      - Rolling mean/std/max over last 5 and 15 games (prior to this game)
+      - Short-window vs long-window trend (form vs baseline)
+      - Consistency score (1 / (1 + std))
+      - Streak: consecutive games at or above player's median
+      - Games played count (sample size indicator)
+      - Rolling average minutes and starter rate
+      - Days rest since last game
+
+    Returns DataFrame with one row per (game_id, player_id, team_id).
+    """
+    required = {"game_id", "player_id", "team_id", "date"}
+    if not required.issubset(player_stats.columns):
+        logger.warning("player_stats missing required cols: %s", required - set(player_stats.columns))
+        return pd.DataFrame()
+
+    ps = player_stats.copy()
+    ps["date"] = pd.to_datetime(ps["date"], errors="coerce")
+    ps = ps.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
+    available = [c for c in stat_cols if c in ps.columns]
+    if not available:
+        return pd.DataFrame()
+
+    for col in available:
+        ps[col] = pd.to_numeric(ps[col], errors="coerce").fillna(0.0)
+
+    ps["minutes"] = pd.to_numeric(ps.get("minutes", ps.get("min", 0)), errors="coerce").fillna(0.0)
+    ps["starter"] = pd.to_numeric(ps.get("starter", 0), errors="coerce").fillna(0.0)
+
+    records = []
+    for player_id, pgrp in ps.groupby("player_id", sort=False):
+        pgrp = pgrp.sort_values("date").reset_index(drop=True)
+        n = len(pgrp)
+
+        for i in range(n):
+            row_data = pgrp.iloc[i]
+            hist_short = pgrp.iloc[max(0, i - window_short):i]
+            hist_long  = pgrp.iloc[max(0, i - window_long):i]
+
+            feat: dict[str, Any] = {
+                "game_id":        row_data["game_id"],
+                "player_id":      player_id,
+                "team_id":        row_data["team_id"],
+                "player_name":    row_data.get("player_name", ""),
+                "p_games_played": i,
+                "p_minutes_avg":  float(hist_short["minutes"].mean()) if len(hist_short) > 0 else 0.0,
+                "p_starter_rate": float(hist_short["starter"].mean()) if len(hist_short) > 0 else 0.0,
+                "p_rest_days":    float(min((pgrp["date"].iloc[i] - pgrp["date"].iloc[i - 1]).days, 14)) if i > 0 else 7.0,
+            }
+
+            for col in available:
+                s_vals = hist_short[col].values if len(hist_short) > 0 else np.array([], dtype=float)
+                l_vals = hist_long[col].values  if len(hist_long)  > 0 else np.array([], dtype=float)
+
+                s_mean = float(np.mean(s_vals)) if len(s_vals) > 0 else 0.0
+                l_mean = float(np.mean(l_vals)) if len(l_vals) > 0 else 0.0
+                s_std  = float(np.std(s_vals))  if len(s_vals) > 1 else 0.0
+
+                feat[f"p_{col}_avg5"]        = s_mean
+                feat[f"p_{col}_avg15"]       = l_mean
+                feat[f"p_{col}_max5"]        = float(np.max(s_vals)) if len(s_vals) > 0 else 0.0
+                feat[f"p_{col}_std5"]        = s_std
+                feat[f"p_{col}_trend"]       = s_mean - l_mean
+                feat[f"p_{col}_consistency"] = 1.0 / (1.0 + s_std)
+
+                # Hot-streak: consecutive games at/above player's long-term median
+                if len(l_vals) >= 3:
+                    thresh = float(np.median(l_vals))
+                    streak = 0
+                    for v in reversed(s_vals.tolist()):
+                        if v >= thresh:
+                            streak += 1
+                        else:
+                            break
+                    feat[f"p_{col}_streak"] = float(streak)
+                else:
+                    feat[f"p_{col}_streak"] = 0.0
+
+            records.append(feat)
+
+    return pd.DataFrame(records) if records else pd.DataFrame()
+
+
+def _build_opponent_defensive_features(
+    player_stats: pd.DataFrame,
+    games_df: pd.DataFrame,
+    stat_cols: list[str],
+    window: int = 10,
+) -> pd.DataFrame:
+    """Build opponent-defensive matchup features per (game_id, team_id).
+
+    For each team in each game, computes how many of the target stats the
+    opponent has allowed in their last N games (from all attackers).
+    """
+    if games_df.empty or player_stats.empty:
+        return pd.DataFrame()
+
+    required_g = {"id", "date", "home_team_id", "away_team_id"}
+    if not required_g.issubset(games_df.columns):
+        return pd.DataFrame()
+
+    ps = player_stats.copy()
+    ps["date"] = pd.to_datetime(ps["date"], errors="coerce")
+    ps = ps.dropna(subset=["date"]).sort_values("date")
+    available = [c for c in stat_cols if c in ps.columns]
+    if not available:
+        return pd.DataFrame()
+    for col in available:
+        ps[col] = pd.to_numeric(ps[col], errors="coerce").fillna(0.0)
+
+    gdf = games_df[["id", "date", "home_team_id", "away_team_id"]].copy()
+    gdf["date"] = pd.to_datetime(gdf["date"], errors="coerce")
+    gdf = gdf.dropna(subset=["date"]).rename(columns={"id": "game_id"})
+    gdf["home_team_id"] = gdf["home_team_id"].astype(str)
+    gdf["away_team_id"] = gdf["away_team_id"].astype(str)
+    ps["team_id"] = ps["team_id"].astype(str)
+
+    gdf_map = gdf.set_index("game_id")[["home_team_id", "away_team_id", "date"]].to_dict("index")
+
+    records = []
+    for game_id, info in gdf_map.items():
+        g_date = info["date"]
+        for batting_team, opp_team in [
+            (info["home_team_id"], info["away_team_id"]),
+            (info["away_team_id"], info["home_team_id"]),
+        ]:
+            opp_past = gdf[
+                ((gdf["home_team_id"] == opp_team) | (gdf["away_team_id"] == opp_team)) &
+                (gdf["date"] < g_date)
+            ].tail(window)["game_id"].tolist()
+
+            if not opp_past:
+                continue
+
+            allowed = ps[(ps["game_id"].isin(opp_past)) & (ps["team_id"] != opp_team)]
+            row: dict[str, Any] = {"game_id": game_id, "team_id": batting_team}
+            for col in available:
+                vals = allowed[col].values
+                row[f"opp_def_{col}_pg"]  = float(np.mean(vals)) if len(vals) > 0 else 0.0
+                row[f"opp_def_{col}_max"] = float(np.max(vals))  if len(vals) > 0 else 0.0
+            records.append(row)
+
+    return pd.DataFrame(records) if records else pd.DataFrame()
 
 
 def _make_composite_stats(player_stats: pd.DataFrame, sport: str) -> pd.DataFrame:
@@ -440,86 +593,132 @@ def _build_prop_targets(
     spec: tuple[str, str, float, str, str],
     sport: str,
 ) -> tuple[pd.DataFrame, pd.Series] | None:
-    """Build (X, y) for a single prop target.
+    """Build (X, y) for a single prop target using per-player rolling features.
 
-    Strategy:
-    - For each game, get the top player stat (max across all players for that game)
-      per team, then join with game features on game_id.
-    - The target y is whether the threshold was exceeded in the CURRENT game.
-    - Features X are the rolling team-level averages of the relevant stat
-      (representing prior performance), plus the game features.
+    Strategy (PER-PLAYER design):
+    1. Add composite stat columns if needed.
+    2. Build per-player rolling feature vectors (form, consistency, streak, rest).
+    3. Build opponent-defensive matchup features per (game_id, team_id).
+    4. Append lightweight game-context features (home/away, elo, pace, rest).
+    5. Target y = did this player exceed threshold in THIS game?
+
+    This is intentionally different from the game-prediction pipeline.
+    Game models care about team matchup depth; player models care about
+    individual form, role, and opponent defensive weakness at their position.
     """
     target_name, stat_col, threshold, model_type, _ = spec
+    actual_col = stat_col  # composite cols are already built by _make_composite_stats
 
-    # Resolve actual stat column
-    actual_col = stat_col if not stat_col.startswith("_") else stat_col
-    if actual_col.startswith("_") and actual_col not in player_stats.columns:
-        logger.debug("Composite col %s not in player stats — skipping %s", actual_col, target_name)
-        return None
-
-    if not actual_col.startswith("_") and actual_col not in player_stats.columns:
+    if actual_col not in player_stats.columns:
         logger.debug("Stat col %s not in player stats — skipping %s", actual_col, target_name)
         return None
 
     ps = player_stats.copy()
-    ps[actual_col] = pd.to_numeric(ps[actual_col], errors="coerce").fillna(0)
+    ps[actual_col] = pd.to_numeric(ps[actual_col], errors="coerce").fillna(0.0)
 
-    if "game_id" not in ps.columns or "game_id" not in game_features.columns:
+    if "game_id" not in ps.columns or "team_id" not in ps.columns:
         return None
 
-    # For each game, aggregate per-game player stats.
-    # For team-level sports (NHL goals/shots) use sum; for top-performer props use max.
-    if "team_id" not in ps.columns:
+    # ── 1. Per-player rolling features ───────────────────────────────
+    # Use all numeric stat cols from this sport to build rolling features
+    # (not just the target stat — correlated stats add signal)
+    _SPORT_STAT_COLS: dict[str, list[str]] = {
+        "nba":  ["pts", "reb", "ast", "stl", "blk", "to", "minutes", "fga", "three_m", "plus_minus",
+                 "usg_pct", "ts_pct", "_pts_reb_ast", "_double_double"],
+        "nfl":  ["pass_yds", "pass_td", "rush_yds", "rush_td", "rec_yds", "rec_td", "receptions",
+                 "targets", "pass_rating", "sacks", "tackles"],
+        "mlb":  ["hits", "hr", "rbi", "runs", "sb", "bb", "so", "avg",
+                 "strikeouts", "innings", "era", "whip", "total_bases"],
+        "nhl":  ["goals", "assists", "shots", "saves", "toi", "hits", "plus_minus",
+                 "blocked_shots", "_goals_assists", "pp_goals"],
+        "epl":  ["goals", "assists", "shots", "shots_on_target", "fouls_committed", "saves",
+                 "goals_conceded", "yellow_cards"],
+        "ufc":  ["strikes_landed", "strikes_attempted", "sig_strikes", "knockdowns"],
+        "bundesliga": ["goals", "assists", "shots", "shots_on_target", "saves", "goals_conceded"],
+        "laliga": ["goals", "assists", "shots", "shots_on_target", "saves", "goals_conceded"],
+        "ligue1": ["goals", "assists", "shots", "shots_on_target", "saves", "goals_conceded"],
+        "mls":  ["goals", "assists", "shots", "shots_on_target", "saves", "goals_conceded"],
+    }
+    stat_cols_for_sport = _SPORT_STAT_COLS.get(sport, [actual_col])
+    stat_cols_for_sport = [c for c in stat_cols_for_sport if c in ps.columns]
+    if actual_col not in stat_cols_for_sport:
+        stat_cols_for_sport = [actual_col] + stat_cols_for_sport
+
+    player_feats = _build_player_rolling_features(ps, stat_cols_for_sport)
+    if player_feats.empty:
+        logger.debug("  Could not build player rolling features for %s", target_name)
         return None
 
-    _TEAM_SUM_TARGETS = {"team_goals_over_3", "team_goals_over_4", "team_goals_over_6",
-                         "team_shots_over_60", "team_shots_over_65",
-                         "team_goals_reg", "total_runs_over_8", "total_hits_over_10"}
-    agg_fn = "sum" if target_name in _TEAM_SUM_TARGETS else "max"
-    top_per_game = (
-        ps.groupby("game_id")[actual_col]
-        .agg(agg_fn)
-        .reset_index()
-        .rename(columns={actual_col: "top_stat_value"})
-    )
+    # ── 2. Target: did THIS player exceed the threshold in THIS game? ──
+    actual_values = ps[["game_id", "player_id", actual_col]].copy()
+    actual_values = actual_values.rename(columns={actual_col: "_actual"})
+    player_feats = player_feats.merge(actual_values, on=["game_id", "player_id"], how="inner")
 
-    # Join with game features on game_id
-    gf = game_features.copy()
-    if "game_id" not in gf.columns:
-        return None
-
-    merged = gf.merge(top_per_game, on="game_id", how="inner")
-    if len(merged) < 50:
-        logger.debug("Too few rows after merge for %s (%d)", target_name, len(merged))
-        return None
-
-    # Build target y
     if model_type == "cls":
         if target_name == "batter_hit":
-            y = (merged["top_stat_value"] > 0).astype(int)
-        elif target_name == "double_double":
-            y = (merged["top_stat_value"] > 0.5).astype(int)
+            y = (player_feats["_actual"] > 0).astype(int)
+        elif "double_double" in target_name:
+            y = (player_feats["_actual"] > 0.5).astype(int)
         else:
-            y = (merged["top_stat_value"] > threshold).astype(int)
+            y = (player_feats["_actual"] > threshold).astype(int)
     else:
-        y = merged["top_stat_value"].fillna(0)
+        y = player_feats["_actual"].fillna(0.0)
 
-    # Build feature matrix from game features (drop metadata + score cols)
-    _META = {"game_id", "date", "home_team_id", "away_team_id", "home_score", "away_score",
-              "home_q1", "home_q2", "home_q3", "home_q4", "home_ot",
-              "away_q1", "away_q2", "away_q3", "away_q4", "away_ot", "season",
-              "top_stat_value"}
-    feat_cols = [c for c in merged.columns if c not in _META]
-    X = merged[feat_cols].select_dtypes(include=[np.number]).fillna(0)
+    # ── 3. Game-context features (lightweight — home/away + key pace/rating) ──
+    _GAME_CONTEXT_COLS = [
+        "is_home", "days_rest",
+        "home_pace", "away_pace", "home_off_rating", "away_def_rating",
+        "home_elo", "away_elo", "elo_diff",
+        "home_l5_win_pct", "away_l5_win_pct",
+        "home_season_pts_pg", "away_season_pts_pg",
+    ]
+    if game_features is not None and "game_id" in game_features.columns:
+        ctx_cols = [c for c in _GAME_CONTEXT_COLS if c in game_features.columns]
+        if ctx_cols:
+            game_ctx = game_features[["game_id"] + ctx_cols].copy()
+            # Each player row is from one team; join on game_id
+            player_feats = player_feats.merge(game_ctx, on="game_id", how="left")
+
+    # ── 4. Opponent-defensive features (optional — only if games available) ──
+    if game_features is not None and not game_features.empty:
+        games_with_id = game_features.copy()
+        if "game_id" in games_with_id.columns and "id" not in games_with_id.columns:
+            games_with_id = games_with_id.rename(columns={"game_id": "id"})
+        if {"id", "home_team_id", "away_team_id", "date"}.issubset(games_with_id.columns):
+            opp_feats = _build_opponent_defensive_features(
+                ps, games_with_id, [actual_col], window=10
+            )
+            if not opp_feats.empty:
+                player_feats = player_feats.merge(
+                    opp_feats, on=["game_id", "team_id"], how="left"
+                )
+
+    # ── 5. Drop non-numeric / metadata columns ────────────────────────
+    _META = {"game_id", "player_id", "team_id", "player_name", "_actual", "date",
+             "home_team_id", "away_team_id", "season"}
+    feat_cols = [c for c in player_feats.columns if c not in _META]
+    X = player_feats[feat_cols].select_dtypes(include=[np.number]).fillna(0.0)
 
     if X.shape[1] == 0 or len(X) < 50:
+        logger.debug("  Too few features/rows for %s", target_name)
         return None
 
-    # Temporal sort for consistent train/test split
-    if "date" in merged.columns:
-        order = pd.to_datetime(merged["date"], errors="coerce").argsort()
-        X = X.iloc[order].reset_index(drop=True)
-        y = y.iloc[order].reset_index(drop=True)
+    # Filter out rows with zero history (cold-start) to avoid noise
+    if "p_games_played" in X.columns:
+        mask = X["p_games_played"] >= 3
+        X = X[mask].reset_index(drop=True)
+        y = y[mask].reset_index(drop=True)
+
+    if len(X) < 50:
+        return None
+
+    # Temporal sort (player_feats was built in order but confirm)
+    if "date" in player_feats.columns:
+        date_col = pd.to_datetime(player_feats.loc[X.index, "date"] if "date" in player_feats.columns else pd.Series(dtype="datetime64[ns]"), errors="coerce")
+        if not date_col.isna().all():
+            order = date_col.argsort()
+            X = X.iloc[order].reset_index(drop=True)
+            y = y.iloc[order].reset_index(drop=True)
 
     return X, y
 

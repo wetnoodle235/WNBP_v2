@@ -1,0 +1,10 @@
+[Unit]
+Description=SportStock V5.0 - Full Curated Rebuild Timer (daily)
+
+[Timer]
+OnCalendar=*-*-* 06:25:00
+Persistent=true
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target

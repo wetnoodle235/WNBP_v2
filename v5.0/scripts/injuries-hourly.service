@@ -1,0 +1,26 @@
+# ──────────────────────────────────────────────────────────
+# SportStock V5.0 — Hourly Injuries Import (systemd service)
+#
+# Runs injuries-only importer against all enabled providers
+# that expose an "injuries" endpoint.
+# Triggered by injuries-hourly.timer.
+# ──────────────────────────────────────────────────────────
+
+[Unit]
+Description=SportStock V5.0 — Hourly Injuries Import
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/derek/Documents/stock/v5.0/importers
+ExecStart=/usr/bin/npm run import:injuries:hourly
+Environment=PATH=/home/derek/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/derek
+EnvironmentFile=-/home/derek/Documents/stock/v5.0/.env
+StandardOutput=append:/home/derek/Documents/stock/v5.0/logs/injuries_hourly.log
+StandardError=append:/home/derek/Documents/stock/v5.0/logs/injuries_hourly.log
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=default.target

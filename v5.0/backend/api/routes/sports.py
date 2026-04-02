@@ -703,8 +703,9 @@ async def get_player(sport: ValidSport, player_id: str, ds: DS, api_key: ApiKey,
 
 # ── Player Stats ──────────────────────────────────────────
 
+@router.get("/player-stats", include_in_schema=False, deprecated=True)
 @router.get(
-    "/player-stats",
+    "/player_stats",
     summary="Player box-score statistics",
     description="Per-game player statistics with sport-specific stat categories (points/rebounds/assists for basketball, passing/rushing yards for football, etc.). Filter by season and/or player ID.",
     tags=["Stats"],
@@ -1086,8 +1087,9 @@ async def list_news(
 
 # ── Advanced Stats ────────────────────────────────────────
 
+@router.get("/advanced-stats", include_in_schema=False, deprecated=True)
 @router.get(
-    "/advanced-stats",
+    "/advanced_stats",
     summary="Sport-specific advanced statistics",
     description=(
         "Return sport-specific advanced stats. For MLB: ISO, BABIP, BB%, K%, wOBA, wRC+. "
@@ -1159,8 +1161,9 @@ async def list_advanced_stats(
 
 # ── Match Events ──────────────────────────────────────────
 
+@router.get("/match-events", include_in_schema=False, deprecated=True)
 @router.get(
-    "/match-events",
+    "/match_events",
     summary="Event-level match data",
     description=(
         "Goals, assists, cards, substitutions with timestamps. "
@@ -1291,8 +1294,9 @@ async def list_ratings(
     return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
 
 
+@router.get("/market-signals", include_in_schema=False, deprecated=True)
 @router.get(
-    "/market-signals",
+    "/market_signals",
     summary="Market line movement signals",
     description=(
         "Bookmaker-level line movement enrichment derived from odds snapshots. "
@@ -1335,8 +1339,9 @@ async def list_market_signals(
     return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
 
 
+@router.get("/schedule-fatigue", include_in_schema=False, deprecated=True)
 @router.get(
-    "/schedule-fatigue",
+    "/schedule_fatigue",
     summary="Team schedule fatigue signals",
     description=(
         "Team-level rest and congestion enrichment keyed by game/team. "
@@ -1380,8 +1385,9 @@ async def list_schedule_fatigue(
 
 
 # ── Team Stats ────────────────────────────────────────────────
+@router.get("/team-stats", include_in_schema=False, deprecated=True)
 @router.get(
-    "/team-stats",
+    "/team_stats",
     summary="Team season stats",
     description="Aggregated team statistics for the season: points, rebounds, FG%, 3P%, etc.",
     tags=["stats"],
@@ -1426,8 +1432,9 @@ async def list_team_stats(
     return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
 
 
+@router.get("/team-game-stats", include_in_schema=False, deprecated=True)
 @router.get(
-    "/team-game-stats",
+    "/team_game_stats",
     summary="Per-team game stats",
     description="Game-level team stat lines (MLB-focused).",
     tags=["stats"],
@@ -1465,8 +1472,9 @@ async def list_team_game_stats(
     return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
 
 
+@router.get("/batter-game-stats", include_in_schema=False, deprecated=True)
 @router.get(
-    "/batter-game-stats",
+    "/batter_game_stats",
     summary="Per-batter game stats",
     description="Game-level batter stat lines (MLB-focused).",
     tags=["stats"],
@@ -1507,8 +1515,9 @@ async def list_batter_game_stats(
     return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
 
 
+@router.get("/pitcher-game-stats", include_in_schema=False, deprecated=True)
 @router.get(
-    "/pitcher-game-stats",
+    "/pitcher_game_stats",
     summary="Per-pitcher game stats",
     description="Game-level pitcher stat lines (MLB-focused).",
     tags=["stats"],
@@ -1708,8 +1717,9 @@ async def get_simulation(
 _LIVE_PRED_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data" / "live_predictions"
 
 
+@router.get("/live-predictions", include_in_schema=False, deprecated=True)
 @router.get(
-    "/live-predictions",
+    "/live_predictions",
     summary="Live-adjusted predictions for in-progress games",
     description=(
         "Returns real-time adjusted win probabilities, projected final scores, "
@@ -1785,8 +1795,9 @@ async def live_predictions(
 
 # ── Injuries with Impact ──────────────────────────────────
 
+@router.get("/injuries-impact", include_in_schema=False, deprecated=True)
 @router.get(
-    "/injuries",
+    "/injuries_impact",
     summary="Active injury reports",
     description="Current injury reports for a sport. Includes player status, body part, expected return date, and estimated impact on game outcomes.",
     tags=["Injuries"],
@@ -2003,7 +2014,7 @@ def _find_venue_coords(venue_name: str) -> tuple[float, float] | None:
 
 
 @router.get(
-    "/{sport}/games/{game_id}/weather",
+    "/games/{game_id}/weather",
     summary="Weather data for a game venue",
     tags=["games"],
 )

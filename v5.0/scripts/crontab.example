@@ -28,6 +28,11 @@ ODDSAPI_KEY=your_oddsapi_key_here
 # or running in loop mode via systemd (see below)
 0 6-23 * * *  cd $PROJECT && python3 scripts/odds_scheduler.py --mode current --once >> logs/cron_current.log 2>&1
 
+# ── Injuries Imports (every hour, all providers with support) ─
+# Runs injuries-only importer so injury state is refreshed independently
+# of the daily pipeline.
+0 * * * *  cd $PROJECT/importers && npm run import:injuries:hourly >> ../logs/cron_injuries.log 2>&1
+
 # ── Closing Odds (every minute, peak game hours) ────────
 # Polls for games starting soon and grabs final lines
 # MLB/NBA/NHL typically 7-10 PM EST; NFL Sunday 1 PM & 4 PM
@@ -37,6 +42,14 @@ ODDSAPI_KEY=your_oddsapi_key_here
 # ── Full Daily Pipeline (6 AM EST) ──────────────────────
 # Main pipeline: import all data, normalize, train, predict
 0 6 * * *  cd $PROJECT && python3 scripts/daily_pipeline.py >> logs/cron_pipeline.log 2>&1
+
+# ── Recurring Curated + DuckDB Refresh (every 30 min) ───
+# Auto-detects changed normalized files and refreshes curated outputs + DuckDB once per run.
+*/30 * * * *  cd $PROJECT && /home/derek/Documents/stock/.venv/bin/python3 scripts/recurring_curated_refresh.py --mode auto >> logs/cron_curated_refresh.log 2>&1
+
+# ── Full Curated Rebuild (daily 6:25 AM EST) ─────────────
+# Rebuild all category/sport parquets and bulk refresh DuckDB catalog.
+25 6 * * *  cd $PROJECT && /home/derek/Documents/stock/.venv/bin/python3 scripts/recurring_curated_refresh.py --mode full >> logs/cron_curated_refresh_full.log 2>&1
 
 # ── Season Simulator (Tuesday 8 AM EST) ─────────────────
 # Monte Carlo projections: championships, awards, brackets, draft lottery
