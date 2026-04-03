@@ -57,7 +57,6 @@ export const PROVIDER_MODULES = [
   "nflfastr",
   "lolesports",
   "steam",
-  "apisports",
   "espnmeta",
   "sleeper",
   // Wave 4 providers
