@@ -2446,7 +2446,6 @@ async def list_rankings(
     offset: int = Query(0, ge=0, description="Pagination offset"),
 ):
     """AP Poll, Coaches Poll, and power rankings. Primarily for college sports."""
-    _require_internal_access(api_key)
     await check_tier_access(api_key, sport, "rankings")
     await rate_limit_check(api_key)
     effective_season = _resolve_season(sport, season)
@@ -2488,7 +2487,6 @@ async def list_futures(
     offset: int = Query(0, ge=0, description="Pagination offset"),
 ):
     """Futures and outright odds from ESPN and OddsAPI."""
-    _require_internal_access(api_key)
     await check_tier_access(api_key, sport, "odds")
     await rate_limit_check(api_key)
     effective_season = _resolve_season(sport, season)

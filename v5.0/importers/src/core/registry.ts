@@ -61,6 +61,7 @@ export const PROVIDER_MODULES = [
   "sleeper",
   // Wave 4 providers
   "sofascore",
+  "riot",
 ] as const;
 
 export type ProviderName = (typeof PROVIDER_MODULES)[number];

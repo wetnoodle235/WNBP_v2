@@ -73,14 +73,19 @@ DATA_DIR = PROJECT_ROOT / "data"
 
 sys.path.insert(0, str(BACKEND_DIR))
 
-# Load .env if present so the pipeline works when invoked from cron without
-# a prior `source .env` (e.g. when .env was removed from the repo but API
-# keys are still needed, or when a new .env has been recreated).
+# Load .env / config/.env so the pipeline works when invoked from cron
+# without a prior `source` — secrets live in config/.env, with an optional
+# override at PROJECT_ROOT/.env for local dev.
 try:
     from dotenv import load_dotenv
-    _env_file = PROJECT_ROOT / ".env"
-    if _env_file.exists():
-        load_dotenv(_env_file, override=False)
+    # config/.env is the canonical secrets file
+    _config_env = PROJECT_ROOT / "config" / ".env"
+    if _config_env.exists():
+        load_dotenv(_config_env, override=False)
+    # Allow a local PROJECT_ROOT/.env to override (dev convenience)
+    _root_env = PROJECT_ROOT / ".env"
+    if _root_env.exists():
+        load_dotenv(_root_env, override=True)
 except ImportError:
     pass
 

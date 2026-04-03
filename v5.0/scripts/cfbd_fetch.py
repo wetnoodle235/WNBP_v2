@@ -40,6 +40,15 @@ VENV_DIR = Path("/tmp/cfbd_venv")
 PROJECT_ROOT = Path(__file__).parent.parent
 OUTPUT_ROOT = PROJECT_ROOT / "data" / "raw" / "cfbd"
 
+# Load config/.env so CFBD_API_KEY is available when running from cron
+try:
+    from dotenv import load_dotenv as _load_dotenv  # type: ignore
+    _cfg = PROJECT_ROOT / "config" / ".env"
+    if _cfg.exists():
+        _load_dotenv(_cfg, override=False)
+except ImportError:
+    pass
+
 CFBD_PACKAGES = [
     "cfbd==1.3.1",          # official Python client
     "pydantic>=1.9,<2",     # cfbd requires pydantic 1.x

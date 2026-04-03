@@ -123,6 +123,30 @@ interface SimulatorPrediction {
   predicted_spread?: number | null;
 }
 
+interface RankingEntry {
+  rank?: number;
+  school?: string;
+  team?: string;
+  name?: string;
+  poll?: string;
+  week?: number;
+  points?: number;
+  first_place_votes?: number;
+  wins?: number;
+  losses?: number;
+}
+
+interface FuturesEntry {
+  team?: string;
+  name?: string;
+  market?: string;
+  odds?: number;
+  american_odds?: number;
+  implied_probability?: number;
+  book?: string;
+  description?: string;
+}
+
 /* ── Helpers ───────────────────────────────────────────────────── */
 
 function probColor(pct: number): string {
@@ -1033,6 +1057,8 @@ export function SeasonClient() {
   const [sport, setSport] = useState<Sport>("nba");
   const [data, setData] = useState<SimulationData | null>(null);
   const [simPredictions, setSimPredictions] = useState<SimulatorPrediction[]>([]);
+  const [rankings, setRankings] = useState<RankingEntry[]>([]);
+  const [futures, setFutures] = useState<FuturesEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -1044,6 +1070,8 @@ export function SeasonClient() {
     setError(null);
     setData(null);
     setSimPredictions([]);
+    setRankings([]);
+    setFutures([]);
     try {
       const headers: Record<string, string> = {};
       if (typeof window !== "undefined") {
@@ -1075,6 +1103,22 @@ export function SeasonClient() {
         if (Array.isArray(predPayload)) {
           setSimPredictions(predPayload as SimulatorPrediction[]);
         }
+      }
+
+      // Rankings (AP/Coaches Poll — primarily ncaaf, ncaab)
+      const rankRes = await fetch(`${API}/v1/${s}/rankings?week=current&limit=25`, { headers, signal });
+      if (!signal?.aborted && rankRes.ok) {
+        const rankJson = await rankRes.json();
+        const rankPayload = rankJson?.data && rankJson?.success ? rankJson.data : rankJson;
+        if (Array.isArray(rankPayload)) setRankings(rankPayload as RankingEntry[]);
+      }
+
+      // Futures / outright odds
+      const futRes = await fetch(`${API}/v1/${s}/futures?limit=25`, { headers, signal });
+      if (!signal?.aborted && futRes.ok) {
+        const futJson = await futRes.json();
+        const futPayload = futJson?.data && futJson?.success ? futJson.data : futJson;
+        if (Array.isArray(futPayload)) setFutures(futPayload as FuturesEntry[]);
       }
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
@@ -1125,6 +1169,8 @@ export function SeasonClient() {
     if (!showFullView || !data) return links;
     if (data.championship_probabilities?.length) links.push({ id: "championship", label: "Championship" });
     if (simPredictions.length) links.push({ id: "predictions", label: "Predictions" });
+    if (rankings.length) links.push({ id: "rankings", label: "Rankings" });
+    if (futures.length) links.push({ id: "futures", label: "Futures" });
     if (data.playoff_odds?.length) links.push({ id: "playoffs", label: "Playoffs" });
     if (data.awards && Object.keys(data.awards).length > 0) links.push({ id: "awards", label: "Awards" });
     if (data.round_by_round_odds?.length) links.push({ id: "rounds", label: "Rounds" });
@@ -1136,7 +1182,7 @@ export function SeasonClient() {
     if (sport === "f1" && data.awards?.wdc) links.push({ id: "wdc", label: "WDC" });
     if (sport === "f1" && data.awards?.wcc) links.push({ id: "wcc", label: "WCC" });
     return links;
-  }, [data, showFullView, sport, simPredictions.length]);
+  }, [data, showFullView, sport, simPredictions.length, rankings.length, futures.length]);
 
   return (
     <main className="season-shell">
@@ -1348,6 +1394,80 @@ export function SeasonClient() {
                     </SectionBand>
                   )}
                 </>
+              )}
+
+              {/* AP/Coaches Poll Rankings — primarily ncaaf/ncaab */}
+              {rankings.length > 0 && (
+                <SectionBand title="📊 Poll Rankings" id="rankings">
+                  <div className="card">
+                    <div className="card-body" style={{ padding: 0, overflowX: "auto" }}>
+                      <table className="stats-table" style={{ width: "100%" }}>
+                        <thead>
+                          <tr>
+                            <th>Rank</th>
+                            <th>Team</th>
+                            {rankings[0]?.poll && <th>Poll</th>}
+                            {rankings[0]?.points !== undefined && <th>Points</th>}
+                            {rankings[0]?.first_place_votes !== undefined && <th>1st Votes</th>}
+                            {rankings[0]?.wins !== undefined && <th>W-L</th>}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rankings.slice(0, 25).map((r, i) => (
+                            <tr key={i}>
+                              <td style={{ fontWeight: 700, color: "var(--color-text-accent)" }}>
+                                #{r.rank ?? i + 1}
+                              </td>
+                              <td>{r.school ?? r.team ?? r.name ?? "—"}</td>
+                              {r.poll && <td style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>{r.poll}</td>}
+                              {r.points !== undefined && <td>{r.points}</td>}
+                              {r.first_place_votes !== undefined && <td>{r.first_place_votes}</td>}
+                              {r.wins !== undefined && <td>{r.wins}-{r.losses ?? 0}</td>}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </SectionBand>
+              )}
+
+              {/* Futures / Outright Odds */}
+              {futures.length > 0 && (
+                <SectionBand title="📈 Futures & Outright Odds" id="futures">
+                  <div className="card">
+                    <div className="card-body" style={{ padding: 0, overflowX: "auto" }}>
+                      <table className="stats-table" style={{ width: "100%" }}>
+                        <thead>
+                          <tr>
+                            <th>Team / Player</th>
+                            {futures[0]?.market && <th>Market</th>}
+                            {futures[0]?.american_odds !== undefined && <th>Odds</th>}
+                            {futures[0]?.implied_probability !== undefined && <th>Impl. Prob</th>}
+                            {futures[0]?.book && <th>Book</th>}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {futures.slice(0, 25).map((f, i) => (
+                            <tr key={i}>
+                              <td style={{ fontWeight: 600 }}>{f.team ?? f.name ?? f.description ?? "—"}</td>
+                              {f.market && <td style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", textTransform: "capitalize" }}>{f.market.replace(/_/g, " ")}</td>}
+                              {f.american_odds !== undefined && (
+                                <td style={{ color: (f.american_odds ?? 0) > 0 ? "var(--color-win)" : "var(--color-text-secondary)", fontWeight: 700 }}>
+                                  {(f.american_odds ?? 0) > 0 ? `+${f.american_odds}` : f.american_odds}
+                                </td>
+                              )}
+                              {f.implied_probability !== undefined && (
+                                <td>{((f.implied_probability ?? 0) * 100).toFixed(1)}%</td>
+                              )}
+                              {f.book && <td style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>{f.book}</td>}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </SectionBand>
               )}
             </div>
           </div>

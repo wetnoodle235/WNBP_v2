@@ -15,8 +15,9 @@
 SHELL=/bin/bash
 PATH=/usr/local/bin:/usr/bin:/bin
 PROJECT=/home/derek/Documents/stock/v5.0
-ODDSAPI_KEY=your_oddsapi_key_here
-# SGO_API_KEY=your_sgo_key_here
+# API keys are loaded from config/.env by each script.
+# No need to set them here — daily_pipeline.py and odds_scheduler.py
+# both call load_dotenv(config/.env) at startup.
 
 # ── Opening Odds (12:05 AM EST daily) ───────────────────
 # Captures the day's opening lines as early as possible

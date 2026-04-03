@@ -52,6 +52,15 @@ DATA_DIR = PROJECT_ROOT / "data"
 
 sys.path.insert(0, str(BACKEND_DIR))
 
+# Load config/.env for API keys (ODDSAPI_KEY, SGO_API_KEY, etc.)
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _cfg = PROJECT_ROOT / "config" / ".env"
+    if _cfg.exists():
+        _load_dotenv(_cfg, override=False)
+except ImportError:
+    pass
+
 # ── Constants ────────────────────────────────────────────
 
 EST = timezone(timedelta(hours=-5))
