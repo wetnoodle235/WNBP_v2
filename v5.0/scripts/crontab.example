@@ -43,6 +43,10 @@ ODDSAPI_KEY=your_oddsapi_key_here
 # Main pipeline: import all data, normalize, train, predict
 0 6 * * *  cd $PROJECT && python3 scripts/daily_pipeline.py >> logs/cron_pipeline.log 2>&1
 
+# ── Model Drift Detection (7 AM EST, after pipeline) ────
+# Checks rolling 7-day accuracy vs 30-day baseline; exits 1 if drift detected
+0 7 * * *  cd $PROJECT && /home/derek/Documents/stock/.venv/bin/python3 scripts/model_drift_detector.py >> logs/cron_drift.log 2>&1
+
 # ── Recurring Curated + DuckDB Refresh (every 30 min) ───
 # Auto-detects changed normalized files and refreshes curated outputs + DuckDB once per run.
 */30 * * * *  cd $PROJECT && /home/derek/Documents/stock/.venv/bin/python3 scripts/recurring_curated_refresh.py --mode auto >> logs/cron_curated_refresh.log 2>&1

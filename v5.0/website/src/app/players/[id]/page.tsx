@@ -12,6 +12,7 @@ import Link from "next/link";
 import type { Player } from "../page";
 import { resolveServerApiBase } from "@/lib/api-base";
 import { preferredPlayerHeadshotUrls } from "@/lib/media";
+import { StatRadarChart } from "@/components/charts";
 
 /* ------------------------------------------------------------------ */
 /*  Types & helpers                                                    */
@@ -497,6 +498,17 @@ export default async function PlayerDetailPage({
           </div>
         )}
       </SectionBand>
+
+      {/* ── Stat Radar ────────────────────────────────────── */}
+      {stats && statDefs.length >= 3 && (
+        <SectionBand title="Stat Radar">
+          <StatRadarChart
+            sport={sport}
+            playerId={id}
+            height={320}
+          />
+        </SectionBand>
+      )}
 
       {/* ── Recent Games ──────────────────────────────────── */}
       {gameLog.length > 0 && (

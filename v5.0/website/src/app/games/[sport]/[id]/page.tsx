@@ -22,6 +22,7 @@ import {
   StoryCard,
 } from "@/components/ui";
 import { VenueVisual } from "@/components/venue";
+import { GameChartsPanel } from "@/components/charts/GameChartsPanel";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -1154,6 +1155,19 @@ export default async function GameDetailPage({ params }: PageProps) {
           </div>
         </SectionBand>
       )}
+
+      {/* ============================================================ */}
+      {/*  CHARTS: LINE MOVEMENT + WIN PROBABILITY                      */}
+      {/* ============================================================ */}
+      <SectionBand title="Market Charts">
+        <GameChartsPanel
+          sport={sport}
+          gameId={id}
+          homeTeam={game.home_team ?? "Home"}
+          awayTeam={game.away_team ?? "Away"}
+          isLiveOrFinal={live || final}
+        />
+      </SectionBand>
 
       {/* ============================================================ */}
       {/*  RELATED NEWS                                                 */}

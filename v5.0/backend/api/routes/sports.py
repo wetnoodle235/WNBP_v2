@@ -1817,6 +1817,93 @@ async def list_market_signals(
     return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
 
 
+@router.get("/sharp-signals", include_in_schema=False, deprecated=True)
+@router.get(
+    "/sharp_signals",
+    summary="Sharp money & public betting split signals",
+    description=(
+        "Combines ActionNetwork public/sharp split percentages with OddsAPI line movement "
+        "to expose consensus betting direction. Returns bet%, handle%, and line drift per game."
+    ),
+    tags=["Advanced"],
+)
+async def list_sharp_signals(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    game_id: Optional[str] = Query(None, description="Filter by game ID"),
+    date: Optional[str] = Query(None, description="Filter by date (YYYY-MM-DD)"),
+    min_handle_pct: Optional[float] = Query(None, ge=0, le=100, description="Min handle % on favorite"),
+    limit: int = Query(50, ge=1, le=500, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    await check_tier_access(api_key, sport, "market-signals")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        import pandas as pd
+
+        svc = _gds()
+
+        # Load ActionNetwork trends (public/sharp split)
+        an_df = svc._load_kind(sport, "action_network_trends", season=effective_season)
+        if an_df.empty:
+            an_df = svc._load_kind(sport, "trends", season=effective_season)
+
+        # Load market signals (line movement deltas)
+        ms_df = svc._load_kind(sport, "market_signals", season=effective_season)
+
+        # Load odds history for line drift
+        oh_df = svc._load_kind(sport, "odds_history", season=effective_season)
+
+        results = []
+
+        # Prefer ActionNetwork if available
+        if not an_df.empty:
+            df = an_df.copy()
+            if game_id and "game_id" in df.columns:
+                df = df[df["game_id"].astype(str) == game_id]
+            if date and "date" in df.columns:
+                df = df[df["date"].astype(str).str.startswith(date)]
+            if min_handle_pct is not None and "home_handle_pct" in df.columns:
+                df = df[df["home_handle_pct"] >= min_handle_pct]
+            results = svc._df_to_records(df)
+
+        # Enrich with line movement context from market_signals
+        if results and not ms_df.empty and "game_id" in ms_df.columns:
+            ms_index: dict[str, dict] = {}
+            for row in svc._df_to_records(ms_df):
+                gid = str(row.get("game_id", ""))
+                if gid and gid not in ms_index:
+                    ms_index[gid] = row
+            for rec in results:
+                gid = str(rec.get("game_id", ""))
+                if gid in ms_index:
+                    ms = ms_index[gid]
+                    rec["spread_open"] = ms.get("spread_open")
+                    rec["spread_close"] = ms.get("spread_close")
+                    rec["spread_drift"] = ms.get("spread_delta") or ms.get("spread_drift")
+                    rec["market_regime"] = ms.get("market_regime")
+
+        # If no ActionNetwork data, fall back to market_signals only
+        if not results and not ms_df.empty:
+            df = ms_df.copy()
+            if game_id and "game_id" in df.columns:
+                df = df[df["game_id"].astype(str) == game_id]
+            if date and "date" in df.columns:
+                df = df[df["date"].astype(str).str.startswith(date)]
+            results = svc._df_to_records(df)
+
+    except Exception:
+        results = []
+
+    return _paginated_response(results, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
 @router.get("/schedule-fatigue", include_in_schema=False, deprecated=True)
 @router.get(
     "/schedule_fatigue",
@@ -2207,6 +2294,167 @@ async def list_pitcher_game_stats(
             df = df[df["player_id"].astype(str) == player_id]
         if team_id and "team_id" in df.columns:
             df = df[df["team_id"].astype(str) == team_id]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+# ── Depth Charts ───────────────────────────────────────────────
+@router.get(
+    "/depth_charts",
+    summary="Team depth charts",
+    description="Current depth chart positions for teams, grouped by position.",
+    tags=["roster"],
+)
+async def list_depth_charts(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    team_id: Optional[str] = Query(None, description="Filter by team ID"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    """Depth chart positions from ESPN — ordered starters through reserves by position."""
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "depth_charts")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    import glob as _glob, json as _json, os as _os
+
+    raw_dir = _os.path.join("data", "raw", "espn", sport, str(effective_season), "depth_charts")
+    records: list[dict] = []
+
+    if _os.path.isdir(raw_dir):
+        files = sorted(_glob.glob(_os.path.join(raw_dir, "*.json")))
+        for fpath in files:
+            try:
+                with open(fpath) as f:
+                    raw = _json.load(f)
+                t_id = str(raw.get("teamId", ""))
+                if team_id and t_id != str(team_id):
+                    continue
+                depth = raw.get("depthCharts", {})
+                team_info = depth.get("team", {})
+                for chart in (depth.get("depthchart") or []):
+                    positions = chart.get("positions") or {}
+                    if isinstance(positions, dict):
+                        for pos_key, pos_data in positions.items():
+                            pos_name = pos_data.get("position", {}).get("displayName", pos_key.upper())
+                            for rank, athlete in enumerate((pos_data.get("athletes") or []), start=1):
+                                records.append({
+                                    "team_id": t_id,
+                                    "team_name": team_info.get("displayName", ""),
+                                    "team_abbr": team_info.get("abbreviation", ""),
+                                    "position": pos_name,
+                                    "position_key": pos_key,
+                                    "rank": rank,
+                                    "athlete_id": str(athlete.get("id", "")),
+                                    "athlete_name": (
+                                        athlete.get("athlete", {}).get("displayName", "")
+                                        or athlete.get("displayName", "")
+                                    ),
+                                    "season": effective_season,
+                                })
+            except Exception:
+                continue
+
+    # Fall back to normalized data_service if no raw ESPN files
+    if not records:
+        try:
+            svc = ds
+            df = svc._load_kind(sport, "depth_charts", season=effective_season)
+            if not df.empty:
+                if team_id and "team_id" in df.columns:
+                    df = df[df["team_id"].astype(str) == str(team_id)]
+                records = svc._df_to_records(df)
+        except Exception:
+            records = []
+
+    return _paginated_response(records, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+# ── Rankings ───────────────────────────────────────────────────
+@router.get(
+    "/rankings",
+    summary="Power rankings / polls",
+    description="AP Poll, Coaches Poll, and power rankings for college and pro sports.",
+    tags=["meta"],
+)
+async def list_rankings(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    week: Optional[str] = Query(None, description="Week number or 'current'"),
+    limit: int = Query(50, ge=1, le=500, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    """AP Poll, Coaches Poll, and power rankings. Primarily for college sports."""
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "rankings")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        svc = ds
+        df = svc._load_kind(sport, "rankings", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if week and week.lower() != "current" and "week" in df.columns:
+            df = df[df["week"].astype(str) == str(week)]
+        elif week and week.lower() == "current" and "week" in df.columns:
+            max_week = df["week"].max()
+            df = df[df["week"] == max_week]
+        if "week" in df.columns:
+            df = df.sort_values(["week", "rank"], ascending=[False, True], na_position="last")
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+# ── Futures / Outrights ────────────────────────────────────────
+@router.get(
+    "/futures",
+    summary="Futures and outright odds",
+    description="Championship, award, and long-term betting markets (e.g. Super Bowl winner, MVP).",
+    tags=["odds"],
+)
+async def list_futures(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    market: Optional[str] = Query(None, description="Market type filter (e.g. 'championship', 'mvp')"),
+    limit: int = Query(50, ge=1, le=500, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    """Futures and outright odds from ESPN and OddsAPI."""
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "odds")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        svc = ds
+        df = svc._load_kind(sport, "futures", season=effective_season)
+        if df.empty:
+            # Try ESPN futures data
+            df = svc._load_kind(sport, "odds_futures", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if market and "market" in df.columns:
+            df = df[df["market"].str.contains(market, case=False, na=False)]
+        if "odds" in df.columns:
+            df = df.sort_values("odds", ascending=True, na_position="last")
         data = svc._df_to_records(df)
     except Exception:
         data = []

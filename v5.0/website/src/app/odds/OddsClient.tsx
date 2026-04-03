@@ -5,6 +5,7 @@ import { SectionBand, Pagination } from "@/components/ui";
 import { getDisplayName, getSportColor } from "@/lib/sports-config";
 import { formatOdds, formatGameDateTime } from "@/lib/formatters";
 import { resolveServerApiBase } from "@/lib/api-base";
+import { LineMovementChart } from "@/components/charts";
 
 const API_BASE = typeof window === "undefined"
   ? resolveServerApiBase()
@@ -580,6 +581,15 @@ export function OddsClient({ initialOdds, sports }: Props) {
                           </tbody>
                         </table>
                       </div>
+                    </div>
+                    {/* Line movement chart for this game */}
+                    <div style={{ padding: "0 var(--space-4) var(--space-4)" }}>
+                      <LineMovementChart
+                        sport={game.sport}
+                        gameId={game.game_id}
+                        lineType="h2h_home"
+                        height={180}
+                      />
                     </div>
                   </div>
                 );

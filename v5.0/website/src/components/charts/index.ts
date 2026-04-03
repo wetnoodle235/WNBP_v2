@@ -9,3 +9,6 @@ export { CorrelationHeatmap } from "./CorrelationHeatmap";
 export { WordCloudImage } from "./WordCloudImage";
 export { StatRadarChart } from "./StatRadarChart";
 export { DistributionChart } from "./DistributionChart";
+export { WinProbChart } from "./WinProbChart";
+export { LineMovementChart } from "./LineMovementChart";
+export { GameChartsPanel } from "./GameChartsPanel";

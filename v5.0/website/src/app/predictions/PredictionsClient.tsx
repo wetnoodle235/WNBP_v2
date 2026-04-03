@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { SectionBand, Badge, Pagination } from "@/components/ui";
 import { getDisplayName, getSportColor } from "@/lib/sports-config";
 import { formatProbability } from "@/lib/formatters";
+import { SHAPChart } from "@/components/charts";
 
 interface Pred {
   game_id: string;
@@ -474,6 +475,19 @@ export function PredictionsClient({ predictions, sports, today, hasPremium, init
           </div>
         )}
       </SectionBand>
+
+      {/* Feature importance for selected sport */}
+      {activeSport && (
+        <SectionBand title="Model Explainability">
+          <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)", marginBottom: "var(--space-4)" }}>
+            SHAP feature importance shows which factors most influence predictions for {getDisplayName(activeSport)}.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))", gap: "var(--space-5)" }}>
+            <SHAPChart sport={activeSport} model="spread" title="Spread Model" height={360} />
+            <SHAPChart sport={activeSport} model="total" title="Total Model" height={360} />
+          </div>
+        </SectionBand>
+      )}
     </main>
   );
 }
