@@ -82,9 +82,10 @@ ncaaf/
 ├── conferences/              ← static, no partitioning
 │   └── part-*.parquet
 │
-├── teams/                    ← season=YYYY
-│   └── season=2023/
-│       └── part-*.parquet
+├── teams/                    ← static, no partitioning
+│   ├── base.parquet
+│   ├── fbs.parquet
+│   └── staff.parquet
 │
 ├── players/                  ← season=YYYY
 │   └── season=2023/
@@ -663,8 +664,8 @@ understood by DuckDB, Polars, Spark, and PyArrow.
 
 | Tier | Partitioning | Entities | Rationale |
 |------|-------------|----------|-----------|
-| **Static** | None | `conferences`, `venues` | Small reference tables (< 1 MB). Full scan is trivial. Data changes rarely (venue renames, conference realignment). |
-| **Season-only** | `season=YYYY` | `teams`, `players`, `standings`, `ratings`, `recruiting` | Data is assembled once per season. Within a season, it may be updated but not subdivided by week. Season pruning eliminates ~95% of data for single-season queries. |
+| **Static** | None | `conferences`, `teams`, `venues` | Small reference tables (< 10 MB). Full scan is trivial. Data changes rarely (team changes, venue renames, conference realignment). Stored as flat parquets with no season= partitioning. |
+| **Season-only** | `season=YYYY` | `players`, `standings`, `ratings`, `recruiting` | Data is assembled once per season. Within a season, it may be updated but not subdivided by week. Season pruning eliminates ~95% of data for single-season queries. |
 | **Season + Week** | `season=YYYY/week=WW` | `games`, `plays`, `player_stats`, `team_stats`, `rankings`, `odds`, `advanced` | Data changes weekly during the season. Week partitioning enables efficient incremental writes and targeted queries (e.g., "show me Week 5 stats"). |
 
 ### Partition Key Conventions
@@ -794,12 +795,11 @@ as top-level groupings.
 
 All examples assume the data lives at `data/normalized_curated/ncaaf/`.
 
-### 8.1 Read All Teams for Season 2023
+### 8.1 Read All Teams
 
 ```sql
 SELECT *
-FROM read_parquet('data/normalized_curated/ncaaf/teams/season=2023/*.parquet',
-                  hive_partitioning=true);
+FROM read_parquet('data/normalized_curated/ncaaf/teams/*.parquet');
 ```
 
 ### 8.2 Get Game-Level Player Stats for Week 5
@@ -930,14 +930,14 @@ LIMIT 10;
 |--------|--------------------------|--------------------------|
 | **Top-level folders** | 6 major categories (`team/`, `player/`, `game/`, `betting/`, `analysis/`, `recruiting/`) | 14 flat entities (`teams/`, `players/`, `games/`, etc.) |
 | **Total entity paths** | 34+ leaf-level directories | 14 directories |
-| **Max directory depth** | 5+ levels (`team/identity/base/season=YYYY/`) | 3 levels (`teams/season=YYYY/part-*.parquet`) |
+| **Max directory depth** | 5+ levels (`team/identity/base/season=YYYY/`) | 2 levels max (`games/season=YYYY/week=WW/`); static entities are flat files |
 | **Path complexity** | `game/advanced/epa/season=2023/week=05/` | `advanced/season=2023/week=05/` |
 | **Data discovery** | Requires routing registry or documentation | Self-documenting — `ls ncaaf/` shows all entities |
 | **Duplicate paths** | Yes — ratings under both `team/` and `analysis/` | No — each concept exists in exactly one place |
 | **Join ergonomics** | Must navigate across category trees | All entities at the same level, simple joins |
 | **Discriminator usage** | None — separate folders for each variant | 8 discriminators eliminate ~20 extra folders |
 | **Partition consistency** | Mixed — some entities had no partitioning | Uniform: static, season-only, or season+week |
-| **DuckDB glob queries** | Deep nested globs: `**/team/**/season=2023/**` | Simple globs: `teams/season=2023/*.parquet` |
+| **DuckDB glob queries** | Deep nested globs: `**/team/**/season=2023/**` | Simple: `teams/*.parquet` or `games/season=2023/*.parquet` |
 | **New data source effort** | Find the right category, subcategory, and depth | Create or append to the one relevant entity |
 | **Cognitive load** | Must learn category taxonomy | 14 names to remember |
 

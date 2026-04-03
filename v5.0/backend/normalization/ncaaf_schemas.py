@@ -10,7 +10,7 @@
 # Entity overview
 # ───────────────
 #  1. conferences      — static reference, no partitioning
-#  2. teams            — partition: season=
+#  2. teams            — static reference, no partitioning
 #  3. players          — partition: season=
 #  4. games            — partition: season=, week=
 #  5. plays            — partition: season=, week=   (plays + drives)
@@ -559,11 +559,11 @@ NCAAF_SCHEMAS: dict[str, pa.Schema] = {
 }
 
 PARTITION_KEYS: dict[str, list[str]] = {
-    # Static reference — no partitioning
+    # Static reference — no partitioning (single flat parquets)
     "conferences":  [],
+    "teams":        [],
     "venues":       [],
     # Season only
-    "teams":        ["season"],
     "players":      ["season"],
     "standings":    ["season"],
     "ratings":      ["season"],
