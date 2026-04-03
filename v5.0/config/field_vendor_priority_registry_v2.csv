@@ -1,0 +1,77 @@
+sport,entity,label_pattern,provider_priority,confidence,owner,last_reviewed,notes
+ncaaf,conferences,*,cfbdata>espn,high,data-platform,2025-01-15,CFBData is authoritative for conference definitions
+ncaaf,teams,*,espn>cfbdata,high,data-platform,2025-01-15,ESPN is primary team source
+ncaaf,teams,color_primary,cfbdata>espn,high,data-platform,2025-01-15,CFBData has richer color metadata
+ncaaf,teams,color_secondary,cfbdata>espn,high,data-platform,2025-01-15,CFBData has richer color metadata
+ncaaf,teams,logo_url,espn>cfbdata,high,data-platform,2025-01-15,ESPN logos are higher resolution
+ncaaf,teams,abbreviation,espn>cfbdata,high,data-platform,2025-01-15,ESPN abbreviations are industry standard
+ncaaf,players,*,espn>cfbdata,high,data-platform,2025-01-15,ESPN is primary player source
+ncaaf,players,hometown,cfbdata>espn,medium,data-platform,2025-01-15,CFBData has more complete hometown data
+ncaaf,players,recruit_rating,cfbdata>espn,high,data-platform,2025-01-15,CFBData integrates 247/Rivals ratings
+ncaaf,games,*,espn>cfbdata,high,data-platform,2025-01-15,ESPN is primary game source
+ncaaf,games,temperature,weather>espn>cfbdata,high,data-platform,2025-01-15,Weather API is most accurate for game-time temps
+ncaaf,games,wind_speed,weather>espn>cfbdata,high,data-platform,2025-01-15,Weather API is most accurate for wind
+ncaaf,games,weather_condition,weather>espn>cfbdata,high,data-platform,2025-01-15,Weather API is most accurate for conditions
+ncaaf,games,humidity,weather>espn>cfbdata,medium,data-platform,2025-01-15,Weather API is most accurate for humidity
+ncaaf,games,excitement_index,cfbdata>espn,high,data-platform,2025-01-15,CFBData exclusive metric
+ncaaf,games,highlights,espn>cfbdata,medium,data-platform,2025-01-15,ESPN has richer highlight links
+ncaaf,plays,*,cfbdata>espn,high,data-platform,2025-01-15,CFBData has richer play-by-play detail
+ncaaf,plays,epa,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for play-level EPA
+ncaaf,plays,wpa,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for play-level WPA
+ncaaf,plays,ppa,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for play-level PPA
+ncaaf,drives,*,cfbdata>espn,high,data-platform,2025-01-15,CFBData has richer drive-level data
+ncaaf,player_stats,*,espn>cfbdata,high,data-platform,2025-01-15,ESPN is primary game player stats source
+ncaaf,player_stats,ppa,cfbdata>espn,high,data-platform,2025-01-15,CFBData is primary for player PPA
+ncaaf,team_stats,*,espn>cfbdata,high,data-platform,2025-01-15,ESPN is primary game team stats source
+ncaaf,team_stats,explosiveness,cfbdata>espn,high,data-platform,2025-01-15,CFBData advanced metric
+ncaaf,team_stats,success_rate,cfbdata>espn,high,data-platform,2025-01-15,CFBData advanced metric
+ncaaf,player_season_stats,*,espn>cfbdata,high,data-platform,2025-01-15,ESPN is primary season player stats source
+ncaaf,player_season_stats,ppa_total,cfbdata>espn,high,data-platform,2025-01-15,CFBData PPA season aggregates
+ncaaf,player_season_stats,usage_overall,cfbdata,high,data-platform,2025-01-15,CFBData exclusive usage metric
+ncaaf,team_season_stats,*,espn>cfbdata,high,data-platform,2025-01-15,ESPN is primary season team stats source
+ncaaf,team_season_stats,sp_rating,cfbdata,high,data-platform,2025-01-15,CFBData exclusive SP+ rating
+ncaaf,team_season_stats,havoc_total,cfbdata,high,data-platform,2025-01-15,CFBData exclusive havoc metric
+ncaaf,standings,*,espn>cfbdata,high,data-platform,2025-01-15,ESPN is primary standings source
+ncaaf,standings,ats_wins,cfbdata>espn,high,data-platform,2025-01-15,CFBData has richer ATS data
+ncaaf,standings,ats_losses,cfbdata>espn,high,data-platform,2025-01-15,CFBData has richer ATS data
+ncaaf,standings,ats_pushes,cfbdata>espn,high,data-platform,2025-01-15,CFBData has richer ATS data
+ncaaf,rankings,*,espn>cfbdata,high,data-platform,2025-01-15,ESPN is primary rankings source
+ncaaf,rankings,first_place_votes,espn>cfbdata,medium,data-platform,2025-01-15,ESPN provides vote breakdowns
+ncaaf,odds,*,odds>oddsapi>cfbdata,high,data-platform,2025-01-15,Dedicated odds providers are most accurate
+ncaaf,odds,spread,odds>oddsapi>cfbdata,high,data-platform,2025-01-15,Odds API is primary for spreads
+ncaaf,odds,over_under,odds>oddsapi>cfbdata,high,data-platform,2025-01-15,Odds API is primary for totals
+ncaaf,odds,moneyline,odds>oddsapi>cfbdata,high,data-platform,2025-01-15,Odds API is primary for moneylines
+ncaaf,odds,live_spread,odds>oddsapi,high,data-platform,2025-01-15,Live odds from dedicated providers
+ncaaf,odds,player_prop_*,odds>oddsapi,medium,data-platform,2025-01-15,Player props from odds providers
+ncaaf,coaches,*,cfbdata>espn,high,data-platform,2025-01-15,CFBData has richer coaching history
+ncaaf,coaches,seasons,cfbdata,high,data-platform,2025-01-15,CFBData tracks full coaching tenure
+ncaaf,injuries,*,espn,high,data-platform,2025-01-15,ESPN is sole source for injury reports
+ncaaf,recruiting_classes,*,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for recruiting classes
+ncaaf,recruiting_groups,*,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for recruiting groups
+ncaaf,recruiting_players,*,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for individual recruit data
+ncaaf,recruiting_players,rating_247,cfbdata,high,data-platform,2025-01-15,247Sports composite via CFBData
+ncaaf,recruiting_players,stars,cfbdata,high,data-platform,2025-01-15,Star rating via CFBData
+ncaaf,ratings/elo,*,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for Elo ratings
+ncaaf,ratings/fpi,*,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for FPI data
+ncaaf,ratings/sp,*,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for SP+ ratings
+ncaaf,ratings/sp_conference,*,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for conference SP+
+ncaaf,ratings/srs,*,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for SRS values
+ncaaf,ratings/talent,*,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for talent composites
+ncaaf,advanced/epa,*,cfbdata>espn,high,data-platform,2025-01-15,CFBData is primary for EPA metrics
+ncaaf,advanced/havoc,*,cfbdata>espn,high,data-platform,2025-01-15,CFBData is primary for havoc metrics
+ncaaf,advanced/ppa,*,cfbdata>espn,high,data-platform,2025-01-15,CFBData is primary for PPA metrics
+ncaaf,advanced/ppa,predicted_ppa,cfbdata,high,data-platform,2025-01-15,CFBData exclusive predicted PPA model
+ncaaf,advanced/win_probability,*,cfbdata>espn,high,data-platform,2025-01-15,CFBData is primary for win probability
+ncaaf,draft,*,cfbdata>espn,high,data-platform,2025-01-15,CFBData has richer draft data
+ncaaf,draft,draft_position,cfbdata>espn,high,data-platform,2025-01-15,CFBData tracks full draft positions
+ncaaf,draft,nfl_team,cfbdata>espn,high,data-platform,2025-01-15,Draft team assignments
+ncaaf,portal,*,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for transfer portal
+ncaaf,returning_production,*,cfbdata,high,data-platform,2025-01-15,CFBData is sole source for returning production
+ncaaf,venues,*,cfbdata>espn,high,data-platform,2025-01-15,CFBData has richer venue metadata
+ncaaf,venues,capacity,cfbdata>espn,medium,data-platform,2025-01-15,CFBData tracks stadium capacity
+ncaaf,venues,location_lat,cfbdata>espn,medium,data-platform,2025-01-15,Geolocation from CFBData
+ncaaf,venues,location_lon,cfbdata>espn,medium,data-platform,2025-01-15,Geolocation from CFBData
+ncaaf,media,*,espn>cfbdata,high,data-platform,2025-01-15,ESPN is primary for broadcast assignments
+ncaaf,media,outlet,espn>cfbdata,high,data-platform,2025-01-15,ESPN tracks TV network assignments
+ncaaf,news,*,espn,medium,data-platform,2025-01-15,ESPN is sole source for player news
+ncaaf,market_signals,*,derived,medium,data-platform,2025-01-15,Internally derived from odds movement analytics

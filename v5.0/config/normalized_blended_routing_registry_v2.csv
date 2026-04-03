@@ -1,0 +1,40 @@
+sport,source_data_type,entity,partition_keys,canonical_entity_key,snapshot_targets,status,owner,notes
+ncaaf,reference,conferences,none,conference_id,curated,implemented,data-platform,Conference definitions and metadata
+ncaaf,reference,venues,none,venue_id,curated,implemented,data-platform,Venue/stadium information
+ncaaf,team_identity,teams,"season",team_id,curated,implemented,data-platform,Team records with FBS flag merged
+ncaaf,team_identity,players,"season",player_id,curated,implemented,data-platform,Player roster and identity records
+ncaaf,team_context,coaches,"season",coach_id,curated,implemented,data-platform,Coaching staff records
+ncaaf,team_ratings,ratings/elo,"season",team_id,curated,implemented,data-platform,Elo ratings per team per season
+ncaaf,team_ratings,ratings/fpi,"season",team_id,curated,implemented,data-platform,Football Power Index ratings
+ncaaf,team_ratings,ratings/sp,"season",team_id,curated,implemented,data-platform,SP+ ratings per team
+ncaaf,team_ratings,ratings/sp_conference,"season",conference_id,curated,implemented,data-platform,SP+ ratings aggregated by conference
+ncaaf,team_ratings,ratings/srs,"season",team_id,curated,implemented,data-platform,Simple Rating System values
+ncaaf,team_ratings,ratings/talent,"season",team_id,curated,implemented,data-platform,Composite talent rankings
+ncaaf,team_record,standings,"season",team_id,curated,implemented,data-platform,Win/loss and ATS records merged
+ncaaf,team_recruiting,recruiting_classes,"season",team_id,curated,implemented,data-platform,Team-level recruiting class rankings
+ncaaf,team_recruiting,recruiting_groups,"season",position_group,curated,implemented,data-platform,Recruiting rankings by position group
+ncaaf,game_schedule,games,"season",game_id,curated,implemented,data-platform,Game schedule and results
+ncaaf,game_schedule,media,"season",game_id,curated,implemented,data-platform,Broadcast and media assignments
+ncaaf,game_box,team_stats,"season",game_id|team_id,curated,implemented,data-platform,Per-game team box scores with advanced stats merged
+ncaaf,game_box,player_stats,"season",game_id|player_id,curated,implemented,data-platform,Per-game player box scores with PPA merged
+ncaaf,game_advanced,advanced/epa,"season,week",game_id|team_id,curated,implemented,data-platform,Expected Points Added per game
+ncaaf,game_advanced,advanced/havoc,"season,week",game_id|team_id,curated,implemented,data-platform,Havoc rate metrics per game
+ncaaf,game_advanced,advanced/ppa,"season,week",game_id|team_id,curated,implemented,data-platform,Predicted Points Added per game and season level
+ncaaf,game_advanced,advanced/win_probability,"season,week",game_id,curated,implemented,data-platform,Win probability model outputs
+ncaaf,play_by_play,plays,"season",play_id,curated,implemented,data-platform,Play-level events and play details merged
+ncaaf,play_by_play,drives,"season",drive_id,curated,implemented,data-platform,Drive-level summaries
+ncaaf,market,odds,"season",game_id|book_id,curated,implemented,data-platform,Lines + live odds + history + props merged
+ncaaf,market,market_signals,"season",game_id,curated,implemented,data-platform,Derived market analytics signals
+ncaaf,player_identity,recruiting_players,"season",player_id,curated,implemented,data-platform,Individual recruit profiles and ratings
+ncaaf,player_identity,draft,"season",player_id,curated,implemented,data-platform,Draft picks with position and team ref data merged
+ncaaf,player_identity,injuries,"season",player_id,curated,implemented,data-platform,Injury reports and status
+ncaaf,player_identity,news,"season",player_id,curated,planned,data-platform,Player news feed items
+ncaaf,player_season,player_season_stats,"season",player_id,curated,implemented,data-platform,Season-level player stats with PPA + rollup + usage merged
+ncaaf,player_misc,portal,"season",player_id,curated,implemented,data-platform,Transfer portal entries
+ncaaf,player_misc,returning_production,"season",team_id,curated,implemented,data-platform,Returning production percentages per team
+ncaaf,season_agg,team_season_stats,"season",team_id,curated,implemented,data-platform,Season-level team stats with advanced + rollup merged
+ncaaf,season_agg,rankings,"season,week",team_id|poll_id,curated,implemented,data-platform,AP/Coaches/CFP poll rankings per week
+ncaaf,reference,reference/calendar,none,season,curated,implemented,data-platform,Season calendar windows
+ncaaf,reference,reference/metadata,none,key,curated,implemented,data-platform,API and dataset metadata
+ncaaf,reference,reference/metrics,none,metric_id,curated,implemented,data-platform,Metric category definitions and FG/EP tables
+ncaaf,reference,reference/play_types,none,play_type_id,curated,implemented,data-platform,Play type and stat type reference tables
