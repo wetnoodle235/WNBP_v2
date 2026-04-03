@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { ALL_SPORT_KEYS } from "@/lib/sports";
 import { resolveServerApiBase } from "@/lib/api-base";
+import { SHAPChart } from "@/components/charts";
 
 const API_BASE = typeof window === "undefined"
   ? resolveServerApiBase()
@@ -385,6 +386,10 @@ export function ModelHealthClient() {
       </div>
     </section>
   )}
+
+      <section style={{ marginTop: "var(--space-6)" }}>
+        <SHAPChart sport={sport} title="Feature Importance (SHAP)" />
+      </section>
 
     </main>
   );

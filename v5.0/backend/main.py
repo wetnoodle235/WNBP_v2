@@ -22,6 +22,7 @@ from services.data_service import get_data_service
 from services.media_mirror import MediaTarget, get_media_mirror_service
 from api.routes import (
     autobet_router,
+    charts_router,
     features_router,
     live_router,
     meta_router,
@@ -737,6 +738,7 @@ def create_app() -> FastAPI:
     app.include_router(paper_router)
     app.include_router(stripe_router)
     app.include_router(autobet_router)
+    app.include_router(charts_router)
 
     # Serve mirrored media assets as static files.
     media_dir = settings.media_dir

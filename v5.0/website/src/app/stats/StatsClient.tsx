@@ -5,6 +5,7 @@ import Link from "next/link";
 import { SectionBand, Pagination } from "@/components/ui";
 import { getDisplayName, getSportColor } from "@/lib/sports-config";
 import { useDebounce } from "@/lib/hooks";
+import { StatTrendChart, LeadersBarChart } from "@/components/charts";
 import {
   type SortDir,
   type ColumnDef,
@@ -402,6 +403,22 @@ export function StatsClient({ playerStatsBySport, teamStatsBySport, teamMapBySpo
             </div>
 
             <Pagination page={safeP} totalPages={totalPages} onPageChange={setPage} />
+
+          {/* Inline chart panels below the table */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "var(--space-5)", marginTop: "var(--space-6)" }}>
+            <LeadersBarChart
+              sport={activeSport}
+              stat={sortKey ?? "pts"}
+              limit={10}
+              title={`${sortKey ?? "pts"} Leaders`}
+            />
+            <StatTrendChart
+              sport={activeSport}
+              stat={sortKey ?? "pts"}
+              limit={20}
+              title={`${sortKey ?? "pts"} — Recent Trend`}
+            />
+          </div>
           </>
         )}
       </SectionBand>

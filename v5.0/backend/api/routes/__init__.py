@@ -10,6 +10,7 @@ from .features import router as features_router
 from .stripe import router as stripe_router
 from .paper import router as paper_router
 from .autobet import router as autobet_router
+from .charts import router as charts_router
 
 __all__ = [
     "sports_router",
@@ -20,4 +21,5 @@ __all__ = [
     "stripe_router",
     "paper_router",
     "autobet_router",
+    "charts_router",
 ]
