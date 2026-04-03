@@ -421,6 +421,52 @@ async def lifespan(app: FastAPI):
 
     cleanup_task = asyncio.create_task(_cleanup_rate_limiter())
 
+    # ── DuckDB deferred refresh loop ─────────────────────────────────
+    # When the auto_curated_sync pipeline runs externally and can't acquire
+    # the DuckDB write lock (because this server holds it), it writes a
+    # `.duckdb_refresh_pending.json` file.  This loop picks it up and
+    # refreshes the affected sport views inside the server's connection.
+    duckdb_refresh_task: asyncio.Task | None = None
+
+    async def _duckdb_deferred_refresh_loop() -> None:
+        from pathlib import Path as _Path
+        import json as _json
+
+        settings = get_settings()
+        poll_s = int(os.getenv("V5_DUCKDB_REFRESH_POLL_SECONDS", "30"))
+        if poll_s <= 0:
+            return
+
+        pending_file = _Path(settings.normalized_curated_dir).parent / ".duckdb_refresh_pending.json"
+        logger.info("DuckDB deferred-refresh loop enabled (poll every %ss)", poll_s)
+
+        while True:
+            try:
+                if pending_file.exists():
+                    payload = _json.loads(pending_file.read_text(encoding="utf-8"))
+                    sports_to_refresh = payload.get("sports", [])
+                    if sports_to_refresh:
+                        logger.info("DuckDB deferred refresh: processing %s", sports_to_refresh)
+
+                        def _do_refresh():
+                            from services.duckdb_catalog import DuckDBCatalog, create_duckdb_connection
+                            conn = create_duckdb_connection(settings.duckdb_path)
+                            try:
+                                catalog = DuckDBCatalog(conn)
+                                catalog.refresh_all(sports_to_refresh)
+                            finally:
+                                conn.close()
+
+                        await asyncio.to_thread(_do_refresh)
+                        pending_file.unlink(missing_ok=True)
+                        logger.info("DuckDB deferred refresh complete for %s", sports_to_refresh)
+            except Exception:
+                logger.exception("DuckDB deferred refresh loop error")
+
+            await asyncio.sleep(poll_s)
+
+    duckdb_refresh_task = asyncio.create_task(_duckdb_deferred_refresh_loop())
+
     yield
 
     cleanup_task.cancel()
@@ -428,6 +474,12 @@ async def lifespan(app: FastAPI):
         await cleanup_task
     except asyncio.CancelledError:
         pass
+    if duckdb_refresh_task is not None and not duckdb_refresh_task.done():
+        duckdb_refresh_task.cancel()
+        try:
+            await duckdb_refresh_task
+        except asyncio.CancelledError:
+            pass
     logger.info("Shutting down — clearing cache and closing DB pool.")
     ds.clear_cache()
     await close_pool()

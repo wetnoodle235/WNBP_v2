@@ -10636,6 +10636,18 @@ class Normalizer:
                 totals[dtype] = count
                 if count:
                     logger.info("%s/%s: %d total rows", sport, dtype, count)
+
+        # Auto-sync: fingerprint curated parquets and refresh DuckDB views.
+        try:
+            from normalization.auto_curated_sync import post_normalize_hook
+            post_normalize_hook(sport, list(seasons))
+        except Exception as _hook_exc:
+            logger.warning(
+                "auto_curated_sync hook failed for %s (non-fatal): %s",
+                sport,
+                _hook_exc,
+            )
+
         return totals
 
     def run_all(
