@@ -68,7 +68,8 @@ PROJECT=$ROOT
 
 # ── Full Daily Pipeline (6:00 AM EST) ───────────────────
 # Import all data, normalize, extract features, predictions
-0 6 * * *  cd \$PROJECT && python3 scripts/daily_pipeline.py >> logs/cron_pipeline.log 2>&1 $CRON_TAG
+# .env is sourced if present (non-fatal — pipeline loads it via python-dotenv too)
+0 6 * * *  cd \$PROJECT && { [ -f .env ] && set -a && source .env && set +a || true; } && python3 scripts/daily_pipeline.py --parallel --max-workers 4 >> logs/cron_pipeline.log 2>&1 $CRON_TAG
 
 # ── Recurring Curated + DuckDB Refresh (every 30 min) ───
 # Auto-detects changed normalized inputs and bulk-refreshes curated + DuckDB once.

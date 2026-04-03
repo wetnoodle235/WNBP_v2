@@ -73,6 +73,17 @@ DATA_DIR = PROJECT_ROOT / "data"
 
 sys.path.insert(0, str(BACKEND_DIR))
 
+# Load .env if present so the pipeline works when invoked from cron without
+# a prior `source .env` (e.g. when .env was removed from the repo but API
+# keys are still needed, or when a new .env has been recreated).
+try:
+    from dotenv import load_dotenv
+    _env_file = PROJECT_ROOT / ".env"
+    if _env_file.exists():
+        load_dotenv(_env_file, override=False)
+except ImportError:
+    pass
+
 from config import get_current_season, SPORT_SEASON_START
 
 # ── Logging ──────────────────────────────────────────────
@@ -310,6 +321,15 @@ def _next_quota_reset(now_utc: datetime, provider: str) -> datetime:
     return candidate
 
 
+def _has_known_quota_reset(provider: str) -> bool:
+    """Return True when reset hour is explicitly configured for provider/global."""
+    provider_key = provider.upper().replace("-", "_")
+    return (
+        os.getenv(f"QUOTA_RESET_HOUR_UTC_{provider_key}") is not None
+        or os.getenv("QUOTA_RESET_HOUR_UTC") is not None
+    )
+
+
 @dataclass
 class ProviderQuotaState:
     provider: str
@@ -320,6 +340,7 @@ class ProviderQuotaState:
     skipped_runs: int = 0
     backfill_pending: bool = False
     last_backfill_days: int = 0
+    next_probe_at: str | None = None
 
 
 class QuotaStateStore:
@@ -348,6 +369,7 @@ class QuotaStateStore:
                     skipped_runs=int(state.get("skipped_runs", 0) or 0),
                     backfill_pending=bool(state.get("backfill_pending", False)),
                     last_backfill_days=int(state.get("last_backfill_days", 0) or 0),
+                    next_probe_at=state.get("next_probe_at"),
                 )
         except Exception as exc:
             logger.warning("  [quota] Failed to load state file: %s", exc)
@@ -371,30 +393,53 @@ class QuotaStateStore:
         state = self._state(provider)
         if not state.capped:
             return False, None
-        if not state.reset_at:
-            return True, None
-        try:
-            reset_at = datetime.fromisoformat(state.reset_at)
-            if reset_at.tzinfo is None:
-                reset_at = reset_at.replace(tzinfo=timezone.utc)
-            if now_utc < reset_at:
-                return True, state.reset_at
-        except ValueError:
-            return True, state.reset_at
-        # Reset time reached; allow a probe import attempt.
-        return False, state.reset_at
 
-    def mark_skipped(self, provider: str) -> None:
+        # Known reset strategy: skip until configured reset window.
+        if state.reset_at:
+            try:
+                reset_at = datetime.fromisoformat(state.reset_at)
+                if reset_at.tzinfo is None:
+                    reset_at = reset_at.replace(tzinfo=timezone.utc)
+                if now_utc < reset_at:
+                    return True, state.reset_at
+                return False, state.reset_at
+            except ValueError:
+                pass
+
+        # Unknown reset strategy: periodic probe windows with backoff.
+        if state.next_probe_at:
+            try:
+                probe_at = datetime.fromisoformat(state.next_probe_at)
+                if probe_at.tzinfo is None:
+                    probe_at = probe_at.replace(tzinfo=timezone.utc)
+                if now_utc < probe_at:
+                    return True, state.next_probe_at
+            except ValueError:
+                pass
+        return False, state.next_probe_at
+
+    def mark_skipped(self, provider: str, now_utc: datetime) -> None:
         state = self._state(provider)
         state.skipped_runs += 1
         state.backfill_pending = True
+
+        # For unknown reset windows, increase probe interval exponentially.
+        if not state.reset_at:
+            delay_hours = min(12, 2 ** min(state.skipped_runs - 1, 5))
+            state.next_probe_at = (now_utc + timedelta(hours=delay_hours)).isoformat()
 
     def mark_quota_hit(self, provider: str, now_utc: datetime, error: str | None) -> None:
         state = self._state(provider)
         if not state.capped:
             state.capped_at = now_utc.isoformat()
         state.capped = True
-        state.reset_at = _next_quota_reset(now_utc, provider).isoformat()
+        if _has_known_quota_reset(provider):
+            state.reset_at = _next_quota_reset(now_utc, provider).isoformat()
+            state.next_probe_at = None
+        else:
+            state.reset_at = None
+            # Unknown reset time: schedule first probe after a short cool-down.
+            state.next_probe_at = (now_utc + timedelta(hours=1)).isoformat()
         state.last_error = (error or "quota cap hit")[:300]
         state.backfill_pending = True
 
@@ -406,6 +451,7 @@ class QuotaStateStore:
             state.reset_at = None
             state.last_error = None
             state.skipped_runs = 0
+            state.next_probe_at = None
             return 0
 
         backfill_days = max(recent_days, 1 + state.skipped_runs)
@@ -416,6 +462,7 @@ class QuotaStateStore:
         state.reset_at = None
         state.last_error = None
         state.skipped_runs = 0
+        state.next_probe_at = None
         return backfill_days
 
 
@@ -973,9 +1020,9 @@ class Pipeline:
         for provider in providers:
             should_skip, reset_at = quota_store.should_skip(provider, now_utc)
             if should_skip:
-                quota_store.mark_skipped(provider)
+                quota_store.mark_skipped(provider, now_utc)
                 results["quota_skipped"].append({"provider": provider, "reset_at": reset_at})
-                logger.info("  [import] Skipping %s — quota capped until %s", provider, reset_at)
+                logger.info("  [import] Skipping %s — quota capped until next reset/probe at %s", provider, reset_at)
                 continue
 
             if provider == "espn" and not self.sport_filter:
@@ -1055,6 +1102,19 @@ class Pipeline:
 
     # ── Step 2: Normalize (parallel by sport) ────────────
 
+    def _cleanup_deprecated_normalized_root(self) -> None:
+        """Remove deprecated legacy normalized root to avoid operator confusion."""
+        import shutil
+
+        legacy_root = DATA_DIR / "normalized"
+        if not legacy_root.exists():
+            return
+        try:
+            shutil.rmtree(legacy_root)
+            logger.info("  [normalize] Removed deprecated legacy root: %s", legacy_root)
+        except Exception as exc:
+            logger.warning("  [normalize] Failed removing deprecated root %s: %s", legacy_root, exc)
+
     def step_normalize(self) -> dict[str, Any]:
         """Normalize raw data into unified parquet files."""
         if not self.parallel:
@@ -1063,6 +1123,7 @@ class Pipeline:
 
             normalizer = Normalizer()
             stats = normalizer.run_all(seasons=[self.season])
+            self._cleanup_deprecated_normalized_root()
             total_rows = sum(v for sport in stats.values() for v in sport.values())
             sports_with_data = sum(1 for s in stats.values() if any(v > 0 for v in s.values()))
             return {
@@ -1089,19 +1150,16 @@ class Pipeline:
                 logger.debug("  [normalize] Skipping %s — no raw data dir", sport)
                 continue
             season = _season_for_sport(sport, self.target_date)
-            # Smart-skip: if normalized parquet exists and is newer than all
+            # Smart-skip: if curated parquet exists and is newer than all
             # raw data files for this season, skip re-normalizing
             # (bypass with --force-normalize)
-            norm_dir = DATA_DIR / "normalized" / sport
-            norm_games = norm_dir / f"games_{season}.parquet"
-            # Some sports (ncaab, ncaaw) don't produce games_*.parquet —
-            # fall back to any parquet file in the normalized directory.
-            if not norm_games.exists():
-                norm_games = max(
-                    (f for f in norm_dir.glob("*.parquet")),
-                    key=lambda f: f.stat().st_mtime,
-                    default=None,
-                )
+            curated_dir = DATA_DIR / "normalized_curated" / sport / "games" / f"season={season}"
+            # Find the newest part file in the curated season partition.
+            norm_games = max(
+                (f for f in curated_dir.rglob("*.parquet")) if curated_dir.exists() else [],
+                key=lambda f: f.stat().st_mtime,
+                default=None,
+            )
             if norm_games is not None and not self.force_normalize:
                 norm_mtime = norm_games.stat().st_mtime
                 raw_season_dir = raw_sport_dir / str(season)
@@ -1154,6 +1212,8 @@ class Pipeline:
                     logger.info("  [normalize] %s ✓ (retry)", args[0])
                 else:
                     errors.append(r)
+
+        self._cleanup_deprecated_normalized_root()
 
         return {
             "sports_processed": len(sports),
