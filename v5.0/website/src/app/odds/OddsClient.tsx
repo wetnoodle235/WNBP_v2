@@ -32,6 +32,8 @@ interface OddsItem {
   date?: string | null;
   timestamp?: string | null;
   is_live?: boolean;
+  consensus_score?: number | null;
+  consensus_warning?: boolean;
 }
 
 interface Props {
@@ -522,6 +524,28 @@ export function OddsClient({ initialOdds, sports }: Props) {
                               LIVE
                             </span>
                           )}
+                          {(() => {
+                            const cs = game.bookmakers.find((b) => b.consensus_score != null)?.consensus_score;
+                            const warn = game.bookmakers.some((b) => b.consensus_warning);
+                            if (cs == null) return null;
+                            return (
+                              <span
+                                title={`Bookmaker consensus: ${cs}/100${warn ? " — books disagree significantly" : ""}`}
+                                style={{
+                                  background: warn ? "rgba(217,119,6,0.15)" : "rgba(99,102,241,0.15)",
+                                  color: warn ? "#d97706" : "#6366f1",
+                                  border: `1px solid ${warn ? "#d97706" : "#6366f1"}`,
+                                  fontSize: "0.6rem",
+                                  fontWeight: 700,
+                                  padding: "1px 6px",
+                                  borderRadius: "var(--radius-full, 9999px)",
+                                  cursor: "help",
+                                }}
+                              >
+                                {warn ? "⚠" : "✓"} Consensus {cs}
+                              </span>
+                            );
+                          })()}
                         </div>
                         {game.date && (
                           <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>

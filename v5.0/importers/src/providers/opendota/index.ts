@@ -1,16 +1,14 @@
 // ──────────────────────────────────────────────────────────
-// OpenDota Provider  [DISABLED]
+// OpenDota Provider  [LIGHTWEIGHT MODE]
 // ──────────────────────────────────────────────────────────
 // Free Dota 2 data — pro matches, match details, teams,
 // players, leagues, heroes, and hero stats.
 //
-// DISABLED (2026-03-26): OpenDota's free API has a strict daily
-// request limit that is easily exceeded. Bulk collection of
-// pro_matches requires ~300 paginated requests per season, and
-// match details require one request per match (thousands).
-// The daily quota makes this impractical without a paid API key.
-// Re-enable if an API key is configured or if only lightweight
-// endpoints (heroes, hero_stats) are needed.
+// NOTE (2026-03-26): Bulk endpoints (pro_matches, matches, players, etc.)
+// are excluded from DEFAULT_ENDPOINTS because OpenDota's free API quota is
+// easily exhausted. Only lightweight reference endpoints (heroes, hero_stats)
+// run by default — they require just 2 requests total.
+// Add bulk endpoints explicitly via --endpoints if needed.
 
 import type { ImportOptions, ImportResult, Provider, RateLimitConfig, Sport } from "../../core/types.js";
 import { fetchJSON } from "../../core/http.js";
@@ -23,6 +21,7 @@ const SPORTS: readonly Sport[] = ["dota2"] as const;
 
 const RATE_LIMIT: RateLimitConfig = { requests: 1, perMs: 1_200 };
 
+// All available endpoints (used for explicit --endpoints overrides)
 const ENDPOINTS = [
   "pro_matches",
   "matches",
@@ -74,6 +73,9 @@ const ENDPOINTS = [
   "player_ratings",
   "player_rankings",
 ] as const;
+
+// Lightweight reference endpoints only — no bulk API quota burn
+const DEFAULT_ENDPOINTS: readonly Endpoint[] = ["heroes", "hero_stats"];
 
 type Endpoint = (typeof ENDPOINTS)[number];
 
@@ -966,7 +968,7 @@ const opendota: Provider = {
 
     const activeEndpoints = opts.endpoints.length
       ? opts.endpoints.filter((e): e is Endpoint => (ENDPOINTS as readonly string[]).includes(e))
-      : [...ENDPOINTS];
+      : [...DEFAULT_ENDPOINTS];
 
     for (const season of opts.seasons) {
       logger.info(`Season ${season}`, NAME);

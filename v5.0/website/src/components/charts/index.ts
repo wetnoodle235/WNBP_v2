@@ -12,3 +12,4 @@ export { DistributionChart } from "./DistributionChart";
 export { WinProbChart } from "./WinProbChart";
 export { LineMovementChart } from "./LineMovementChart";
 export { GameChartsPanel } from "./GameChartsPanel";
+export { DepthChartPanel } from "./DepthChartPanel";

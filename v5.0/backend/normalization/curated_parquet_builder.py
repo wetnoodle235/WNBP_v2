@@ -40,6 +40,16 @@ def _load_sport_entity_allowlist() -> dict[str, set[str]]:
         allowlist["nba"] = set(NBA_SCHEMAS.keys())
     except Exception:
         pass
+    try:
+        from normalization.mlb_schemas import MLB_SCHEMAS
+        allowlist["mlb"] = set(MLB_SCHEMAS.keys())
+    except Exception:
+        pass
+    try:
+        from normalization.nfl_schemas import NFL_SCHEMAS
+        allowlist["nfl"] = set(NFL_SCHEMAS.keys())
+    except Exception:
+        pass
     return allowlist
 
 
@@ -54,6 +64,16 @@ def _load_type_to_entity_maps() -> dict[str, dict[str, str | None]]:
     try:
         from normalization.nba_schemas import NBA_TYPE_TO_ENTITY
         maps["nba"] = NBA_TYPE_TO_ENTITY
+    except Exception:
+        pass
+    try:
+        from normalization.mlb_schemas import MLB_TYPE_TO_ENTITY
+        maps["mlb"] = MLB_TYPE_TO_ENTITY
+    except Exception:
+        pass
+    try:
+        from normalization.nfl_schemas import NFL_TYPE_TO_ENTITY
+        maps["nfl"] = NFL_TYPE_TO_ENTITY
     except Exception:
         pass
     return maps

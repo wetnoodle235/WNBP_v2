@@ -8,6 +8,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { resolveServerApiBase } from "@/lib/api-base";
 import { normalizeMediaPayload } from "@/lib/media";
+import { DepthChartPanel } from "@/components/charts";
 
 /* ------------------------------------------------------------------ */
 /*  Per-sport curated stat definitions for team stats panel           */
@@ -379,6 +380,13 @@ export default async function TeamDetailPage({ params }: PageProps) {
           </div>
         )}
       </SectionBand>
+
+      {/* Depth Chart — depth_charts endpoint, available for NFL/NBA/MLB/NHL/WNBA */}
+      {["nfl", "nba", "nhl", "mlb", "wnba"].includes(sport) && (
+        <SectionBand title="Depth Chart">
+          <DepthChartPanel sport={sport} teamId={teamId} />
+        </SectionBand>
+      )}
     </main>
   );
 }

@@ -52,6 +52,55 @@ def _resolve_season(sport: str, season: str | None) -> str:
     return get_current_season(sport)
 
 
+def _enrich_odds_consensus(odds: list[dict]) -> list[dict]:
+    """Compute per-game bookmaker consensus score and inject into each record.
+
+    consensus_score: 0-100 where 100 = perfect bookmaker agreement on moneyline.
+    consensus_warning: True when std-dev of implied probability exceeds 3 ppts.
+    """
+    import math
+    from collections import defaultdict
+
+    def american_to_implied(odds_val: float | None) -> float | None:
+        if odds_val is None:
+            return None
+        try:
+            o = float(odds_val)
+            if o > 0:
+                return 100.0 / (o + 100.0)
+            else:
+                return abs(o) / (abs(o) + 100.0)
+        except (TypeError, ValueError):
+            return None
+
+    by_game: dict[str, list[float]] = defaultdict(list)
+    for o in odds:
+        gid = str(o.get("game_id", ""))
+        implied = american_to_implied(o.get("h2h_home"))
+        if implied is not None:
+            by_game[gid].append(implied)
+
+    scores: dict[str, dict] = {}
+    for gid, probs in by_game.items():
+        if len(probs) < 2:
+            scores[gid] = {"consensus_score": None, "consensus_warning": False}
+            continue
+        mean = sum(probs) / len(probs)
+        variance = sum((p - mean) ** 2 for p in probs) / len(probs)
+        std = math.sqrt(variance)
+        # Map std to 0-100 score: 0 std → 100, 10ppt std → 0
+        score = max(0.0, min(100.0, round(100.0 - std * 1000, 1)))
+        scores[gid] = {"consensus_score": score, "consensus_warning": std > 0.03}
+
+    result = []
+    for o in odds:
+        gid = str(o.get("game_id", ""))
+        if gid in scores:
+            o = {**o, **scores[gid]}
+        result.append(o)
+    return result
+
+
 def _require_internal_access(api_key: APIKeyInfo) -> None:
     """Restrict internal/dev endpoints to platform or local-anonymous keys only."""
     if api_key.key_id in {"__platform__", "__anonymous__"}:
@@ -895,6 +944,7 @@ async def list_odds(
             if str(o.get("date", "")).startswith(date)
             or str(o.get("timestamp", "")).startswith(date)
         ]
+    odds = _enrich_odds_consensus(odds)
     return _paginated_response(odds, sport, limit=limit, offset=offset, season=effective_season, api_key=api_key, response=response)
 
 
