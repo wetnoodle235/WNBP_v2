@@ -874,7 +874,9 @@ def _filter_season_date_range(
         return records
 
     # End-year convention: folder N ≈ Jul(N-1) to Aug(N)
-    _end_year = {"nhl", "nba", "wnba", "ncaab", "ncaaw"}
+    # NOTE: NCAA basketball (ncaab, ncaaw) and WNBA use *start-year*
+    # convention in ESPN (folder 2024 = Nov 2024 – Apr 2025), NOT end-year.
+    _end_year = {"nhl", "nba"}
 
     # Start-year cross-year: folder N ≈ Jul(N) to Aug(N+1)
     _start_year_cross = {
