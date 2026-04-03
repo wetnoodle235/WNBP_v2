@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-# ──────────────────────────────────────────────────────────────────────
-# Build NCAAF Normalized-Curated Folder Structure
-# ──────────────────────────────────────────────────────────────────────
-#
-# Creates the complete directory tree for the redesigned NCAAF
-# normalized_curated layer under:
-#   data/normalized_curated/ncaaf/
-#
-# Each entity gets its own top-level folder (BDL-style flat layout).
-# Leaf directories receive an empty .gitkeep so Git tracks them.
-#
-# Usage:
-#   python scripts/build_ncaaf_curated_structure.py           # create dirs
-#   python scripts/build_ncaaf_curated_structure.py --dry-run  # preview only
-# ──────────────────────────────────────────────────────────────────────
+"""
+build_ncaaf_curated_structure.py
+
+Creates the NCAAF curated directory structure under data/normalized_curated/ncaaf/.
+Consolidated 14-entity layout (v2).
+
+Usage:
+    python scripts/build_ncaaf_curated_structure.py           # create dirs
+    python scripts/build_ncaaf_curated_structure.py --dry-run  # preview only
+    python scripts/build_ncaaf_curated_structure.py --base-dir /custom/path
+"""
 
 from __future__ import annotations
 
@@ -21,11 +17,8 @@ import argparse
 import sys
 from pathlib import Path
 
-# ── All entity paths relative to ncaaf/ ──────────────────────────────
-# Mirrors NCAAF_ENTITY_PATHS in backend/normalization/ncaaf_schemas.py.
-
-ENTITY_PATHS: list[str] = [
-    # BDL-mirrored entities
+# ── 14 consolidated entities ────────────────────────────────────────────
+ENTITIES: list[str] = [
     "conferences",
     "teams",
     "players",
@@ -33,37 +26,13 @@ ENTITY_PATHS: list[str] = [
     "plays",
     "player_stats",
     "team_stats",
-    "player_season_stats",
-    "team_season_stats",
     "standings",
     "rankings",
     "odds",
-    # WNBP-exclusive entities
-    "coaches",
-    "weather",
-    "injuries",
-    "recruiting_classes",
-    "recruiting_players",
-    "recruiting_groups",
-    # Ratings (subfolder split)
-    "ratings/elo",
-    "ratings/sp",
-    "ratings/fpi",
-    "ratings/srs",
-    "ratings/talent",
-    "ratings/sp_conference",
-    # Advanced (subfolder split)
-    "advanced/epa",
-    "advanced/ppa",
-    "advanced/havoc",
-    "advanced/win_probability",
-    # Remaining entities
-    "drives",
-    "draft",
-    "portal",
-    "returning_production",
+    "ratings",
+    "advanced",
+    "recruiting",
     "venues",
-    "media",
 ]
 
 
@@ -80,8 +49,8 @@ def build_structure(base: Path, *, dry_run: bool = False) -> list[Path]:
     """
     created: list[Path] = []
 
-    for rel in sorted(ENTITY_PATHS):
-        entity_dir = base / rel
+    for entity in ENTITIES:
+        entity_dir = base / entity
 
         if dry_run:
             status = "exists" if entity_dir.exists() else "CREATE"
@@ -93,6 +62,7 @@ def build_structure(base: Path, *, dry_run: bool = False) -> list[Path]:
         gitkeep = entity_dir / ".gitkeep"
         if not gitkeep.exists():
             gitkeep.touch()
+        print(f"  ✓ {entity_dir}")
         created.append(entity_dir)
 
     return created
@@ -100,7 +70,7 @@ def build_structure(base: Path, *, dry_run: bool = False) -> list[Path]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build the NCAAF normalized_curated folder tree.",
+        description="Build the NCAAF normalized_curated folder tree (14 consolidated entities).",
     )
     parser.add_argument(
         "--dry-run",
@@ -118,15 +88,21 @@ def main() -> None:
     base = args.base_dir or resolve_base(Path(__file__))
 
     mode = "DRY RUN" if args.dry_run else "CREATE"
-    print(f"[{mode}] NCAAF normalized_curated structure")
-    print(f"  Base path: {base}\n")
+    print(f"\n{'='*60}")
+    print(f"  NCAAF Curated Structure Builder  [{mode}]")
+    print(f"  Base path : {base}")
+    print(f"  Entities  : {len(ENTITIES)}")
+    print(f"{'='*60}\n")
 
     dirs = build_structure(base, dry_run=args.dry_run)
 
-    print(f"\n{'Would create' if args.dry_run else 'Created'} {len(dirs)} entity directories.")
-
+    print(f"\n{'─'*60}")
+    print(f"  {'Would create' if args.dry_run else 'Created'} {len(dirs)} entity directories.")
     if not args.dry_run:
-        print("Done ✓")
+        print("  Done ✓")
+    else:
+        print("  (no changes made – dry-run mode)")
+    print(f"{'─'*60}\n")
 
 
 if __name__ == "__main__":

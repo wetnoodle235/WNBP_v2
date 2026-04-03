@@ -2,14 +2,22 @@
 """
 migrate_ncaaf_curated.py
 
-Migrates NCAAF normalized_curated parquet files from the OLD 3-level hierarchy
-to the NEW BDL-style flat hierarchy. Copies files (does not move) for safety.
+Migrates NCAAF normalized_curated parquet files from the OLD multi-level
+hierarchy to the NEW consolidated 14-entity layout.  Copies files (does not
+move) for safety.
+
+Each source file is placed under the new entity folder in a subfolder named
+after the old leaf directory to prevent collisions.  E.g.:
+    ncaaf/team/ratings/elo/season=2023/part.parquet
+    → ncaaf/ratings/elo/season=2023/part.parquet
 
 Usage:
     python migrate_ncaaf_curated.py --dry-run
     python migrate_ncaaf_curated.py --base-dir /path/to/normalized_curated
     python migrate_ncaaf_curated.py --backup
 """
+
+from __future__ import annotations
 
 import argparse
 import logging
@@ -28,11 +36,10 @@ log = logging.getLogger(__name__)
 DEFAULT_BASE_DIR = Path("/home/derek/Documents/stock/v5.0/data/normalized_curated")
 
 # ---------------------------------------------------------------------------
-# Mapping definitions: (old_relative_path, new_relative_path)
+# Mapping definitions: (old_relative_path, new_entity, old_leaf_subfolder)
 #
-# For "merge" targets the new_relative_path is the same destination —
-# all source parquets land in the same folder.  Actual schema merging
-# (dedup / column alignment) is handled by a separate reconciliation step.
+# old_leaf is used as a sub-directory inside the new entity folder so that
+# files from different old sources don't collide.
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -43,99 +50,95 @@ class PathMapping:
 
 
 MAPPINGS: list[PathMapping] = [
-    # ── Team Identity ──────────────────────────────────────────────────
-    PathMapping("ncaaf/team/identity/base",          "ncaaf/teams",                    "base team records"),
-    PathMapping("ncaaf/team/identity/fbs",           "ncaaf/teams",                    "merge fbs flag"),
-    PathMapping("ncaaf/team/identity/roster",        "ncaaf/players",                  "roster → players"),
+    # ── teams (team + coaches + roster identity) ──────────────────────
+    PathMapping("ncaaf/team/identity/base",          "ncaaf/teams",          "base team records"),
+    PathMapping("ncaaf/team/identity/fbs",           "ncaaf/teams",          "FBS flag merge"),
+    PathMapping("ncaaf/team/context/staff",          "ncaaf/teams",          "coaches → teams"),
 
-    # ── Team Context ───────────────────────────────────────────────────
-    PathMapping("ncaaf/team/context/staff",          "ncaaf/coaches",                  "staff → coaches"),
+    # ── players (identity + portal + returning + draft + roster) ──────
+    PathMapping("ncaaf/team/identity/roster",        "ncaaf/players",        "roster → players"),
+    PathMapping("ncaaf/player/identity/base",        "ncaaf/players",        "player identity"),
+    PathMapping("ncaaf/player/identity/draft_pick",  "ncaaf/players",        "draft picks"),
+    PathMapping("ncaaf/player/identity/draft",       "ncaaf/players",        "draft records"),
+    PathMapping("ncaaf/player/identity/news",        "ncaaf/players",        "player news"),
+    PathMapping("ncaaf/player/portal/base",          "ncaaf/players",        "transfer portal"),
+    PathMapping("ncaaf/player/returning/base",       "ncaaf/players",        "returning production"),
+    PathMapping("ncaaf/reference/draft/positions",   "ncaaf/players",        "draft position ref"),
+    PathMapping("ncaaf/reference/draft/teams",       "ncaaf/players",        "draft team ref"),
 
-    # ── Team Ratings ───────────────────────────────────────────────────
-    PathMapping("ncaaf/team/ratings/elo",            "ncaaf/ratings/elo",              ""),
-    PathMapping("ncaaf/team/ratings/fpi",            "ncaaf/ratings/fpi",              ""),
-    PathMapping("ncaaf/team/ratings/sp",             "ncaaf/ratings/sp",               ""),
-    PathMapping("ncaaf/team/ratings/sp_conference",  "ncaaf/ratings/sp_conference",    ""),
-    PathMapping("ncaaf/team/ratings/srs",            "ncaaf/ratings/srs",              ""),
-    PathMapping("ncaaf/team/ratings/talent",         "ncaaf/ratings/talent",           ""),
+    # ── games (schedule + media + weather) ────────────────────────────
+    PathMapping("ncaaf/game/schedule/base",          "ncaaf/games",          "game schedule"),
+    PathMapping("ncaaf/game/schedule/media",         "ncaaf/games",          "media/broadcast → games"),
 
-    # ── Team Records / Standings ───────────────────────────────────────
-    PathMapping("ncaaf/team/record/wl",              "ncaaf/standings",                "win/loss records"),
-    PathMapping("ncaaf/team/record/ats",             "ncaaf/standings",                "merge ATS data"),
-    PathMapping("ncaaf/team/record/standings",       "ncaaf/standings",                "merge standings"),
+    # ── plays (play-by-play + drives) ─────────────────────────────────
+    PathMapping("ncaaf/game/play_by_play/events",    "ncaaf/plays",          "events → plays"),
+    PathMapping("ncaaf/game/play_by_play/drives",    "ncaaf/plays",          "drives → plays"),
+    PathMapping("ncaaf/game/play_by_play/plays",     "ncaaf/plays",          "play details"),
+    PathMapping("ncaaf/game/play_by_play/season_rollup", "ncaaf/plays",      "play season rollup"),
+    PathMapping("ncaaf/reference/play_types/types",      "ncaaf/plays",      "play type ref"),
+    PathMapping("ncaaf/reference/play_types/stat_types", "ncaaf/plays",      "stat type ref"),
 
-    # ── Team Recruiting ────────────────────────────────────────────────
-    PathMapping("ncaaf/team/recruiting/class",       "ncaaf/recruiting_classes",       ""),
-    PathMapping("ncaaf/team/recruiting/groups",      "ncaaf/recruiting_groups",        ""),
+    # ── player_stats (game + season + ppa + usage — scope discriminator) ──
+    PathMapping("ncaaf/game/box/players",            "ncaaf/player_stats",   "game box player stats"),
+    PathMapping("ncaaf/player/game_stats/ppa",       "ncaaf/player_stats",   "game PPA stats"),
+    PathMapping("ncaaf/player/season_stats/base",    "ncaaf/player_stats",   "season stats base"),
+    PathMapping("ncaaf/player/season_stats/ppa",     "ncaaf/player_stats",   "season PPA stats"),
+    PathMapping("ncaaf/player/season_stats/rollup",  "ncaaf/player_stats",   "season rollup"),
+    PathMapping("ncaaf/player/usage/base",           "ncaaf/player_stats",   "player usage"),
+    PathMapping("ncaaf/player/identity/injury",      "ncaaf/player_stats",   "injury reports"),
 
-    # ── Game Schedule ──────────────────────────────────────────────────
-    PathMapping("ncaaf/game/schedule/base",          "ncaaf/games",                    ""),
-    PathMapping("ncaaf/game/schedule/media",         "ncaaf/media",                    ""),
+    # ── team_stats (game + season + advanced box — scope discriminator) ──
+    PathMapping("ncaaf/game/box/teams",              "ncaaf/team_stats",     "game box team stats"),
+    PathMapping("ncaaf/game/box/advanced",           "ncaaf/team_stats",     "game advanced box"),
+    PathMapping("ncaaf/season/team_stats/base",      "ncaaf/team_stats",     "season team stats"),
+    PathMapping("ncaaf/season/team_stats/advanced",  "ncaaf/team_stats",     "season advanced stats"),
+    PathMapping("ncaaf/season/team_stats/rollup",    "ncaaf/team_stats",     "season rollup"),
 
-    # ── Game Box Scores ────────────────────────────────────────────────
-    PathMapping("ncaaf/game/box/teams",              "ncaaf/team_stats",               ""),
-    PathMapping("ncaaf/game/box/players",            "ncaaf/player_stats",             ""),
-    PathMapping("ncaaf/game/box/advanced",           "ncaaf/team_stats",               "merge advanced into team_stats"),
+    # ── standings (standings + wl + ats records) ──────────────────────
+    PathMapping("ncaaf/team/record/wl",              "ncaaf/standings",      "win/loss records"),
+    PathMapping("ncaaf/team/record/ats",             "ncaaf/standings",      "ATS records"),
+    PathMapping("ncaaf/team/record/standings",       "ncaaf/standings",      "conference standings"),
 
-    # ── Game Advanced ──────────────────────────────────────────────────
-    PathMapping("ncaaf/game/advanced/epa",           "ncaaf/advanced/epa",             ""),
-    PathMapping("ncaaf/game/advanced/havoc",         "ncaaf/advanced/havoc",           ""),
-    PathMapping("ncaaf/game/advanced/ppa",           "ncaaf/advanced/ppa",             ""),
-    PathMapping("ncaaf/game/advanced/win_prob",      "ncaaf/advanced/win_probability", "rename win_prob → win_probability"),
+    # ── rankings ──────────────────────────────────────────────────────
+    PathMapping("ncaaf/season/rankings/polls",       "ncaaf/rankings",       "poll rankings"),
 
-    # ── Game Play-by-Play ──────────────────────────────────────────────
-    PathMapping("ncaaf/game/play_by_play/events",    "ncaaf/plays",                    "events → plays"),
-    PathMapping("ncaaf/game/play_by_play/drives",    "ncaaf/drives",                   ""),
-    PathMapping("ncaaf/game/play_by_play/plays",     "ncaaf/plays",                    "merge plays"),
+    # ── odds (lines + live + history + props — line_type discriminator)
+    PathMapping("ncaaf/market/odds/lines",           "ncaaf/odds",           "pre-game lines"),
+    PathMapping("ncaaf/market/odds/live",            "ncaaf/odds",           "live odds"),
+    PathMapping("ncaaf/market/odds_history/history", "ncaaf/odds",           "odds history"),
+    PathMapping("ncaaf/market/props/live",           "ncaaf/odds",           "player props"),
+    PathMapping("ncaaf/market/signals/derived",      "ncaaf/odds",           "derived market signals"),
 
-    # ── Market / Odds ──────────────────────────────────────────────────
-    PathMapping("ncaaf/market/odds/lines",           "ncaaf/odds",                     ""),
-    PathMapping("ncaaf/market/odds/live",            "ncaaf/odds",                     "merge live odds"),
-    PathMapping("ncaaf/market/odds_history/history", "ncaaf/odds",                     "merge odds history"),
-    PathMapping("ncaaf/market/props/live",           "ncaaf/odds",                     "player props into odds"),
-    PathMapping("ncaaf/market/signals/derived",      "ncaaf/market_signals",           "analytics signals"),
+    # ── ratings (elo + sp + fpi + srs + talent + sp_conference — rating_type) ──
+    PathMapping("ncaaf/team/ratings/elo",            "ncaaf/ratings",        "Elo ratings"),
+    PathMapping("ncaaf/team/ratings/fpi",            "ncaaf/ratings",        "FPI ratings"),
+    PathMapping("ncaaf/team/ratings/sp",             "ncaaf/ratings",        "SP+ ratings"),
+    PathMapping("ncaaf/team/ratings/sp_conference",  "ncaaf/ratings",        "SP+ conference"),
+    PathMapping("ncaaf/team/ratings/srs",            "ncaaf/ratings",        "SRS ratings"),
+    PathMapping("ncaaf/team/ratings/talent",         "ncaaf/ratings",        "talent composite"),
 
-    # ── Player Identity ────────────────────────────────────────────────
-    PathMapping("ncaaf/player/identity/base",        "ncaaf/players",                  "merge into players"),
-    PathMapping("ncaaf/player/identity/recruit",     "ncaaf/recruiting_players",       ""),
-    PathMapping("ncaaf/player/identity/draft_pick",  "ncaaf/draft",                    ""),
-    PathMapping("ncaaf/player/identity/injury",      "ncaaf/injuries",                 ""),
-    PathMapping("ncaaf/player/identity/news",        "ncaaf/news",                     "extra category"),
+    # ── advanced (epa + ppa + havoc + win_prob — metric_type discriminator) ──
+    PathMapping("ncaaf/game/advanced/epa",           "ncaaf/advanced",       "EPA per game"),
+    PathMapping("ncaaf/game/advanced/havoc",         "ncaaf/advanced",       "havoc rates"),
+    PathMapping("ncaaf/game/advanced/ppa",           "ncaaf/advanced",       "PPA per game"),
+    PathMapping("ncaaf/game/advanced/win_prob",      "ncaaf/advanced",       "win probability"),
+    PathMapping("ncaaf/season/ppa/base",             "ncaaf/advanced",       "season PPA base"),
+    PathMapping("ncaaf/season/ppa/predicted",        "ncaaf/advanced",       "season PPA predicted"),
+    PathMapping("ncaaf/reference/metrics/categories","ncaaf/advanced",       "metric category ref"),
+    PathMapping("ncaaf/reference/metrics/fg_ep",     "ncaaf/advanced",       "FG/EP ref tables"),
 
-    # ── Player Game Stats ──────────────────────────────────────────────
-    PathMapping("ncaaf/player/game_stats/ppa",       "ncaaf/player_stats",             "merge PPA into player_stats"),
+    # ── recruiting (classes + groups — scope discriminator) ───────────
+    PathMapping("ncaaf/team/recruiting/class",       "ncaaf/recruiting",     "team recruiting classes"),
+    PathMapping("ncaaf/team/recruiting/groups",      "ncaaf/recruiting",     "position group recruiting"),
+    PathMapping("ncaaf/player/identity/recruit",     "ncaaf/recruiting",     "individual recruit profiles"),
 
-    # ── Player Season Stats ────────────────────────────────────────────
-    PathMapping("ncaaf/player/season_stats/base",    "ncaaf/player_season_stats",      ""),
-    PathMapping("ncaaf/player/season_stats/ppa",     "ncaaf/player_season_stats",      "merge PPA"),
-    PathMapping("ncaaf/player/season_stats/rollup",  "ncaaf/player_season_stats",      "merge rollup"),
-    PathMapping("ncaaf/player/usage/base",           "ncaaf/player_season_stats",      "merge usage"),
+    # ── conferences ───────────────────────────────────────────────────
+    PathMapping("ncaaf/reference/conferences/base",  "ncaaf/conferences",    "conference definitions"),
+    PathMapping("ncaaf/reference/calendar/windows",  "ncaaf/conferences",    "season calendar"),
+    PathMapping("ncaaf/reference/metadata/info",     "ncaaf/conferences",    "API/dataset metadata"),
 
-    # ── Player Portal / Returning ──────────────────────────────────────
-    PathMapping("ncaaf/player/portal/base",          "ncaaf/portal",                   ""),
-    PathMapping("ncaaf/player/returning/base",       "ncaaf/returning_production",     ""),
-
-    # ── Season-Level Aggregates ────────────────────────────────────────
-    PathMapping("ncaaf/season/team_stats/base",      "ncaaf/team_season_stats",        ""),
-    PathMapping("ncaaf/season/team_stats/advanced",  "ncaaf/team_season_stats",        "merge advanced"),
-    PathMapping("ncaaf/season/team_stats/rollup",    "ncaaf/team_season_stats",        "merge rollup"),
-    PathMapping("ncaaf/season/ppa/base",             "ncaaf/advanced/ppa",             "season-level PPA"),
-    PathMapping("ncaaf/season/ppa/predicted",        "ncaaf/advanced/ppa",             "merge predicted PPA"),
-
-    # ── Season Rankings ────────────────────────────────────────────────
-    PathMapping("ncaaf/season/rankings/polls",       "ncaaf/rankings",                 ""),
-
-    # ── Reference Data ─────────────────────────────────────────────────
-    PathMapping("ncaaf/reference/conferences/base",  "ncaaf/conferences",              ""),
-    PathMapping("ncaaf/reference/venues/base",       "ncaaf/venues",                   ""),
-    PathMapping("ncaaf/reference/calendar/windows",  "ncaaf/reference/calendar",       "keep as reference"),
-    PathMapping("ncaaf/reference/draft/positions",   "ncaaf/draft",                    "merge draft positions"),
-    PathMapping("ncaaf/reference/draft/teams",       "ncaaf/draft",                    "merge draft teams"),
-    PathMapping("ncaaf/reference/metadata/info",     "ncaaf/reference/metadata",       "keep as reference"),
-    PathMapping("ncaaf/reference/metrics/categories","ncaaf/reference/metrics",        "keep as reference"),
-    PathMapping("ncaaf/reference/metrics/fg_ep",     "ncaaf/reference/metrics",        "keep as reference"),
-    PathMapping("ncaaf/reference/play_types/types",  "ncaaf/reference/play_types",     "keep as reference"),
-    PathMapping("ncaaf/reference/play_types/stat_types","ncaaf/reference/play_types",  "keep as reference"),
+    # ── venues ────────────────────────────────────────────────────────
+    PathMapping("ncaaf/reference/venues/base",       "ncaaf/venues",         "venue/stadium info"),
 ]
 
 
@@ -157,7 +160,7 @@ def find_parquet_files(directory: Path) -> list[Path]:
 def relative_partition_path(file_path: Path, source_root: Path) -> Path:
     """Return the portion of *file_path* relative to *source_root*.
 
-    This preserves season=YYYY/week=WW/filename.parquet structure.
+    Preserves season=YYYY/week=WW/filename.parquet structure.
     """
     return file_path.relative_to(source_root)
 
@@ -185,7 +188,7 @@ def migrate_mapping(
 
     for src_file in files:
         rel = relative_partition_path(src_file, src_dir)
-        # Prefix with the old leaf folder name to avoid collisions in merge targets
+        # Prefix with the old leaf folder name to prevent collisions
         old_leaf = Path(mapping.old).name
         dst_file = dst_dir / old_leaf / rel
 
@@ -216,29 +219,29 @@ def migrate_mapping(
 
 def print_summary(stats: MigrationStats) -> None:
     """Print a formatted summary table."""
-    header = f"{'Old Path':<55} {'New Path':<40} {'Files':>6}"
-    sep = "-" * len(header)
+    header = f"{'Old Path':<55} {'New Path':<35} {'Files':>6}"
+    sep = "─" * len(header)
 
-    print("\n" + sep)
+    print(f"\n{sep}")
     print("MIGRATION SUMMARY")
     print(sep)
     print(header)
     print(sep)
 
     for old, new, count in sorted(stats.details, key=lambda x: x[0]):
-        print(f"{old:<55} {new:<40} {count:>6}")
+        print(f"{old:<55} {new:<35} {count:>6}")
 
     print(sep)
     print(f"Total copied : {stats.copied}")
     print(f"Total skipped: {stats.skipped}")
     print(f"Total errors : {stats.errors}")
-    print(sep + "\n")
+    print(f"{sep}\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Migrate NCAAF normalized_curated parquet files from "
-                    "the old 3-level hierarchy to the new BDL-style flat hierarchy.",
+        description="Migrate NCAAF parquet files from old multi-level hierarchy "
+                    "to the consolidated 14-entity layout.",
     )
     parser.add_argument(
         "--dry-run",
@@ -266,7 +269,7 @@ def main() -> None:
     log.info("Base directory : %s", base_dir)
     log.info("Dry-run        : %s", args.dry_run)
     log.info("Backup         : %s", args.backup)
-    log.info("Mappings       : %d", len(MAPPINGS))
+    log.info("Mappings       : %d entries → 14 consolidated entities", len(MAPPINGS))
 
     stats = MigrationStats()
 
