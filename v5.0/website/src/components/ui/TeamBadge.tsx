@@ -3,16 +3,7 @@
 import { useState, useMemo } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { toTeamSlug } from "@/lib/team-slugs";
-
-function espnTeamLogoUrl(teamId: string | number, sport: string): string {
-  return `https://a.espncdn.com/i/teamlogos/${sport}/500/${teamId}.png`;
-}
-
-function espnTeamLogoFromName(name: string, abbrev: string | undefined, sport: string): string {
-  const slug = toTeamSlug(name, sport, abbrev);
-  return `https://a.espncdn.com/i/teamlogos/${sport}/500/${slug}.png`;
-}
+import { preferredTeamLogoUrls } from "@/lib/media";
 
 interface TeamBadgeProps {
   teamId?: string | number;
@@ -41,16 +32,15 @@ export function TeamBadge({
   className,
 }: TeamBadgeProps) {
   const px = LOGO_SIZE[size];
-  const [imgError, setImgError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
-  const imgSrc = useMemo(() => {
-    if (logoUrl) return logoUrl;
-    if (teamId && sport) return espnTeamLogoUrl(teamId, sport);
-    if (sport) return espnTeamLogoFromName(name, abbrev, sport);
-    return undefined;
-  }, [logoUrl, teamId, sport, name, abbrev]);
+  const imgSources = useMemo(
+    () => preferredTeamLogoUrls({ sport, teamId, logoUrl }),
+    [sport, teamId, logoUrl],
+  );
+  const imgSrc = imgSources[attempt];
 
-  const showImg = imgSrc && !imgError;
+  const showImg = Boolean(imgSrc);
 
   const inner = (
     <span
@@ -78,7 +68,7 @@ export function TeamBadge({
             height={px}
             style={{ objectFit: "contain" }}
             unoptimized
-            onError={() => setImgError(true)}
+            onError={() => setAttempt((current) => current + 1)}
           />
         </span>
       ) : (

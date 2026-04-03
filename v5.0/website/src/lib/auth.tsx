@@ -25,6 +25,7 @@ export interface AuthUser {
   tier: string;
   api_key?: string;
   referral_code?: string;
+  referral_reward_tier?: string;
 }
 
 export interface AuthState {
@@ -139,6 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         tier: (raw.tier as string) ?? "free",
         api_key: (raw.api_key as string) ?? undefined,
         referral_code: (raw.referral_code as string) ?? undefined,
+        referral_reward_tier: (raw.referral_reward_tier as string) ?? undefined,
       });
       if (raw.api_key) {
         saveApiKey(raw.api_key as string);

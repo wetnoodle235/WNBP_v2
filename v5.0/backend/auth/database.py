@@ -75,9 +75,21 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     tier                    TEXT NOT NULL,
     sports                  TEXT,
     status                  TEXT NOT NULL DEFAULT 'active',
+    source                  TEXT NOT NULL DEFAULT 'stripe',
+    billing_interval        TEXT,
     current_period_start    TEXT,
     current_period_end      TEXT,
     created_at              TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS subscription_notifications (
+    id                  TEXT PRIMARY KEY,
+    user_id             TEXT NOT NULL REFERENCES users(id),
+    subscription_id     TEXT NOT NULL REFERENCES subscriptions(id),
+    event_type          TEXT NOT NULL,
+    period_end          TEXT,
+    sent_at             TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(subscription_id, event_type, period_end)
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -90,6 +102,7 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe ON subscriptions(stripe_subscription_id);
+CREATE INDEX IF NOT EXISTS idx_subscription_notifications_sub ON subscription_notifications(subscription_id);
 """
 
 # Dev account seeded on startup
@@ -121,6 +134,29 @@ async def init_db() -> None:
         if "referral_reward_tier" not in col_names:
             await db.execute("ALTER TABLE users ADD COLUMN referral_reward_tier TEXT NOT NULL DEFAULT 'starter'")
             await db.execute("UPDATE users SET referral_reward_tier = 'starter' WHERE referral_reward_tier IS NULL OR referral_reward_tier = ''")
+
+        sub_cols_cur = await db.execute("PRAGMA table_info(subscriptions)")
+        sub_cols = await sub_cols_cur.fetchall()
+        sub_col_names = {str(c[1]) for c in sub_cols}
+        if "source" not in sub_col_names:
+            await db.execute("ALTER TABLE subscriptions ADD COLUMN source TEXT NOT NULL DEFAULT 'stripe'")
+        if "billing_interval" not in sub_col_names:
+            await db.execute("ALTER TABLE subscriptions ADD COLUMN billing_interval TEXT")
+
+        await db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS subscription_notifications (
+                id                  TEXT PRIMARY KEY,
+                user_id             TEXT NOT NULL REFERENCES users(id),
+                subscription_id     TEXT NOT NULL REFERENCES subscriptions(id),
+                event_type          TEXT NOT NULL,
+                period_end          TEXT,
+                sent_at             TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(subscription_id, event_type, period_end)
+            );
+            CREATE INDEX IF NOT EXISTS idx_subscription_notifications_sub ON subscription_notifications(subscription_id);
+            """
+        )
 
         await db.commit()
 

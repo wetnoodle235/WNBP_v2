@@ -451,9 +451,15 @@ class BaseFeatureExtractor(ABC):
         home_ids = games["home_team_id"].values if "home_team_id" in games.columns else []
         away_ids = games["away_team_id"].values if "away_team_id" in games.columns else []
 
-        # Pre-convert dates to int64 nanoseconds for fast comparison
+        # Pre-convert dates to int64 nanoseconds for fast comparison.
+        # Cast to datetime64[ns] first so that datetime64[us/ms/s] sources all
+        # produce the same unit — pd.Timestamp.value is always nanoseconds.
         if "date" in games.columns:
-            dates_ns = pd.to_datetime(games["date"], errors="coerce").values.astype("int64")
+            dates_ns = (
+                pd.to_datetime(games["date"], errors="coerce")
+                .astype("datetime64[ns]")
+                .values.astype("int64")
+            )
         else:
             dates_ns = np.zeros(len(games), dtype="int64")
 
@@ -869,34 +875,48 @@ class BaseFeatureExtractor(ABC):
         # player/team → list of (date_ns: int64, pre_game_elo: float)
         player_hist: dict[str, list] = {}
 
-        dated = games.sort_values("date")
+        if games.empty or "date" not in games.columns:
+            self._elo_cache = {}
+            self._elo_cache_key = cache_key
+            return {}
+        dated = games.sort_values("date").reset_index(drop=True)
 
-        for _, row in dated.iterrows():
-            h = str(row.get("home_team_id", ""))
-            a = str(row.get("away_team_id", ""))
-            date_val = row.get("date")
-            hs = pd.to_numeric(row.get("home_score"), errors="coerce")
-            as_ = pd.to_numeric(row.get("away_score"), errors="coerce")
+        # Vectorised prep — convert once rather than per-row in Python loop
+        h_ids = dated["home_team_id"].astype(str).values if "home_team_id" in dated.columns else np.full(len(dated), "")
+        a_ids = dated["away_team_id"].astype(str).values if "away_team_id" in dated.columns else np.full(len(dated), "")
+        h_scores = pd.to_numeric(dated["home_score"], errors="coerce").values if "home_score" in dated.columns else np.full(len(dated), np.nan)
+        a_scores = pd.to_numeric(dated["away_score"], errors="coerce").values if "away_score" in dated.columns else np.full(len(dated), np.nan)
+        dates_ns_arr = (
+            pd.to_datetime(dated["date"], errors="coerce")
+            .astype("datetime64[ns]")
+            .astype("int64")
+            .values
+            if "date" in dated.columns
+            else np.zeros(len(dated), dtype="int64")
+        )
+
+        for i in range(len(dated)):
+            h = h_ids[i]
+            a = a_ids[i]
+            hs = h_scores[i]
+            as_ = a_scores[i]
+            date_ns = int(dates_ns_arr[i])
 
             rh = elo_current.get(h, 1500.0)
             ra = elo_current.get(a, 1500.0)
 
             # Record pre-game ELO for both participants
-            if date_val is not None and h and a:
-                try:
-                    date_ns = int(pd.Timestamp(date_val).value)
-                    if h not in player_hist:
-                        player_hist[h] = []
-                    if a not in player_hist:
-                        player_hist[a] = []
-                    player_hist[h].append((date_ns, rh))
-                    player_hist[a].append((date_ns, ra))
-                except Exception:
-                    pass
+            if h and a and date_ns != 0:
+                if h not in player_hist:
+                    player_hist[h] = []
+                if a not in player_hist:
+                    player_hist[a] = []
+                player_hist[h].append((date_ns, rh))
+                player_hist[a].append((date_ns, ra))
 
-            if pd.isna(hs) or pd.isna(as_) or not h or not a:
+            if np.isnan(hs) or np.isnan(as_) or not h or not a:
                 continue
-            eh = 1.0 / (1.0 + 10 ** ((ra - rh) / 400.0))
+            eh = 1.0 / (1.0 + 10.0 ** ((ra - rh) / 400.0))
             sh = 1.0 if hs > as_ else (0.0 if hs < as_ else 0.5)
             # Margin-of-victory K multiplier: log-scale reward for dominant wins
             # Prevents autocorrection bias (per 538) and rewards predictive quality
@@ -906,15 +926,15 @@ class BaseFeatureExtractor(ABC):
             autocorr = 1.0 / (1.0 + 0.001 * max(0.0, elo_diff_dir))
             mov_mult = np.log(margin + 1.0) * autocorr
             elo_current[h] = rh + k * mov_mult * (sh - eh)
-            elo_current[a] = ra + k * mov_mult * ((1 - sh) - (1 - eh))
+            elo_current[a] = ra + k * mov_mult * ((1.0 - sh) - (1.0 - eh))
 
         # Convert to numpy for fast searchsorted lookups
         elo_np: dict[str, tuple] = {}
         for pid, hist in player_hist.items():
             if hist:
-                dates_ns = np.array([d for d, _ in hist], dtype="int64")
+                dates_ns_out = np.array([d for d, _ in hist], dtype="int64")
                 elos = np.array([e for _, e in hist], dtype="float32")
-                elo_np[pid] = (dates_ns, elos)
+                elo_np[pid] = (dates_ns_out, elos)
 
         # Keep final ELO for any player not yet in history (edge case)
         self._elo_current = elo_current

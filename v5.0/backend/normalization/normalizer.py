@@ -43,6 +43,7 @@ from api.models.schemas import (
     _Base,
 )
 from normalization.provider_map import providers_for
+from normalization.provider_map import providers_for_label
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +300,26 @@ def _load_cfbdata_json_compat(base: Path, season: str, endpoint: str, filename: 
 
     elif endpoint == "games_players":
         for season_type_dir in sorted((season_dir / "games_players").glob("*")):
+            if not season_type_dir.is_dir():
+                continue
+            for week_dir in sorted(season_type_dir.glob("week_*/*")):
+                if not week_dir.is_dir():
+                    continue
+                for game_file in week_dir.glob("*.json"):
+                    data = _load_json(game_file)
+                    if isinstance(data, list):
+                        records.extend(data)
+                    elif isinstance(data, dict):
+                        records.append(data)
+        if records:
+            return records
+
+    elif endpoint in (
+        "games_teams", "games_media", "ppa_games",
+        "stats_game_advanced", "stats_game_havoc", "wp_pregame",
+    ):
+        # Per-game endpdoint: {endpoint}/{season_type}/week_XX/{date}/{game_id}.json
+        for season_type_dir in sorted((season_dir / endpoint).glob("*")):
             if not season_type_dir.is_dir():
                 continue
             for week_dir in sorted(season_type_dir.glob("week_*/*")):
@@ -773,6 +794,8 @@ def _merge_records(
     records_by_provider: dict[str, list[dict[str, Any]]],
     id_field: str,
     providers: list[str],
+    sport: str | None = None,
+    data_type: str | None = None,
 ) -> list[dict[str, Any]]:
     """Merge records from multiple providers by *id_field*.
 
@@ -785,6 +808,18 @@ def _merge_records(
     """
     id_fields = id_field.split("+")
     merged: dict[str, dict[str, Any]] = {}
+    field_owner: dict[str, dict[str, str]] = {}
+
+    def _rank_for_label(label: str, provider: str) -> int:
+        if sport and data_type:
+            label_order = providers_for_label(sport, data_type, label)
+        else:
+            label_order = providers
+        try:
+            return label_order.index(provider)
+        except ValueError:
+            return 10_000
+
     for provider in reversed(providers):
         for rec in records_by_provider.get(provider, []):
             key_parts = [str(rec.get(f, "")) for f in id_fields]
@@ -793,10 +828,25 @@ def _merge_records(
                 continue
             if key in merged:
                 for k, v in rec.items():
-                    if v is not None:
+                    if v is None:
+                        continue
+                    owners = field_owner.setdefault(key, {})
+                    current_owner = owners.get(k)
+                    if current_owner is None:
                         merged[key][k] = v
+                        owners[k] = provider
+                        continue
+
+                    if _rank_for_label(k, provider) <= _rank_for_label(k, current_owner):
+                        merged[key][k] = v
+                        owners[k] = provider
             else:
                 merged[key] = dict(rec)
+                owners: dict[str, str] = {}
+                for k, v in rec.items():
+                    if v is not None:
+                        owners[k] = provider
+                field_owner[key] = owners
     return list(merged.values())
 
 
@@ -1329,6 +1379,18 @@ def _espn_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
             venue_obj = game_info.get("venue")
             venue_name = venue_obj.get("fullName") if isinstance(venue_obj, dict) else None
+            venue_city = venue_obj.get("address", {}).get("city") if isinstance(venue_obj, dict) else None
+            venue_state = venue_obj.get("address", {}).get("state") if isinstance(venue_obj, dict) else None
+            venue_country = venue_obj.get("address", {}).get("country") if isinstance(venue_obj, dict) else None
+
+            if not venue_name and competitions:
+                comp_venue = competitions[0].get("venue")
+                if isinstance(comp_venue, dict):
+                    venue_name = comp_venue.get("fullName") or comp_venue.get("name")
+                    caddr = comp_venue.get("address", {}) if isinstance(comp_venue.get("address"), dict) else {}
+                    venue_city = venue_city or caddr.get("city")
+                    venue_state = venue_state or caddr.get("state")
+                    venue_country = venue_country or caddr.get("country")
 
             # Season type and week from header
             _st_code = header.get("season", {}).get("type") or 2
@@ -1351,6 +1413,9 @@ def _espn_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
                 "home_score": home_score,
                 "away_score": away_score,
                 "venue": venue_name,
+                "venue_city": venue_city,
+                "venue_state": venue_state,
+                "venue_country": venue_country,
                 "broadcast": _extract_broadcast(competitions[0]) if competitions else None,
                 "broadcast_url": _extract_broadcast_url(competitions[0], game_info) if competitions else _extract_broadcast_url(game_info),
                 "attendance": _safe_int(game_info.get("attendance")),
@@ -3219,6 +3284,81 @@ def _nbastats_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]
     return records
 
 
+def _nbastats_play_by_play(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Build play-by-play rows from NBA Stats per-game playbyplay files."""
+    records: list[dict[str, Any]] = []
+
+    for subdir in ("regular-season", "playoffs"):
+        games_dir = base / subdir / "games"
+        if not games_dir.exists():
+            continue
+
+        for pbp_path in sorted(games_dir.glob("*/playbyplay.json")):
+            payload = _load_json(pbp_path)
+            if not isinstance(payload, dict):
+                continue
+
+            game = payload.get("game") if isinstance(payload.get("game"), dict) else {}
+            actions = game.get("actions") if isinstance(game.get("actions"), list) else payload.get("actions")
+            if not isinstance(actions, list) or not actions:
+                continue
+
+            game_id = _safe_str(game.get("gameId")) or pbp_path.parent.name
+            if not game_id:
+                continue
+
+            summary_payload = _load_json(pbp_path.parent / "summary.json")
+            home_team_id = ""
+            away_team_id = ""
+            home_team_name = ""
+            away_team_name = ""
+            if isinstance(summary_payload, dict):
+                home_team_id = _safe_str(summary_payload.get("homeTeamId")) or ""
+                away_team_id = _safe_str(summary_payload.get("awayTeamId")) or ""
+                home_team_name = _safe_str(summary_payload.get("homeTeamName")) or ""
+                away_team_name = _safe_str(summary_payload.get("awayTeamName")) or ""
+
+            for idx, action in enumerate(actions):
+                if not isinstance(action, dict):
+                    continue
+
+                play_id = _safe_str(action.get("actionNumber") or action.get("orderNumber")) or str(idx + 1)
+                possession_team_id = _safe_str(action.get("possession")) or ""
+                offense_team_name = ""
+                if possession_team_id and possession_team_id == home_team_id:
+                    offense_team_name = home_team_name
+                elif possession_team_id and possession_team_id == away_team_id:
+                    offense_team_name = away_team_name
+
+                rec: dict[str, Any] = {
+                    "sport": sport,
+                    "source": "nbastats",
+                    "season": season,
+                    "game_id": game_id,
+                    "drive_id": "",
+                    "play_id": play_id,
+                    "sequence_number": _safe_int(action.get("orderNumber") or action.get("actionNumber")),
+                    "event_type": _safe_str(action.get("actionType") or action.get("subType")) or "play",
+                    "description": _safe_str(action.get("description")) or "",
+                    "period": _safe_int(action.get("period")),
+                    "clock": _safe_str(action.get("clock")) or "",
+                    "down": None,
+                    "distance": None,
+                    "yards_gained": None,
+                    "scoring_play": bool(action.get("scoreHome") is not None and action.get("scoreAway") is not None),
+                    "offense_team_id": possession_team_id,
+                    "offense_team_name": offense_team_name,
+                    "home_score": _safe_int(action.get("scoreHome")),
+                    "away_score": _safe_int(action.get("scoreAway")),
+                    "player_id": _safe_str(action.get("personId")) or "",
+                    "x": _safe_float(action.get("x")),
+                    "y": _safe_float(action.get("y")),
+                }
+                records.append(rec)
+
+    return records
+
+
 def _nbastats_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     seen: set[str] = set()
     records: list[dict[str, Any]] = []
@@ -3248,6 +3388,87 @@ def _nbastats_players(base: Path, sport: str, season: str) -> list[dict[str, Any
                 "team_id": _safe_str(rd.get("TEAM_ID")),
                 "team_abbreviation": rd.get("TEAM_ABBREVIATION"),
             })
+    return records
+
+
+def _nbastats_team_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Build season team stats from NBA Stats aggregate team-stats files."""
+    records: list[dict[str, Any]] = []
+    for subdir in ("regular-season",):
+        split_maps: dict[str, dict[str, Any]] = {}
+        split_files = {
+            "base": "base.json",
+            "advanced": "advanced.json",
+            "defense": "defense.json",
+        }
+
+        for split_name, file_name in split_files.items():
+            data = _nbastats_load_season_aggregate(base, subdir, "team-stats", file_name)
+            for rd in _nbastats_result_rows(data):
+                team_id = _safe_str(rd.get("TEAM_ID"))
+                if not team_id:
+                    continue
+                split_maps.setdefault(team_id, {})[split_name] = rd
+
+        for team_id, parts in split_maps.items():
+            base_row = parts.get("base", {})
+            adv_row = parts.get("advanced", {})
+            def_row = parts.get("defense", {})
+            fgm = _safe_float(base_row.get("FGM"))
+            fga = _safe_float(base_row.get("FGA"))
+            fg3m = _safe_float(base_row.get("FG3M"))
+            fg3a = _safe_float(base_row.get("FG3A"))
+            two_pt_attempts = (fga - fg3a) if (fga is not None and fg3a is not None) else None
+            two_pt_pct = None
+            if two_pt_attempts and two_pt_attempts > 0 and fgm is not None and fg3m is not None:
+                two_pt_pct = (fgm - fg3m) / two_pt_attempts
+            team_name = (
+                _safe_str(base_row.get("TEAM_NAME"))
+                or _safe_str(adv_row.get("TEAM_NAME"))
+                or _safe_str(def_row.get("TEAM_NAME"))
+            )
+
+            records.append({
+                "source": "nbastats",
+                "sport": sport,
+                "season": season,
+                "season_type": "regular",
+                "team_id": team_id,
+                "team_name": team_name,
+                "games_played": _safe_int(base_row.get("GP") or adv_row.get("GP") or def_row.get("GP")),
+                "wins": _safe_int(base_row.get("W") or adv_row.get("W") or def_row.get("W")),
+                "losses": _safe_int(base_row.get("L") or adv_row.get("L") or def_row.get("L")),
+                "win_pct": _safe_float(base_row.get("W_PCT") or adv_row.get("W_PCT") or def_row.get("W_PCT")),
+                "avg_points": _safe_float(base_row.get("PTS")),
+                "avg_rebounds": _safe_float(base_row.get("REB")),
+                "avg_assists": _safe_float(base_row.get("AST")),
+                "avg_turnovers": _safe_float(base_row.get("TOV")),
+                "avg_fouls": _safe_float(base_row.get("PF")),
+                "avg_blocks": _safe_float(base_row.get("BLK")),
+                "avg_steals": _safe_float(base_row.get("STL")),
+                "field_goal_pct": _safe_float(base_row.get("FG_PCT")),
+                "three_point_pct": _safe_float(base_row.get("FG3_PCT")),
+                "free_throw_pct": _safe_float(base_row.get("FT_PCT")),
+                "two_point_fg_pct": round(two_pt_pct, 3) if two_pt_pct is not None else None,
+                "avg_field_goals_made": _safe_float(base_row.get("FGM")),
+                "avg_field_goals_attempted": _safe_float(base_row.get("FGA")),
+                "avg_three_point_made": _safe_float(base_row.get("FG3M")),
+                "avg_three_point_attempted": _safe_float(base_row.get("FG3A")),
+                "avg_free_throws_made": _safe_float(base_row.get("FTM")),
+                "avg_free_throws_attempted": _safe_float(base_row.get("FTA")),
+                "avg_offensive_rebounds": _safe_float(base_row.get("OREB")),
+                "avg_defensive_rebounds": _safe_float(base_row.get("DREB")),
+                "total_points": _safe_int(base_row.get("PTS") * _safe_float(base_row.get("GP")) if base_row.get("PTS") is not None and base_row.get("GP") is not None else None),
+                "total_rebounds": _safe_int(base_row.get("REB") * _safe_float(base_row.get("GP")) if base_row.get("REB") is not None and base_row.get("GP") is not None else None),
+                "total_assists": _safe_int(base_row.get("AST") * _safe_float(base_row.get("GP")) if base_row.get("AST") is not None and base_row.get("GP") is not None else None),
+                "total_steals": _safe_int(base_row.get("STL") * _safe_float(base_row.get("GP")) if base_row.get("STL") is not None and base_row.get("GP") is not None else None),
+                "total_blocks": _safe_int(base_row.get("BLK") * _safe_float(base_row.get("GP")) if base_row.get("BLK") is not None and base_row.get("GP") is not None else None),
+                "total_turnovers": _safe_int(base_row.get("TOV") * _safe_float(base_row.get("GP")) if base_row.get("TOV") is not None and base_row.get("GP") is not None else None),
+                "scoring_efficiency": _safe_float(adv_row.get("OFF_RATING")),
+                "shooting_efficiency": _safe_float(adv_row.get("EFG_PCT")),
+                "assist_turnover_ratio": _safe_float(adv_row.get("AST_TO")),
+            })
+
     return records
 
 
@@ -6412,6 +6633,106 @@ def _opendota_player_stats(base: Path, sport: str, season: str) -> list[dict[str
             })
     return records
 
+
+def _opendota_draft(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Extract Dota draft-phase picks/bans into normalized draft rows."""
+    from datetime import datetime, timezone
+
+    match_files = sorted((base / "season_types").glob("*/weeks/week_*/dates/*/matches/*.json"))
+    if not match_files:
+        matches_dir = base / "matches"
+        if not matches_dir.is_dir():
+            return []
+        match_files = sorted(matches_dir.glob("*.json"))
+
+    out: list[dict[str, Any]] = []
+    for fpath in match_files:
+        m = _load_json(fpath)
+        if not m or not isinstance(m, dict):
+            continue
+
+        mid = _safe_str(m.get("match_id"))
+        if not mid:
+            continue
+
+        start_ts = m.get("start_time")
+        if not start_ts:
+            continue
+        try:
+            game_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+        except (ValueError, OSError):
+            continue
+        if str(game_dt.year) != season:
+            continue
+
+        radiant = m.get("radiant_team") if isinstance(m.get("radiant_team"), dict) else {}
+        dire = m.get("dire_team") if isinstance(m.get("dire_team"), dict) else {}
+
+        picks_bans = m.get("picks_bans")
+        if isinstance(picks_bans, list) and picks_bans:
+            for idx, pb in enumerate(picks_bans, start=1):
+                if not isinstance(pb, dict):
+                    continue
+                hero_id = _safe_str(pb.get("hero_id"))
+                if not hero_id:
+                    continue
+                team_side = pb.get("team")
+                team_info = radiant if team_side == 0 else dire
+                is_pick = bool(pb.get("is_pick"))
+                draft_id = f"opendota|{season}|{mid}|{idx}|{hero_id}"
+                out.append({
+                    "draft_id": draft_id,
+                    "draft_year": season,
+                    "round": None,
+                    "pick": idx,
+                    "overall_pick": idx,
+                    "player_id": "",
+                    "player_name": "",
+                    "position": "pick" if is_pick else "ban",
+                    "team_id": _safe_str(team_info.get("team_id")) or ("radiant" if team_side == 0 else "dire"),
+                    "team_name": _safe_str(team_info.get("name")) or ("Radiant" if team_side == 0 else "Dire"),
+                    "hero_id": hero_id,
+                    "game_id": mid,
+                    "sport": sport,
+                    "season": season,
+                    "source": "opendota",
+                })
+            continue
+
+        draft_timings = m.get("draft_timings")
+        if isinstance(draft_timings, list):
+            for dt in draft_timings:
+                if not isinstance(dt, dict):
+                    continue
+                hero_id = _safe_str(dt.get("hero_id"))
+                order = _safe_int(dt.get("order"))
+                if not hero_id or order is None:
+                    continue
+                team_code = _safe_int(dt.get("active_team"))
+                # OpenDota active_team commonly maps 2=radiant, 3=dire
+                team_info = radiant if team_code == 2 else dire
+                is_pick = bool(dt.get("pick"))
+                draft_id = f"opendota|{season}|{mid}|{order}|{hero_id}"
+                out.append({
+                    "draft_id": draft_id,
+                    "draft_year": season,
+                    "round": None,
+                    "pick": order,
+                    "overall_pick": order,
+                    "player_id": "",
+                    "player_name": "",
+                    "position": "pick" if is_pick else "ban",
+                    "team_id": _safe_str(team_info.get("team_id")) or ("radiant" if team_code == 2 else "dire"),
+                    "team_name": _safe_str(team_info.get("name")) or ("Radiant" if team_code == 2 else "Dire"),
+                    "hero_id": hero_id,
+                    "game_id": mid,
+                    "sport": sport,
+                    "season": season,
+                    "source": "opendota",
+                })
+
+    return out
+
 def _oddsapi_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
     """Load OddsAPI odds from ``.../odds/{date}/`` under the resolved provider base.
 
@@ -6872,15 +7193,46 @@ def _cfbdata_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
 
     records: list[dict[str, Any]] = []
     for r in data:
+        if not isinstance(r, dict):
+            continue
         game_id = _safe_str(r.get("id"))
         if not game_id:
             continue
-        records.append({
+
+        start_date = _safe_str(r.get("startDate") or r.get("date"))
+        base_row = {
             "game_id": game_id,
-            "date": _safe_str(r.get("date"))[:10] if _safe_str(r.get("date")) else None,
-            "commence_time": _safe_datetime(r.get("date")),
+            "date": start_date[:10] if start_date else None,
+            "commence_time": _safe_datetime(start_date),
             "home_team": _safe_str(r.get("homeTeam")),
             "away_team": _safe_str(r.get("awayTeam")),
+            "is_live": False,
+            "source": "cfbdata",
+        }
+
+        lines = r.get("lines")
+        if isinstance(lines, list) and lines:
+            for ln in lines:
+                if not isinstance(ln, dict):
+                    continue
+                records.append({
+                    **base_row,
+                    "bookmaker": _safe_str(ln.get("provider")) or "cfbdata",
+                    "h2h_home": _safe_float(ln.get("homeMoneyline")),
+                    "h2h_away": _safe_float(ln.get("awayMoneyline")),
+                    "spread_home": _safe_float(ln.get("spread")),
+                    "spread_home_line": _safe_float(ln.get("homeSpreadOdds")),
+                    "spread_away_line": _safe_float(ln.get("awaySpreadOdds")),
+                    "total_line": _safe_float(ln.get("overUnder")),
+                    "total_over": _safe_float(ln.get("overOdds")),
+                    "total_under": _safe_float(ln.get("underOdds")),
+                    "spread_open": _safe_float(ln.get("spreadOpen")),
+                    "total_open": _safe_float(ln.get("overUnderOpen")),
+                })
+            continue
+
+        records.append({
+            **base_row,
             "bookmaker": _safe_str(r.get("provider")) or "cfbdata",
             "h2h_home": _safe_float(r.get("homeMoneyline")),
             "h2h_away": _safe_float(r.get("awayMoneyline")),
@@ -6890,9 +7242,1944 @@ def _cfbdata_odds(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
             "total_line": _safe_float(r.get("overUnder")),
             "total_over": _safe_float(r.get("overOdds")),
             "total_under": _safe_float(r.get("underOdds")),
-            "source": "cfbdata",
+            "spread_open": _safe_float(r.get("spreadOpen")),
+            "total_open": _safe_float(r.get("overUnderOpen")),
         })
     return records
+
+
+def _cfbdata_drives(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    drives_root = base / "drives"
+    if not drives_root.is_dir():
+        return records
+
+    for f in sorted(drives_root.glob("*/*/*/*.json")):
+        payload = _load_json(f)
+        if not isinstance(payload, list):
+            continue
+        for d in payload:
+            if not isinstance(d, dict):
+                continue
+            game_id = _safe_str(d.get("gameId"))
+            drive_id = _safe_str(d.get("id"))
+            if not game_id or not drive_id:
+                continue
+            records.append({
+                "sport": sport,
+                "season": season,
+                "source": "cfbdata",
+                "game_id": game_id,
+                "drive_id": drive_id,
+                "drive_number": _safe_int(d.get("driveNumber")),
+                "offense_team_name": _safe_str(d.get("offense")) or "",
+                "offense_conference": _safe_str(d.get("offenseConference")) or "",
+                "defense_team_name": _safe_str(d.get("defense")) or "",
+                "defense_conference": _safe_str(d.get("defenseConference")) or "",
+                "scoring": bool(d.get("scoring") or False),
+                "start_period": _safe_int(d.get("startPeriod")),
+                "start_yardline": _safe_int(d.get("startYardline")),
+                "start_yards_to_goal": _safe_int(d.get("startYardsToGoal")),
+                "end_period": _safe_int(d.get("endPeriod")),
+                "end_yardline": _safe_int(d.get("endYardline")),
+                "end_yards_to_goal": _safe_int(d.get("endYardsToGoal")),
+                "plays": _safe_int(d.get("plays")),
+                "yards": _safe_int(d.get("yards")),
+                "drive_result": _safe_str(d.get("driveResult")) or "",
+                "is_home_offense": bool(d.get("isHomeOffense") or False),
+                "start_offense_score": _safe_int(d.get("startOffenseScore")),
+                "start_defense_score": _safe_int(d.get("startDefenseScore")),
+                "end_offense_score": _safe_int(d.get("endOffenseScore")),
+                "end_defense_score": _safe_int(d.get("endDefenseScore")),
+            })
+    return records
+
+
+def _cfbdata_draft_positions(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "draft_positions.json")
+    if not isinstance(data, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        abbr = _safe_str(rec.get("abbreviation")) or ""
+        name = _safe_str(rec.get("name")) or ""
+        if not abbr and not name:
+            continue
+        out.append({
+            "draft_position_id": f"{season}|{abbr or name.lower().replace(' ', '_')}",
+            "draft_year": season,
+            "position_abbreviation": abbr,
+            "position_name": name,
+            "sport": sport,
+            "season": season,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_draft_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "draft_teams.json")
+    if not isinstance(data, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        team_name = _safe_str(rec.get("displayName") or rec.get("nickname") or rec.get("location")) or ""
+        if not team_name:
+            continue
+        team_id = _safe_str(rec.get("id") or rec.get("teamId") or team_name.lower().replace(" ", "_")) or ""
+        out.append({
+            "draft_team_id": f"{season}|{team_id}",
+            "draft_year": season,
+            "team_id": team_id,
+            "team_name": team_name,
+            "team_logo_url": _safe_str(rec.get("logo")),
+            "sport": sport,
+            "season": season,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_play_by_play(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Normalize CFBData play-level records into a common play_by_play shape."""
+    data = _load_cfbdata_json_compat(base, season, "plays", "plays.json")
+    out: list[dict[str, Any]] = []
+    for r in data:
+        if not isinstance(r, dict):
+            continue
+        game_id = _safe_str(r.get("gameId"))
+        play_id = _safe_str(r.get("id"))
+        if not game_id or not play_id:
+            continue
+        clock = r.get("clock") if isinstance(r.get("clock"), dict) else {}
+        out.append({
+            "sport": sport,
+            "source": "cfbdata",
+            "season": season,
+            "game_id": game_id,
+            "drive_id": _safe_str(r.get("driveId")) or "",
+            "play_id": play_id,
+            "sequence_number": _safe_int(r.get("playNumber")),
+            "event_type": _safe_str(r.get("playType")) or "play",
+            "description": _safe_str(r.get("playText")) or "",
+            "period": _safe_int(r.get("period")),
+            "clock": _safe_str(clock.get("displayValue") or clock.get("minutes")) or "",
+            "down": _safe_int(r.get("down")),
+            "distance": _safe_int(r.get("distance")),
+            "yards_gained": _safe_int(r.get("yardsGained")),
+            "scoring_play": bool(r.get("scoring") or False),
+            "offense_team_id": _safe_str(r.get("offense")) or "",
+            "offense_team_name": _safe_str(r.get("offense")) or "",
+            "home_score": _safe_int(r.get("home")),
+            "away_score": _safe_int(r.get("away")),
+        })
+    return out
+
+
+def _cfbdata_coaches(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "coaches.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        first = _safe_str(rec.get("firstName")) or ""
+        last = _safe_str(rec.get("lastName")) or ""
+        name = (f"{first} {last}").strip()
+        seasons = rec.get("seasons")
+        if isinstance(seasons, list) and seasons:
+            for s in seasons:
+                if not isinstance(s, dict):
+                    continue
+                team_name = _safe_str(s.get("school")) or ""
+                year = _safe_str(s.get("year")) or season
+                coach_id = f"{name.lower().replace(' ', '_')}|{team_name.lower().replace(' ', '_')}|{year}"
+                out.append({
+                    "coach_id": coach_id,
+                    "coach_name": name,
+                    "first_name": first,
+                    "last_name": last,
+                    "team_id": team_name,
+                    "team_name": team_name,
+                    "season": year,
+                    "sport": sport,
+                    "games": _safe_int(s.get("games")),
+                    "wins": _safe_int(s.get("wins")),
+                    "losses": _safe_int(s.get("losses")),
+                    "ties": _safe_int(s.get("ties")),
+                    "hire_date": _safe_str(rec.get("hireDate")),
+                    "source": "cfbdata",
+                })
+        elif name:
+            coach_id = f"{name.lower().replace(' ', '_')}|{season}"
+            out.append({
+                "coach_id": coach_id,
+                "coach_name": name,
+                "first_name": first,
+                "last_name": last,
+                "team_id": "",
+                "team_name": "",
+                "season": season,
+                "sport": sport,
+                "hire_date": _safe_str(rec.get("hireDate")),
+                "source": "cfbdata",
+            })
+    return out
+
+
+def _cfbdata_draft(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "draft_picks.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        draft_year = _safe_str(rec.get("year")) or season
+        overall = _safe_int(rec.get("overall"))
+        player_name = _safe_str(rec.get("name")) or ""
+        college_player_id = _safe_str(rec.get("collegeAthleteId")) or ""
+        nfl_player_id = _safe_str(rec.get("nflAthleteId")) or ""
+        nfl_team_id = _safe_str(rec.get("nflTeamId")) or ""
+        if overall is None and not player_name:
+            continue
+        draft_id = f"{draft_year}|{overall if overall is not None else ''}|{player_name.lower().replace(' ', '_')}"
+        out.append({
+            "draft_id": draft_id,
+            "draft_year": draft_year,
+            "round": _safe_int(rec.get("round")),
+            "pick": _safe_int(rec.get("pick")),
+            "overall_pick": overall,
+            "player_id": nfl_player_id or college_player_id,
+            "college_player_id": college_player_id,
+            "nfl_player_id": nfl_player_id,
+            "player_name": player_name,
+            "position": _safe_str(rec.get("position")) or "",
+            "team_id": nfl_team_id,
+            "nfl_team_id": nfl_team_id,
+            "team_name": _safe_str(rec.get("nflTeam")) or "",
+            "college_team": _safe_str(rec.get("collegeTeam")) or "",
+            "college_conference": _safe_str(rec.get("collegeConference")) or "",
+            "sport": sport,
+            "season": draft_year,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_player_portal(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "player_portal.json")
+    if not isinstance(data, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        year = _safe_str(rec.get("season")) or season
+        player_name = ((
+            f"{_safe_str(rec.get('firstName')) or ''} {_safe_str(rec.get('lastName')) or ''}"
+        ).strip() or _safe_str(rec.get("name")) or "")
+        if not player_name:
+            continue
+        pid = f"{player_name.lower().replace(' ', '_')}|{year}|{_safe_str(rec.get('origin')) or ''}|{_safe_str(rec.get('destination')) or ''}"
+        out.append({
+            "record_id": pid,
+            "player_id": _safe_str(rec.get("id")) or "",
+            "player_name": player_name,
+            "position": _safe_str(rec.get("position")) or "",
+            "origin_team": _safe_str(rec.get("origin")) or "",
+            "destination_team": _safe_str(rec.get("destination")) or "",
+            "transfer_date": _safe_str(rec.get("transferDate")) or "",
+            "rating": _safe_float(rec.get("rating")),
+            "stars": _safe_float(rec.get("stars")),
+            "eligibility": _safe_str(rec.get("eligibility")) or "",
+            "season": year,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_player_returning(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "player_returning.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        team_name = _safe_str(rec.get("team")) or ""
+        year = _safe_str(rec.get("season")) or season
+        if not team_name:
+            continue
+        rid = f"{team_name.lower().replace(' ', '_')}|{year}"
+        out.append({
+            "record_id": rid,
+            "team_id": team_name,
+            "team_name": team_name,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "total_ppa": _safe_float(rec.get("totalPPA")),
+            "passing_ppa": _safe_float(rec.get("totalPassingPPA")),
+            "receiving_ppa": _safe_float(rec.get("totalReceivingPPA")),
+            "rushing_ppa": _safe_float(rec.get("totalRushingPPA")),
+            "percent_ppa": _safe_float(rec.get("percentPPA")),
+            "percent_passing_ppa": _safe_float(rec.get("percentPassingPPA")),
+            "percent_receiving_ppa": _safe_float(rec.get("percentReceivingPPA")),
+            "percent_rushing_ppa": _safe_float(rec.get("percentRushingPPA")),
+            "usage": _safe_float(rec.get("usage")),
+            "passing_usage": _safe_float(rec.get("passingUsage")),
+            "receiving_usage": _safe_float(rec.get("receivingUsage")),
+            "rushing_usage": _safe_float(rec.get("rushingUsage")),
+            "season": year,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_player_usage(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "player_usage.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        year = _safe_str(rec.get("season")) or season
+        pid = _safe_str(rec.get("id")) or ""
+        name = _safe_str(rec.get("name")) or ""
+        if not pid and not name:
+            continue
+        rid = pid or f"{name.lower().replace(' ', '_')}|{year}|{_safe_str(rec.get('team')) or ''}"
+        row: dict[str, Any] = {
+            "record_id": rid,
+            "player_id": pid,
+            "player_name": name,
+            "position": _safe_str(rec.get("position")) or "",
+            "team_id": _safe_str(rec.get("team")) or "",
+            "team_name": _safe_str(rec.get("team")) or "",
+            "conference": _safe_str(rec.get("conference")) or "",
+            "season": year,
+            "sport": sport,
+            "source": "cfbdata",
+        }
+        usage = rec.get("usage")
+        if isinstance(usage, dict):
+            for k, v in usage.items():
+                row[f"usage_{k}"] = _safe_float(v)
+        out.append(row)
+    return out
+
+
+def _cfbdata_rankings(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Flatten week-partitioned rankings files into per-rank rows."""
+    data = _load_cfbdata_json_compat(base, season, "rankings", "rankings.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        s = _safe_str(entry.get("season")) or season
+        season_type = _safe_str(entry.get("seasonType")) or ""
+        week = _safe_int(entry.get("week"))
+        for poll in (entry.get("polls") or []):
+            if not isinstance(poll, dict):
+                continue
+            poll_name = _safe_str(poll.get("poll")) or ""
+            for rank_rec in (poll.get("ranks") or []):
+                if not isinstance(rank_rec, dict):
+                    continue
+                rank = _safe_int(rank_rec.get("rank"))
+                team_id = _safe_str(rank_rec.get("teamId")) or ""
+                school = _safe_str(rank_rec.get("school")) or ""
+                rid = f"cfbdata|{s}|{season_type}|w{week}|{poll_name}|{rank}"
+                out.append({
+                    "record_id": rid,
+                    "season": s,
+                    "season_type": season_type,
+                    "week": week,
+                    "poll": poll_name,
+                    "rank": rank,
+                    "team_id": team_id,
+                    "team_name": school,
+                    "conference": _safe_str(rank_rec.get("conference")) or "",
+                    "first_place_votes": _safe_int(rank_rec.get("firstPlaceVotes")),
+                    "points": _safe_int(rank_rec.get("points")),
+                    "sport": sport,
+                    "source": "cfbdata",
+                })
+    return out
+
+
+def _cfbdata_records(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Team season records (W-L-T splits)."""
+    data = _load_cfbdata_endpoint_json(base, "records.json")
+    if not isinstance(data, list):
+        return []
+
+    def _wl(obj: Any) -> dict[str, Any]:
+        if not isinstance(obj, dict):
+            return {}
+        return {
+            "games": _safe_int(obj.get("games")),
+            "wins": _safe_int(obj.get("wins")),
+            "losses": _safe_int(obj.get("losses")),
+            "ties": _safe_int(obj.get("ties")),
+        }
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("year")) or season
+        team = _safe_str(rec.get("team")) or ""
+        team_id = _safe_str(rec.get("teamId")) or ""
+        rid = f"cfbdata|{yr}|{team_id or team.lower().replace(' ', '_')}"
+        total = _wl(rec.get("total"))
+        row: dict[str, Any] = {
+            "record_id": rid,
+            "team_id": team_id,
+            "team_name": team,
+            "season": yr,
+            "classification": _safe_str(rec.get("classification")) or "",
+            "conference": _safe_str(rec.get("conference")) or "",
+            "division": _safe_str(rec.get("division")) or "",
+            "expected_wins": _safe_float(rec.get("expectedWins")),
+            "total_games": total.get("games"),
+            "total_wins": total.get("wins"),
+            "total_losses": total.get("losses"),
+            "total_ties": total.get("ties"),
+            "sport": sport,
+            "source": "cfbdata",
+        }
+        for split_key, field_prefix in [
+            ("conferenceGames", "conf"),
+            ("homeGames", "home"),
+            ("awayGames", "away"),
+            ("neutralSiteGames", "neutral"),
+            ("regularSeason", "regular"),
+            ("postseason", "postseason"),
+        ]:
+            sub = _wl(rec.get(split_key))
+            if sub:
+                row[f"{field_prefix}_games"] = sub.get("games")
+                row[f"{field_prefix}_wins"] = sub.get("wins")
+                row[f"{field_prefix}_losses"] = sub.get("losses")
+                row[f"{field_prefix}_ties"] = sub.get("ties")
+        out.append(row)
+    return out
+
+
+def _cfbdata_recruiting(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "recruiting.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("year")) or season
+        rid = _safe_str(rec.get("id")) or _safe_str(rec.get("athleteId")) or ""
+        recruit_id = f"cfbdata|{yr}|{rid}"
+        hometown = rec.get("hometownInfo") or {}
+        out.append({
+            "record_id": recruit_id,
+            "recruit_id": rid,
+            "athlete_id": _safe_str(rec.get("athleteId")) or "",
+            "recruit_type": _safe_str(rec.get("recruitType")) or "",
+            "season": yr,
+            "ranking": _safe_int(rec.get("ranking")),
+            "name": _safe_str(rec.get("name")) or "",
+            "school": _safe_str(rec.get("school")) or "",
+            "committed_to": _safe_str(rec.get("committedTo")) or "",
+            "position": _safe_str(rec.get("position")) or "",
+            "height": _safe_int(rec.get("height")),
+            "weight": _safe_int(rec.get("weight")),
+            "stars": _safe_int(rec.get("stars")),
+            "rating": _safe_float(rec.get("rating")),
+            "city": _safe_str(rec.get("city")) or "",
+            "state": _safe_str(rec.get("stateProvince")) or "",
+            "country": _safe_str(rec.get("country")) or "",
+            "latitude": _safe_float(hometown.get("latitude")),
+            "longitude": _safe_float(hometown.get("longitude")),
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_recruiting_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "recruiting_teams.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("year")) or season
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|{yr}|{team.lower().replace(' ', '_')}"
+        out.append({
+            "record_id": rid,
+            "team_name": team,
+            "season": yr,
+            "rank": _safe_int(rec.get("rank")),
+            "points": _safe_float(rec.get("points")),
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_recruiting_groups(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "recruiting_groups.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        team = _safe_str(rec.get("team")) or ""
+        pos_group = _safe_str(rec.get("positionGroup")) or ""
+        rid = f"cfbdata|{season}|{team.lower().replace(' ', '_')}|{pos_group.lower().replace(' ', '_')}"
+        out.append({
+            "record_id": rid,
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "position_group": pos_group,
+            "average_rating": _safe_float(rec.get("averageRating")),
+            "total_rating": _safe_float(rec.get("totalRating")),
+            "commits": _safe_int(rec.get("commits")),
+            "average_stars": _safe_float(rec.get("averageStars")),
+            "season": season,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_talent(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "talent.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("year")) or season
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|{yr}|{team.lower().replace(' ', '_')}"
+        out.append({
+            "record_id": rid,
+            "team_name": team,
+            "season": yr,
+            "talent": _safe_float(rec.get("talent")),
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_ratings_sp(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "ratings_sp.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("year")) or season
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|sp|{yr}|{team.lower().replace(' ', '_')}"
+        row: dict[str, Any] = {
+            "record_id": rid,
+            "season": yr,
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "rating": _safe_float(rec.get("rating")),
+            "ranking": _safe_int(rec.get("ranking")),
+            "second_order_wins": _safe_float(rec.get("secondOrderWins")),
+            "sos": _safe_float(rec.get("sos")),
+            "sport": sport,
+            "source": "cfbdata",
+            "rating_system": "sp",
+        }
+        for phase in ("offense", "defense", "specialTeams"):
+            sub = rec.get(phase)
+            if isinstance(sub, dict):
+                prefix = "special_teams" if phase == "specialTeams" else phase
+                for k, v in sub.items():
+                    row[f"{prefix}_{k}"] = _safe_float(v) if isinstance(v, (int, float)) else _safe_str(v)
+        out.append(row)
+    return out
+
+
+def _cfbdata_ratings_sp_conferences(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "ratings_sp_conferences.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("year")) or season
+        conf = _safe_str(rec.get("conference")) or ""
+        rid = f"cfbdata|sp_conf|{yr}|{conf.lower().replace(' ', '_')}"
+        row: dict[str, Any] = {
+            "record_id": rid,
+            "season": yr,
+            "conference": conf,
+            "rating": _safe_float(rec.get("rating")),
+            "second_order_wins": _safe_float(rec.get("secondOrderWins")),
+            "sos": _safe_float(rec.get("sos")),
+            "sport": sport,
+            "source": "cfbdata",
+            "rating_system": "sp_conferences",
+        }
+        for phase in ("offense", "defense", "specialTeams"):
+            sub = rec.get(phase)
+            if isinstance(sub, dict):
+                prefix = "special_teams" if phase == "specialTeams" else phase
+                for k, v in sub.items():
+                    row[f"{prefix}_{k}"] = _safe_float(v) if isinstance(v, (int, float)) else _safe_str(v)
+        out.append(row)
+    return out
+
+
+def _cfbdata_ratings_srs(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "ratings_srs.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("year")) or season
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|srs|{yr}|{team.lower().replace(' ', '_')}"
+        out.append({
+            "record_id": rid,
+            "season": yr,
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "division": _safe_str(rec.get("division")) or "",
+            "ranking": _safe_int(rec.get("ranking")),
+            "rating": _safe_float(rec.get("rating")),
+            "sport": sport,
+            "source": "cfbdata",
+            "rating_system": "srs",
+        })
+    return out
+
+
+def _cfbdata_ratings_elo(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "ratings_elo.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("year")) or season
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|elo|{yr}|{team.lower().replace(' ', '_')}"
+        out.append({
+            "record_id": rid,
+            "season": yr,
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "elo": _safe_float(rec.get("elo")),
+            "sport": sport,
+            "source": "cfbdata",
+            "rating_system": "elo",
+        })
+    return out
+
+
+def _cfbdata_ratings_fpi(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "ratings_fpi.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("year")) or season
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|fpi|{yr}|{team.lower().replace(' ', '_')}"
+        row: dict[str, Any] = {
+            "record_id": rid,
+            "season": yr,
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "fpi": _safe_float(rec.get("fpi")),
+            "sport": sport,
+            "source": "cfbdata",
+            "rating_system": "fpi",
+        }
+        resume = rec.get("resumeRanks")
+        if isinstance(resume, dict):
+            for k, v in resume.items():
+                row[f"resume_{k}"] = _safe_float(v) if isinstance(v, (int, float)) else _safe_str(v)
+        eff = rec.get("efficiencies")
+        if isinstance(eff, dict):
+            for k, v in eff.items():
+                row[f"eff_{k}"] = _safe_float(v) if isinstance(v, (int, float)) else _safe_str(v)
+        out.append(row)
+    return out
+
+
+def _cfbdata_ppa_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "ppa_teams.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("season")) or season
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|ppa_teams|{yr}|{team.lower().replace(' ', '_')}"
+        row: dict[str, Any] = {
+            "record_id": rid,
+            "season": yr,
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "sport": sport,
+            "source": "cfbdata",
+        }
+        for phase in ("offense", "defense"):
+            sub = rec.get(phase)
+            if isinstance(sub, dict):
+                for k, v in sub.items():
+                    row[f"{phase}_{k}"] = _safe_float(v) if isinstance(v, (int, float)) else _safe_str(v)
+        out.append(row)
+    return out
+
+
+def _cfbdata_ppa_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Load per-game PPA data (week-partitioned files)."""
+    data = _load_cfbdata_json_compat(base, season, "ppa_games", "ppa_games.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        game_id = _safe_str(rec.get("gameId")) or ""
+        team = _safe_str(rec.get("team")) or ""
+        yr = _safe_str(rec.get("season")) or season
+        rid = f"cfbdata|ppa_games|{yr}|{game_id}|{team.lower().replace(' ', '_')}"
+        row: dict[str, Any] = {
+            "record_id": rid,
+            "game_id": game_id,
+            "season": yr,
+            "week": _safe_int(rec.get("week")),
+            "season_type": _safe_str(rec.get("seasonType")) or "",
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "opponent": _safe_str(rec.get("opponent")) or "",
+            "sport": sport,
+            "source": "cfbdata",
+        }
+        for phase in ("offense", "defense"):
+            sub = rec.get(phase)
+            if isinstance(sub, dict):
+                for k, v in sub.items():
+                    row[f"{phase}_{k}"] = _safe_float(v) if isinstance(v, (int, float)) else _safe_str(v)
+        out.append(row)
+    return out
+
+
+def _cfbdata_ppa_players_season(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    data = _load_cfbdata_endpoint_json(base, "ppa_players_season.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("season")) or season
+        pid = _safe_str(rec.get("id")) or ""
+        name = _safe_str(rec.get("name")) or ""
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|ppa_players_season|{yr}|{pid or name.lower().replace(' ', '_')}|{team.lower().replace(' ', '_')}"
+        row: dict[str, Any] = {
+            "record_id": rid,
+            "player_id": pid,
+            "player_name": name,
+            "position": _safe_str(rec.get("position")) or "",
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "season": yr,
+            "sport": sport,
+            "source": "cfbdata",
+        }
+        avg = rec.get("averagePPA")
+        if isinstance(avg, dict):
+            for k, v in avg.items():
+                row[f"avg_ppa_{k}"] = _safe_float(v) if isinstance(v, (int, float)) else _safe_str(v)
+        elif avg is not None:
+            row["avg_ppa_all"] = _safe_float(avg)
+        total = rec.get("totalPPA")
+        if isinstance(total, dict):
+            for k, v in total.items():
+                row[f"total_ppa_{k}"] = _safe_float(v) if isinstance(v, (int, float)) else _safe_str(v)
+        elif total is not None:
+            row["total_ppa_all"] = _safe_float(total)
+        out.append(row)
+    return out
+
+
+def _cfbdata_plays_stats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Per-play stat contributions (season-level flat list)."""
+    data = _load_cfbdata_json_compat(base, season, "plays_stats", "plays_stats.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        game_id = _safe_str(rec.get("gameId")) or ""
+        play_id = _safe_str(rec.get("playId")) or ""
+        team = _safe_str(rec.get("team")) or ""
+        yr = _safe_str(rec.get("season")) or season
+        rid = f"cfbdata|plays_stats|{yr}|{game_id}|{play_id}|{team.lower().replace(' ', '_')}"
+        out.append({
+            "record_id": rid,
+            "game_id": game_id,
+            "play_id": play_id,
+            "drive_id": _safe_str(rec.get("driveId")) or "",
+            "season": yr,
+            "week": _safe_int(rec.get("week")),
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "opponent": _safe_str(rec.get("opponent")) or "",
+            "team_score": _safe_int(rec.get("teamScore")),
+            "opponent_score": _safe_int(rec.get("opponentScore")),
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_plays_types(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Static lookup: play type definitions."""
+    data = _load_cfbdata_endpoint_json(base, "plays_types.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        pid = _safe_str(rec.get("id")) or ""
+        text = _safe_str(rec.get("text")) or ""
+        rid = f"cfbdata|play_type|{pid}"
+        out.append({
+            "record_id": rid,
+            "play_type_id": pid,
+            "text": text,
+            "abbreviation": _safe_str(rec.get("abbreviation")) or "",
+            "season": season,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_plays_stats_types(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Static lookup: play stat type definitions."""
+    data = _load_cfbdata_endpoint_json(base, "plays_stats_types.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        sid = _safe_str(rec.get("id")) or ""
+        rid = f"cfbdata|plays_stats_type|{sid}"
+        out.append({
+            "record_id": rid,
+            "stat_type_id": sid,
+            "name": _safe_str(rec.get("name")) or "",
+            "season": season,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_stats_game_advanced(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Per-game advanced team stats (offense/defense breakdowns)."""
+    data = _load_cfbdata_json_compat(base, season, "stats_game_advanced", "stats_game_advanced.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("season")) or season
+        game_id = _safe_str(rec.get("gameId")) or ""
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|stats_game_adv|{yr}|{game_id}|{team.lower().replace(' ', '_')}"
+        row: dict[str, Any] = {
+            "record_id": rid,
+            "game_id": game_id,
+            "season": yr,
+            "season_type": _safe_str(rec.get("seasonType")) or "",
+            "week": _safe_int(rec.get("week")),
+            "team_name": team,
+            "opponent": _safe_str(rec.get("opponent")) or "",
+            "sport": sport,
+            "source": "cfbdata",
+        }
+        for phase in ("offense", "defense"):
+            sub = rec.get(phase)
+            if isinstance(sub, dict):
+                for k, v in sub.items():
+                    row[f"{phase}_{k}"] = _safe_float(v) if isinstance(v, (int, float)) else _safe_str(v)
+        out.append(row)
+    return out
+
+
+def _cfbdata_stats_game_havoc(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Per-game havoc stats."""
+    data = _load_cfbdata_json_compat(base, season, "stats_game_havoc", "stats_game_havoc.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("season")) or season
+        game_id = _safe_str(rec.get("gameId")) or ""
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|stats_game_havoc|{yr}|{game_id}|{team.lower().replace(' ', '_')}"
+        row: dict[str, Any] = {
+            "record_id": rid,
+            "game_id": game_id,
+            "season": yr,
+            "season_type": _safe_str(rec.get("seasonType")) or "",
+            "week": _safe_int(rec.get("week")),
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "opponent": _safe_str(rec.get("opponent")) or "",
+            "opponent_conference": _safe_str(rec.get("opponentConference")) or "",
+            "sport": sport,
+            "source": "cfbdata",
+        }
+        for phase in ("offense", "defense"):
+            sub = rec.get(phase)
+            if isinstance(sub, dict):
+                for k, v in sub.items():
+                    row[f"{phase}_{k}"] = _safe_float(v) if isinstance(v, (int, float)) else _safe_str(v)
+        out.append(row)
+    return out
+
+
+def _cfbdata_games_teams(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Per-game team box stats (flat rows, one per team per game)."""
+    data = _load_cfbdata_json_compat(base, season, "games_teams", "games_teams.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        game_id = _safe_str(entry.get("id")) or ""
+        for team_rec in (entry.get("teams") or []):
+            if not isinstance(team_rec, dict):
+                continue
+            team_id = _safe_str(team_rec.get("teamId")) or ""
+            team_name = _safe_str(team_rec.get("team")) or ""
+            home_away = _safe_str(team_rec.get("homeAway")) or ""
+            rid = f"cfbdata|games_teams|{season}|{game_id}|{home_away}"
+            row: dict[str, Any] = {
+                "record_id": rid,
+                "game_id": game_id,
+                "team_id": team_id,
+                "team_name": team_name,
+                "conference": _safe_str(team_rec.get("conference")) or "",
+                "home_away": home_away,
+                "points": _safe_int(team_rec.get("points")),
+                "season": season,
+                "sport": sport,
+                "source": "cfbdata",
+            }
+            for stat in (team_rec.get("stats") or []):
+                if not isinstance(stat, dict):
+                    continue
+                sname = _safe_str(stat.get("category") or stat.get("stat_type") or stat.get("name")) or ""
+                sval = stat.get("stat") or stat.get("value")
+                if sname:
+                    row[f"stat_{sname.lower().replace(' ', '_')}"] = (
+                        _safe_float(sval) if isinstance(sval, (int, float)) else _safe_str(sval)
+                    )
+            out.append(row)
+    return out
+
+
+def _cfbdata_games_media(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Broadcast/media assignments per game."""
+    data = _load_cfbdata_json_compat(base, season, "games_media", "games_media.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        game_id = _safe_str(rec.get("id")) or ""
+        media_type = _safe_str(rec.get("mediaType")) or ""
+        outlet = _safe_str(rec.get("outlet")) or ""
+        rid = f"cfbdata|games_media|{season}|{game_id}|{media_type}|{outlet.lower().replace(' ', '_')}"
+        out.append({
+            "record_id": rid,
+            "game_id": game_id,
+            "season": _safe_str(rec.get("season")) or season,
+            "week": _safe_int(rec.get("week")),
+            "season_type": _safe_str(rec.get("seasonType")) or "",
+            "start_time": _safe_str(rec.get("startTime")) or "",
+            "home_team": _safe_str(rec.get("homeTeam")) or "",
+            "home_conference": _safe_str(rec.get("homeConference")) or "",
+            "away_team": _safe_str(rec.get("awayTeam")) or "",
+            "away_conference": _safe_str(rec.get("awayConference")) or "",
+            "media_type": media_type,
+            "outlet": outlet,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_conferences(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Conference reference data (static across seasons)."""
+    data = _load_cfbdata_endpoint_json(base, "conferences.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        cid = _safe_str(rec.get("id")) or ""
+        name = _safe_str(rec.get("name")) or ""
+        rid = f"cfbdata|conf|{cid}"
+        out.append({
+            "record_id": rid,
+            "conference_id": cid,
+            "name": name,
+            "short_name": _safe_str(rec.get("shortName")) or "",
+            "abbreviation": _safe_str(rec.get("abbreviation")) or "",
+            "classification": _safe_str(rec.get("classification")) or "",
+            "season": season,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_metrics_fg_ep(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Field goal expected points lookup table (yards-to-goal × distance grid)."""
+    data = _load_cfbdata_endpoint_json(base, "metrics_fg_ep.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yards = _safe_int(rec.get("yardsToGoal"))
+        dist = _safe_int(rec.get("distance"))
+        rid = f"cfbdata|metrics_fg_ep|{yards}|{dist}"
+        out.append({
+            "record_id": rid,
+            "yards_to_goal": yards,
+            "distance": dist,
+            "expected_points": _safe_float(rec.get("expectedPoints")),
+            "season": season,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_venues(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Stadium/venue reference data."""
+    data = _load_cfbdata_endpoint_json(base, "venues.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        vid = _safe_str(rec.get("id")) or ""
+        name = _safe_str(rec.get("name")) or ""
+        rid = f"cfbdata|venue|{vid or name.lower().replace(' ', '_')}"
+        out.append({
+            "record_id": rid,
+            "venue_id": vid,
+            "name": name,
+            "capacity": _safe_int(rec.get("capacity")),
+            "grass": bool(rec.get("grass")),
+            "dome": bool(rec.get("dome")),
+            "city": _safe_str(rec.get("city")) or "",
+            "state": _safe_str(rec.get("state")) or "",
+            "zip": _safe_str(rec.get("zip")) or "",
+            "country_code": _safe_str(rec.get("countryCode")) or "",
+            "timezone": _safe_str(rec.get("timezone")) or "",
+            "latitude": _safe_float(rec.get("latitude")),
+            "longitude": _safe_float(rec.get("longitude")),
+            "elevation": _safe_float(rec.get("elevation")),
+            "construction_year": _safe_int(rec.get("constructionYear")),
+            "season": season,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_stats_categories(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Static list of all stat category name strings."""
+    data = _load_cfbdata_endpoint_json(base, "stats_categories.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for i, item in enumerate(data):
+        label = _safe_str(item) if isinstance(item, str) else _safe_str(item.get("name") or item.get("id") or "") if isinstance(item, dict) else ""
+        if not label:
+            continue
+        rid = f"cfbdata|stats_cat|{label.lower().replace(' ', '_')}"
+        out.append({
+            "record_id": rid,
+            "sort_order": i,
+            "name": label,
+            "season": season,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_wp_pregame(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Pre-game win probability by game."""
+    data = _load_cfbdata_json_compat(base, season, "wp_pregame", "wp_pregame.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("season")) or season
+        game_id = _safe_str(rec.get("gameId")) or ""
+        rid = f"cfbdata|wp_pregame|{yr}|{game_id}"
+        out.append({
+            "record_id": rid,
+            "game_id": game_id,
+            "season": yr,
+            "week": _safe_int(rec.get("week")),
+            "season_type": _safe_str(rec.get("seasonType")) or "",
+            "home_team": _safe_str(rec.get("homeTeam")) or "",
+            "away_team": _safe_str(rec.get("awayTeam")) or "",
+            "spread": _safe_float(rec.get("spread")),
+            "home_win_probability": _safe_float(rec.get("homeWinProbability")),
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_teams_ats(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Teams against the spread records."""
+    data = _load_cfbdata_endpoint_json(base, "teams_ats.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yr = _safe_str(rec.get("year")) or season
+        team_id = _safe_str(rec.get("teamId")) or ""
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|teams_ats|{yr}|{team_id or team.lower().replace(' ', '_')}"
+        out.append({
+            "record_id": rid,
+            "team_id": team_id,
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "season": yr,
+            "games": _safe_int(rec.get("games")),
+            "ats_wins": _safe_int(rec.get("atsWins")),
+            "ats_losses": _safe_int(rec.get("atsLosses")),
+            "ats_pushes": _safe_int(rec.get("atsPushes")),
+            "avg_cover_margin": _safe_float(rec.get("avgCoverMargin")),
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_teams_fbs(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """FBS teams reference (extended team metadata including logos, colors, location)."""
+    data = _load_cfbdata_endpoint_json(base, "teams_fbs.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        team_id = _safe_str(rec.get("id")) or ""
+        school = _safe_str(rec.get("school")) or ""
+        rid = f"cfbdata|team|{team_id or school.lower().replace(' ', '_')}"
+        location = rec.get("location") or {}
+        logos = rec.get("logos")
+        logo_url = ""
+        if isinstance(logos, list) and logos:
+            logo_url = _safe_str(logos[0]) if isinstance(logos[0], str) else _safe_str((logos[0] or {}).get("href")) or ""
+        alt_names = rec.get("alternateNames")
+        out.append({
+            "record_id": rid,
+            "team_id": team_id,
+            "school": school,
+            "mascot": _safe_str(rec.get("mascot")) or "",
+            "abbreviation": _safe_str(rec.get("abbreviation")) or "",
+            "alternate_names": "|".join(alt_names) if isinstance(alt_names, list) else _safe_str(alt_names) or "",
+            "conference": _safe_str(rec.get("conference")) or "",
+            "division": _safe_str(rec.get("division")) or "",
+            "classification": _safe_str(rec.get("classification")) or "",
+            "color": _safe_str(rec.get("color")) or "",
+            "alternate_color": _safe_str(rec.get("alternateColor")) or "",
+            "logo_url": logo_url,
+            "twitter": _safe_str(rec.get("twitter")) or "",
+            "venue_id": _safe_str((location if isinstance(location, dict) else {}).get("venueId")) or "",
+            "venue_name": _safe_str((location if isinstance(location, dict) else {}).get("name")) or "",
+            "city": _safe_str((location if isinstance(location, dict) else {}).get("city")) or "",
+            "state": _safe_str((location if isinstance(location, dict) else {}).get("state")) or "",
+            "latitude": _safe_float((location if isinstance(location, dict) else {}).get("latitude")),
+            "longitude": _safe_float((location if isinstance(location, dict) else {}).get("longitude")),
+            "capacity": _safe_int((location if isinstance(location, dict) else {}).get("capacity")),
+            "grass": bool((location if isinstance(location, dict) else {}).get("grass")),
+            "dome": bool((location if isinstance(location, dict) else {}).get("dome")),
+            "season": season,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_games_players(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Per-game player box breakdown by team/category/stat type."""
+    data = _load_cfbdata_json_compat(base, season, "games_players", "games_players.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        game_id = _safe_str(rec.get("id")) or ""
+        teams = rec.get("teams")
+        if not isinstance(teams, list):
+            continue
+        for team_rec in teams:
+            if not isinstance(team_rec, dict):
+                continue
+            team_name = _safe_str(team_rec.get("team")) or ""
+            team_conference = _safe_str(team_rec.get("conference")) or ""
+            home_away = _safe_str(team_rec.get("homeAway")) or ""
+            points = _safe_int(team_rec.get("points"))
+            categories = team_rec.get("categories")
+            if not isinstance(categories, list):
+                continue
+            for cat in categories:
+                if not isinstance(cat, dict):
+                    continue
+                cat_name = _safe_str(cat.get("name")) or ""
+                types = cat.get("types")
+                if not isinstance(types, list):
+                    continue
+                for stat_type in types:
+                    if not isinstance(stat_type, dict):
+                        continue
+                    stat_type_name = _safe_str(stat_type.get("name")) or ""
+                    athletes = stat_type.get("athletes")
+                    if not isinstance(athletes, list):
+                        continue
+                    for athlete in athletes:
+                        if not isinstance(athlete, dict):
+                            continue
+                        player_id = _safe_str(athlete.get("id")) or ""
+                        player_name = _safe_str(athlete.get("name")) or ""
+                        stat_raw = athlete.get("stat")
+                        rid = (
+                            f"cfbdata|games_players|{season}|{game_id}|{team_name.lower().replace(' ', '_')}"
+                            f"|{player_id or player_name.lower().replace(' ', '_')}|{cat_name.lower().replace(' ', '_')}"
+                            f"|{stat_type_name.lower().replace(' ', '_')}"
+                        )
+                        out.append({
+                            "record_id": rid,
+                            "game_id": game_id,
+                            "team_name": team_name,
+                            "team_conference": team_conference,
+                            "home_away": home_away,
+                            "team_points": points,
+                            "category": cat_name,
+                            "stat_type": stat_type_name,
+                            "player_id": player_id,
+                            "player_name": player_name,
+                            "stat": _safe_str(stat_raw) if not isinstance(stat_raw, (int, float)) else _safe_float(stat_raw),
+                            "season": season,
+                            "sport": sport,
+                            "source": "cfbdata",
+                        })
+    return out
+
+
+def _cfbdata_lines(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Per-game betting lines with one row per provider line snapshot."""
+    data = _load_cfbdata_json_compat(base, season, "lines", "lines.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        game_id = _safe_str(rec.get("id")) or ""
+        season_val = _safe_str(rec.get("season")) or season
+        week = _safe_int(rec.get("week"))
+        season_type = _safe_str(rec.get("seasonType")) or ""
+        home_team = _safe_str(rec.get("homeTeam")) or ""
+        away_team = _safe_str(rec.get("awayTeam")) or ""
+        lines = rec.get("lines")
+        if not isinstance(lines, list):
+            continue
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            provider = _safe_str(line.get("provider")) or ""
+            rid = f"cfbdata|lines|{season_val}|{game_id}|{provider.lower().replace(' ', '_')}"
+            out.append({
+                "record_id": rid,
+                "game_id": game_id,
+                "season": season_val,
+                "week": week,
+                "season_type": season_type,
+                "start_date": _safe_str(rec.get("startDate")) or "",
+                "home_team_id": _safe_str(rec.get("homeTeamId")) or "",
+                "home_team": home_team,
+                "away_team_id": _safe_str(rec.get("awayTeamId")) or "",
+                "away_team": away_team,
+                "provider": provider,
+                "spread": _safe_float(line.get("spread")),
+                "spread_open": _safe_float(line.get("spreadOpen")),
+                "formatted_spread": _safe_str(line.get("formattedSpread")) or "",
+                "over_under": _safe_float(line.get("overUnder")),
+                "over_under_open": _safe_float(line.get("overUnderOpen")),
+                "home_moneyline": _safe_float(line.get("homeMoneyline")),
+                "away_moneyline": _safe_float(line.get("awayMoneyline")),
+                "sport": sport,
+                "source": "cfbdata",
+            })
+    return out
+
+
+def _cfbdata_plays(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Raw play records with expanded context fields."""
+    data = _load_cfbdata_json_compat(base, season, "plays", "plays.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        game_id = _safe_str(rec.get("gameId")) or ""
+        play_id = _safe_str(rec.get("id")) or ""
+        if not game_id or not play_id:
+            continue
+        clock = rec.get("clock") if isinstance(rec.get("clock"), dict) else {}
+        rid = f"cfbdata|plays|{season}|{game_id}|{play_id}"
+        out.append({
+            "record_id": rid,
+            "game_id": game_id,
+            "drive_id": _safe_str(rec.get("driveId")) or "",
+            "play_id": play_id,
+            "drive_number": _safe_int(rec.get("driveNumber")),
+            "play_number": _safe_int(rec.get("playNumber")),
+            "offense": _safe_str(rec.get("offense")) or "",
+            "offense_conference": _safe_str(rec.get("offenseConference")) or "",
+            "offense_score": _safe_int(rec.get("offenseScore")),
+            "defense": _safe_str(rec.get("defense")) or "",
+            "defense_conference": _safe_str(rec.get("defenseConference")) or "",
+            "defense_score": _safe_int(rec.get("defenseScore")),
+            "home_team": _safe_str(rec.get("home")) or "",
+            "away_team": _safe_str(rec.get("away")) or "",
+            "period": _safe_int(rec.get("period")),
+            "clock_minutes": _safe_int(clock.get("minutes")),
+            "clock_seconds": _safe_int(clock.get("seconds")),
+            "offense_timeouts": _safe_int(rec.get("offenseTimeouts")),
+            "defense_timeouts": _safe_int(rec.get("defenseTimeouts")),
+            "yardline": _safe_int(rec.get("yardline")),
+            "yards_to_goal": _safe_int(rec.get("yardsToGoal")),
+            "down": _safe_int(rec.get("down")),
+            "distance": _safe_int(rec.get("distance")),
+            "yards_gained": _safe_int(rec.get("yardsGained")),
+            "scoring": bool(rec.get("scoring") or False),
+            "play_type": _safe_str(rec.get("playType")) or "",
+            "play_text": _safe_str(rec.get("playText")) or "",
+            "ppa": _safe_float(rec.get("ppa")),
+            "wallclock": _safe_str(rec.get("wallclock")) or "",
+            "season": season,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_roster(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Season roster records."""
+    data = _load_cfbdata_endpoint_json(base, "roster.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        player_id = _safe_str(rec.get("id")) or ""
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|roster|{season}|{team.lower().replace(' ', '_')}|{player_id}"
+        recruit_ids = rec.get("recruitIds")
+        out.append({
+            "record_id": rid,
+            "player_id": player_id,
+            "first_name": _safe_str(rec.get("firstName")) or "",
+            "last_name": _safe_str(rec.get("lastName")) or "",
+            "team_name": team,
+            "weight": _safe_int(rec.get("weight")),
+            "height": _safe_int(rec.get("height")),
+            "jersey": _safe_str(rec.get("jersey")) or "",
+            "year": _safe_int(rec.get("year")),
+            "position": _safe_str(rec.get("position")) or "",
+            "home_city": _safe_str(rec.get("homeCity")) or "",
+            "home_state": _safe_str(rec.get("homeState")) or "",
+            "home_country": _safe_str(rec.get("homeCountry")) or "",
+            "home_latitude": _safe_float(rec.get("homeLatitude")),
+            "home_longitude": _safe_float(rec.get("homeLongitude")),
+            "home_county_fips": _safe_str(rec.get("homeCountyFIPS")) or "",
+            "recruit_ids": "|".join(str(x) for x in recruit_ids) if isinstance(recruit_ids, list) else _safe_str(recruit_ids) or "",
+            "season": season,
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_stats_advanced(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Season-level advanced team stats."""
+    data = _load_cfbdata_endpoint_json(base, "stats_advanced.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+
+    def _flatten(prefix: str, value: Any, row: dict[str, Any]) -> None:
+        if isinstance(value, dict):
+            for k, v in value.items():
+                key = f"{prefix}_{k}" if prefix else str(k)
+                _flatten(key, v, row)
+            return
+        if isinstance(value, (int, float)):
+            row[prefix] = _safe_float(value)
+            return
+        text = _safe_str(value)
+        row[prefix] = text if text else None
+
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        season_val = _safe_str(rec.get("season")) or season
+        team = _safe_str(rec.get("team")) or ""
+        rid = f"cfbdata|stats_advanced|{season_val}|{team.lower().replace(' ', '_')}"
+        row: dict[str, Any] = {
+            "record_id": rid,
+            "season": season_val,
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "sport": sport,
+            "source": "cfbdata",
+        }
+        for side in ("offense", "defense"):
+            sub = rec.get(side)
+            if isinstance(sub, dict):
+                _flatten(side, sub, row)
+        out.append(row)
+    return out
+
+
+def _cfbdata_stats_player_season(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Season player stat rows by category/statType."""
+    data = _load_cfbdata_json_compat(base, season, "stats_player_season", "stats_player_season.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        season_val = _safe_str(rec.get("season")) or season
+        player_id = _safe_str(rec.get("playerId")) or ""
+        category = _safe_str(rec.get("category")) or ""
+        stat_type = _safe_str(rec.get("statType")) or ""
+        rid = (
+            f"cfbdata|stats_player_season|{season_val}|{player_id}|"
+            f"{category.lower().replace(' ', '_')}|{stat_type.lower().replace(' ', '_')}"
+        )
+        stat_val = rec.get("stat")
+        out.append({
+            "record_id": rid,
+            "season": season_val,
+            "player_id": player_id,
+            "player_name": _safe_str(rec.get("player")) or "",
+            "position": _safe_str(rec.get("position")) or "",
+            "team_name": _safe_str(rec.get("team")) or "",
+            "conference": _safe_str(rec.get("conference")) or "",
+            "category": category,
+            "stat_type": stat_type,
+            "stat": _safe_float(stat_val) if isinstance(stat_val, (int, float)) else _safe_str(stat_val) or "",
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_stats_season(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Season team stat rollups."""
+    data = _load_cfbdata_endpoint_json(base, "stats_season.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        season_val = _safe_str(rec.get("season")) or season
+        team = _safe_str(rec.get("team")) or ""
+        stat_name = _safe_str(rec.get("statName")) or ""
+        rid = f"cfbdata|stats_season|{season_val}|{team.lower().replace(' ', '_')}|{stat_name.lower().replace(' ', '_')}"
+        stat_val = rec.get("statValue")
+        out.append({
+            "record_id": rid,
+            "season": season_val,
+            "team_name": team,
+            "conference": _safe_str(rec.get("conference")) or "",
+            "stat_name": stat_name,
+            "stat_value": _safe_float(stat_val) if isinstance(stat_val, (int, float)) else _safe_str(stat_val) or "",
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_info(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Provider/account info metadata snapshot."""
+    data = _load_cfbdata_endpoint_json(base, "info.json")
+    if not isinstance(data, dict):
+        return []
+
+    return [{
+        "record_id": f"cfbdata|info|{season}",
+        "season": season,
+        "patron_level": _safe_str(data.get("patronLevel")) or "",
+        "remaining_calls": _safe_int(data.get("remainingCalls")),
+        "sport": sport,
+        "source": "cfbdata",
+    }]
+
+
+def _cfbdata_calendar(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Season calendar windows (week/start/end bounds)."""
+    data = _load_cfbdata_endpoint_json(base, "calendar.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        season_val = _safe_str(rec.get("season")) or season
+        week = _safe_int(rec.get("week"))
+        season_type = _safe_str(rec.get("seasonType")) or ""
+        rid = f"cfbdata|calendar|{season_val}|{season_type}|{week if week is not None else ''}"
+        out.append({
+            "record_id": rid,
+            "season": season_val,
+            "week": week,
+            "season_type": season_type,
+            "start_date": _safe_str(rec.get("startDate")) or "",
+            "end_date": _safe_str(rec.get("endDate")) or "",
+            "first_game_start": _safe_str(rec.get("firstGameStart")) or "",
+            "last_game_start": _safe_str(rec.get("lastGameStart")) or "",
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_game_box_advanced(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Advanced game box metrics (team + player scopes) from per-game files."""
+    root = base / "game_box_advanced"
+    if not root.is_dir():
+        return []
+
+    out: list[dict[str, Any]] = []
+    for f in sorted(root.glob("*.json")):
+        payload = _load_json(f)
+        if not isinstance(payload, dict):
+            continue
+        game_id = _safe_str(f.stem) or _safe_str(payload.get("id")) or ""
+        if not game_id:
+            continue
+
+        game_info = payload.get("gameInfo") if isinstance(payload.get("gameInfo"), dict) else {}
+
+        # Team scoped metrics (families under payload['teams']).
+        teams_block = payload.get("teams") if isinstance(payload.get("teams"), dict) else {}
+        for family_name, rows in teams_block.items():
+            if not isinstance(rows, list):
+                continue
+            for rec in rows:
+                if not isinstance(rec, dict):
+                    continue
+                team = _safe_str(rec.get("team")) or ""
+                rid = (
+                    f"cfbdata|game_box_advanced|team|{season}|{game_id}|"
+                    f"{family_name.lower().replace(' ', '_')}|{team.lower().replace(' ', '_')}"
+                )
+                row: dict[str, Any] = {
+                    "record_id": rid,
+                    "game_id": game_id,
+                    "entity_scope": "team",
+                    "metric_family": _safe_str(family_name) or "",
+                    "team_name": team,
+                    "season": season,
+                    "sport": sport,
+                    "source": "cfbdata",
+                    "home_team": _safe_str(game_info.get("homeTeam")) or "",
+                    "away_team": _safe_str(game_info.get("awayTeam")) or "",
+                    "home_points": _safe_int(game_info.get("homePoints")),
+                    "away_points": _safe_int(game_info.get("awayPoints")),
+                    "home_win_prob": _safe_float(game_info.get("homeWinProb")),
+                    "away_win_prob": _safe_float(game_info.get("awayWinProb")),
+                    "home_winner": bool(game_info.get("homeWinner") or False),
+                    "excitement": _safe_float(game_info.get("excitement")),
+                }
+                for k, v in rec.items():
+                    if isinstance(v, dict):
+                        for sk, sv in v.items():
+                            key = f"{k}_{sk}"
+                            row[key] = _safe_float(sv) if isinstance(sv, (int, float)) else (_safe_str(sv) or None)
+                    else:
+                        row[k] = _safe_float(v) if isinstance(v, (int, float)) else (_safe_str(v) or None)
+                out.append(row)
+
+        # Player scoped metrics (families under payload['players']).
+        players_block = payload.get("players") if isinstance(payload.get("players"), dict) else {}
+        for family_name, rows in players_block.items():
+            if not isinstance(rows, list):
+                continue
+            for rec in rows:
+                if not isinstance(rec, dict):
+                    continue
+                player = _safe_str(rec.get("player")) or ""
+                team = _safe_str(rec.get("team")) or ""
+                rid = (
+                    f"cfbdata|game_box_advanced|player|{season}|{game_id}|"
+                    f"{family_name.lower().replace(' ', '_')}|{player.lower().replace(' ', '_')}"
+                )
+                row = {
+                    "record_id": rid,
+                    "game_id": game_id,
+                    "entity_scope": "player",
+                    "metric_family": _safe_str(family_name) or "",
+                    "team_name": team,
+                    "player_name": player,
+                    "season": season,
+                    "sport": sport,
+                    "source": "cfbdata",
+                }
+                for k, v in rec.items():
+                    row[k] = _safe_float(v) if isinstance(v, (int, float)) else (_safe_str(v) or None)
+                out.append(row)
+
+    return out
+
+
+def _cfbdata_scoreboard(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Scoreboard snapshot rows; useful when present, empty-safe otherwise."""
+    data = _load_cfbdata_endpoint_json(base, "scoreboard.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        game_id = _safe_str(rec.get("id") or rec.get("gameId")) or ""
+        if not game_id:
+            continue
+        rid = f"cfbdata|scoreboard|{season}|{game_id}"
+        out.append({
+            "record_id": rid,
+            "game_id": game_id,
+            "season": _safe_str(rec.get("season")) or season,
+            "week": _safe_int(rec.get("week")),
+            "season_type": _safe_str(rec.get("seasonType")) or "",
+            "status": _safe_str(rec.get("status")) or "",
+            "start_date": _safe_str(rec.get("startDate") or rec.get("startTime")) or "",
+            "home_team": _safe_str(rec.get("homeTeam")) or "",
+            "away_team": _safe_str(rec.get("awayTeam")) or "",
+            "home_points": _safe_int(rec.get("homePoints") or rec.get("homeScore")),
+            "away_points": _safe_int(rec.get("awayPoints") or rec.get("awayScore")),
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_metrics_wp(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Win probability lookup metrics (guarded for no-data seasons)."""
+    data = _load_cfbdata_endpoint_json(base, "metrics_wp.json")
+    if not isinstance(data, list):
+        return []
+
+    out: list[dict[str, Any]] = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        yard_line = _safe_int(rec.get("yardLine"))
+        time_remaining = _safe_int(rec.get("timeRemaining"))
+        down = _safe_int(rec.get("down"))
+        distance = _safe_int(rec.get("distance"))
+        rid = f"cfbdata|metrics_wp|{season}|{yard_line}|{time_remaining}|{down}|{distance}"
+        out.append({
+            "record_id": rid,
+            "season": season,
+            "yard_line": yard_line,
+            "time_remaining": time_remaining,
+            "down": down,
+            "distance": distance,
+            "win_probability": _safe_float(rec.get("winProbability") or rec.get("wp")),
+            "sport": sport,
+            "source": "cfbdata",
+        })
+    return out
+
+
+def _cfbdata_ppa_players_games(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Per-player game-level PPA summaries (week files)."""
+    endpoint_dir = base / "ppa_players_games"
+    if not endpoint_dir.is_dir():
+        return []
+
+    out: list[dict[str, Any]] = []
+    # Layout: {endpoint}/{seasonType}/week_xx/players.json
+    for season_type_dir in sorted(endpoint_dir.glob("*")):
+        if not season_type_dir.is_dir():
+            continue
+        season_type = season_type_dir.name
+        for stat_file in sorted(season_type_dir.glob("week_*/players.json")):
+            data = _load_json(stat_file)
+            if not isinstance(data, list):
+                continue
+            week_token = stat_file.parent.name.replace("week_", "")
+            week = _safe_int(week_token)
+            for rec in data:
+                if not isinstance(rec, dict):
+                    continue
+                player_id = _safe_str(rec.get("id")) or _safe_str(rec.get("playerId")) or ""
+                team = _safe_str(rec.get("team")) or ""
+                opponent = _safe_str(rec.get("opponent")) or ""
+                rid = (
+                    f"cfbdata|ppa_players_games|{season}|{season_type}|{week if week is not None else ''}|"
+                    f"{player_id or rec.get('name', '')}|{team.lower().replace(' ', '_')}|{opponent.lower().replace(' ', '_')}"
+                )
+                row: dict[str, Any] = {
+                    "record_id": rid,
+                    "season": _safe_str(rec.get("season")) or season,
+                    "week": _safe_int(rec.get("week")) if rec.get("week") is not None else week,
+                    "season_type": _safe_str(rec.get("seasonType")) or season_type,
+                    "player_id": player_id,
+                    "player_name": _safe_str(rec.get("name")) or "",
+                    "position": _safe_str(rec.get("position")) or "",
+                    "team_name": team,
+                    "opponent": opponent,
+                    "sport": sport,
+                    "source": "cfbdata",
+                }
+                avg = rec.get("averagePPA")
+                if isinstance(avg, dict):
+                    for k, v in avg.items():
+                        row[f"average_ppa_{k}"] = _safe_float(v) if isinstance(v, (int, float)) else (_safe_str(v) or None)
+                else:
+                    row["average_ppa"] = _safe_float(avg) if isinstance(avg, (int, float)) else (_safe_str(avg) or None)
+                out.append(row)
+    return out
+
+
+def _cfbdata_ppa_predicted(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Predicted points lookup grids for down/distance/yardline contexts."""
+    endpoint_dir = base / "ppa_predicted"
+    if not endpoint_dir.is_dir():
+        return []
+
+    out: list[dict[str, Any]] = []
+
+    # 1) Flat file layout: ppa_predicted.json
+    flat = _load_json(endpoint_dir / "ppa_predicted.json")
+    if isinstance(flat, list):
+        for rec in flat:
+            if not isinstance(rec, dict):
+                continue
+            yard_line = _safe_int(rec.get("yardLine"))
+            down = _safe_int(rec.get("down"))
+            distance = _safe_int(rec.get("distance"))
+            rid = f"cfbdata|ppa_predicted|{season}|flat|{down}|{distance}|{yard_line}"
+            out.append({
+                "record_id": rid,
+                "season": season,
+                "down": down,
+                "distance": distance,
+                "yard_line": yard_line,
+                "predicted_points": _safe_float(rec.get("predictedPoints")),
+                "layout": "flat",
+                "sport": sport,
+                "source": "cfbdata",
+            })
+
+    # 2) Nested layout: down_X/distance_Y.json
+    for down_dir in sorted(endpoint_dir.glob("down_*")):
+        if not down_dir.is_dir():
+            continue
+        down_token = down_dir.name.replace("down_", "")
+        down = _safe_int(down_token)
+        for distance_file in sorted(down_dir.glob("distance_*.json")):
+            distance_token = distance_file.stem.replace("distance_", "")
+            distance = _safe_int(distance_token)
+            data = _load_json(distance_file)
+            if not isinstance(data, list):
+                continue
+            for rec in data:
+                if not isinstance(rec, dict):
+                    continue
+                yard_line = _safe_int(rec.get("yardLine"))
+                rid = f"cfbdata|ppa_predicted|{season}|nested|{down}|{distance}|{yard_line}"
+                out.append({
+                    "record_id": rid,
+                    "season": season,
+                    "down": down,
+                    "distance": distance,
+                    "yard_line": yard_line,
+                    "predicted_points": _safe_float(rec.get("predictedPoints")),
+                    "layout": "nested",
+                    "sport": sport,
+                    "source": "cfbdata",
+                })
+
+    return out
+
+
+def _nhl_draft(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    draft_dir = base / "draft"
+    if not draft_dir.is_dir():
+        return []
+
+    candidate_files = [
+        draft_dir / "picks_all_rounds.json",
+        draft_dir / "picks_now.json",
+        draft_dir / "tracker_picks_now.json",
+    ]
+    candidate_files.extend(sorted((draft_dir / "picks_by_round").glob("*.json")))
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for f in candidate_files:
+        if not f.exists():
+            continue
+        payload = _load_json(f)
+        if not isinstance(payload, dict):
+            continue
+        picks = payload.get("picks")
+        if not isinstance(picks, list):
+            continue
+        draft_year = _safe_str(payload.get("draftYear")) or season
+        for p in picks:
+            if not isinstance(p, dict):
+                continue
+            overall = _safe_int(p.get("overallPick"))
+            player_name = ((
+                f"{_safe_str(p.get('firstName')) or ''} {_safe_str(p.get('lastName')) or ''}"
+            ).strip() or _safe_str(p.get("lastName")) or "")
+            if overall is None and not player_name:
+                continue
+            draft_id = f"nhl|{draft_year}|{overall if overall is not None else ''}|{player_name.lower().replace(' ', '_')}"
+            if draft_id in seen:
+                continue
+            seen.add(draft_id)
+            out.append({
+                "draft_id": draft_id,
+                "draft_year": draft_year,
+                "round": _safe_int(p.get("round")),
+                "pick": _safe_int(p.get("pickInRound")),
+                "overall_pick": overall,
+                "player_id": _safe_str(p.get("playerId")) or "",
+                "player_name": player_name,
+                "position": _safe_str(p.get("positionCode")) or "",
+                "team_id": _safe_str(p.get("teamId")) or "",
+                "team_name": _safe_str(p.get("teamName") or p.get("teamFullName") or p.get("teamCommonName")) or "",
+                "league": _safe_str(p.get("amateurLeague")) or "",
+                "club": _safe_str(p.get("amateurClubName")) or "",
+                "country": _safe_str(p.get("countryCode")) or "",
+                "season": draft_year,
+                "sport": sport,
+                "source": "nhl",
+            })
+    return out
 
 
 # ── Football-data.org ─────────────────────────────────────
@@ -7909,6 +10196,201 @@ def _espn_player_stats(base: Path, sport: str, season: str) -> list[dict[str, An
     elif sport in ("f1",):
         return _espn_f1_player_stats(base, sport, season)
     return []
+
+
+def _espn_play_by_play(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Extract play-by-play rows from ESPN event summaries (drives/plays + scoring plays)."""
+    records: list[dict[str, Any]] = []
+    for p in _espn_game_files(base):
+        payload = _load_json(p)
+        if not isinstance(payload, dict):
+            continue
+
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else payload
+        if not isinstance(summary, dict):
+            continue
+
+        game_id = _safe_str(payload.get("eventId") or summary.get("eventId") or p.parent.name or p.stem)
+        if not game_id:
+            continue
+
+        drives_block = summary.get("drives")
+        drives: list[dict[str, Any]] = []
+        if isinstance(drives_block, dict):
+            previous = drives_block.get("previous")
+            if isinstance(previous, list):
+                drives = [d for d in previous if isinstance(d, dict)]
+
+        for drv in drives:
+            drive_id = _safe_str(drv.get("id")) or ""
+            team = drv.get("team") if isinstance(drv.get("team"), dict) else {}
+            offense_team_id = _safe_str(team.get("id")) or ""
+            offense_team_name = _safe_str(team.get("displayName") or team.get("name")) or ""
+
+            plays = drv.get("plays")
+            if not isinstance(plays, list):
+                continue
+
+            for play in plays:
+                if not isinstance(play, dict):
+                    continue
+                clock = play.get("clock") if isinstance(play.get("clock"), dict) else {}
+                ptype = play.get("type") if isinstance(play.get("type"), dict) else {}
+                start = play.get("start") if isinstance(play.get("start"), dict) else {}
+                records.append({
+                    "sport": sport,
+                    "source": "espn",
+                    "season": season,
+                    "game_id": game_id,
+                    "drive_id": drive_id,
+                    "play_id": _safe_str(play.get("id")) or "",
+                    "sequence_number": _safe_int(play.get("sequenceNumber")),
+                    "event_type": _safe_str(ptype.get("text") or ptype.get("name") or play.get("type")) or "play",
+                    "description": _safe_str(play.get("text")) or _safe_str(drv.get("description")) or "",
+                    "period": _safe_int(play.get("period")),
+                    "clock": _safe_str(clock.get("displayValue") or clock.get("value")) or "",
+                    "down": _safe_int(start.get("down")),
+                    "distance": _safe_int(start.get("distance")),
+                    "yards_gained": _safe_int(play.get("statYardage")),
+                    "scoring_play": bool(play.get("scoringPlay") or False),
+                    "offense_team_id": offense_team_id,
+                    "offense_team_name": offense_team_name,
+                    "home_score": _safe_int(play.get("homeScore")),
+                    "away_score": _safe_int(play.get("awayScore")),
+                })
+
+        scoring_plays = summary.get("scoringPlays")
+        if isinstance(scoring_plays, list):
+            for sp in scoring_plays:
+                if not isinstance(sp, dict):
+                    continue
+                clock = sp.get("clock") if isinstance(sp.get("clock"), dict) else {}
+                team = sp.get("team") if isinstance(sp.get("team"), dict) else {}
+                stype = sp.get("scoringType") if isinstance(sp.get("scoringType"), dict) else {}
+                records.append({
+                    "sport": sport,
+                    "source": "espn",
+                    "season": season,
+                    "game_id": game_id,
+                    "drive_id": "",
+                    "play_id": _safe_str(sp.get("id")) or "",
+                    "sequence_number": None,
+                    "event_type": _safe_str(stype.get("name") or sp.get("type")) or "scoring_play",
+                    "description": _safe_str(sp.get("text")) or "",
+                    "period": _safe_int(sp.get("period")),
+                    "clock": _safe_str(clock.get("displayValue") or clock.get("value")) or "",
+                    "down": None,
+                    "distance": None,
+                    "yards_gained": None,
+                    "scoring_play": True,
+                    "offense_team_id": _safe_str(team.get("id")) or "",
+                    "offense_team_name": _safe_str(team.get("displayName") or team.get("name")) or "",
+                    "home_score": _safe_int(sp.get("homeScore")),
+                    "away_score": _safe_int(sp.get("awayScore")),
+                })
+
+    return records
+
+
+def _espn_drives(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for p in _espn_game_files(base):
+        payload = _load_json(p)
+        if not isinstance(payload, dict):
+            continue
+
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else payload
+        if not isinstance(summary, dict):
+            continue
+
+        game_id = _safe_str(payload.get("eventId") or summary.get("eventId") or p.parent.name or p.stem)
+        if not game_id:
+            continue
+
+        drives_block = summary.get("drives") if isinstance(summary.get("drives"), dict) else {}
+        drives = drives_block.get("previous") if isinstance(drives_block.get("previous"), list) else []
+        for d in drives:
+            if not isinstance(d, dict):
+                continue
+            drive_id = _safe_str(d.get("id"))
+            if not drive_id:
+                continue
+            team = d.get("team") if isinstance(d.get("team"), dict) else {}
+            records.append({
+                "sport": sport,
+                "season": season,
+                "source": "espn",
+                "game_id": game_id,
+                "drive_id": drive_id,
+                "offense_team_id": _safe_str(team.get("id")) or "",
+                "offense_team_name": _safe_str(team.get("displayName") or team.get("name")) or "",
+                "description": _safe_str(d.get("description")) or "",
+                "plays": _safe_int(d.get("plays")),
+                "yards": _safe_int(d.get("yards")),
+                "drive_result": _safe_str(d.get("result")) or "",
+                "scoring": bool(d.get("isScore") or False),
+            })
+    return records
+
+
+def _espn_coaches(base: Path, sport: str, season: str) -> list[dict[str, Any]]:
+    """Best-effort extraction of coaches from ESPN team payloads.
+
+    ESPN coverage is inconsistent by sport; this parser opportunistically
+    captures fields when present and otherwise returns an empty list.
+    """
+    teams_dir = base / "teams"
+    if not teams_dir.is_dir():
+        return []
+
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _emit(team_id: str, team_name: str, coach_name: str) -> None:
+        coach_name = (coach_name or "").strip()
+        if not coach_name:
+            return
+        cid = f"espn|{sport}|{season}|{team_id}|{coach_name.lower().replace(' ', '_')}"
+        if cid in seen:
+            return
+        seen.add(cid)
+        records.append({
+            "coach_id": cid,
+            "coach_name": coach_name,
+            "team_id": team_id,
+            "team_name": team_name,
+            "season": season,
+            "sport": sport,
+            "source": "espn",
+        })
+
+    for f in teams_dir.glob("*.json"):
+        payload = _load_json(f)
+        if not isinstance(payload, dict):
+            continue
+        team_id = _safe_str(payload.get("id") or payload.get("team_id")) or f.stem
+        team_name = _safe_str(payload.get("name") or payload.get("displayName")) or ""
+
+        direct_fields = [
+            payload.get("coach"),
+            payload.get("headCoach"),
+            payload.get("head_coach"),
+        ]
+        for item in direct_fields:
+            if isinstance(item, str):
+                _emit(team_id, team_name, item)
+            elif isinstance(item, dict):
+                _emit(team_id, team_name, _safe_str(item.get("name") or item.get("displayName")) or "")
+
+        coaches = payload.get("coaches")
+        if isinstance(coaches, list):
+            for c in coaches:
+                if isinstance(c, str):
+                    _emit(team_id, team_name, c)
+                elif isinstance(c, dict):
+                    _emit(team_id, team_name, _safe_str(c.get("name") or c.get("displayName")) or "")
+
+    return records
 
 
 # ── ESPN Golf extractors ─────────────────────────────────
@@ -9344,6 +11826,9 @@ PROVIDER_LOADERS: dict[tuple[str, str], LoaderFn] = {
     ("espn", "team_stats"):   _espn_team_stats,
     ("espn", "transactions"): _espn_transactions,
     ("espn", "player_stats"): _espn_player_stats,
+    ("espn", "play_by_play"): _espn_play_by_play,
+    ("espn", "drives"):       _espn_drives,
+    ("espn", "coaches"):      _espn_coaches,
     ("odds", "odds"):          _odds_collector,
     ("odds", "player_props"):  _odds_collector_player_props,
     # OddsAPI
@@ -9352,13 +11837,16 @@ PROVIDER_LOADERS: dict[tuple[str, str], LoaderFn] = {
     ("sgo", "odds"):           _sgo_odds,
     # NBA Stats
     ("nbastats", "games"):        _nbastats_games,
+    ("nbastats", "play_by_play"): _nbastats_play_by_play,
     ("nbastats", "players"):      _nbastats_players,
+    ("nbastats", "team_stats"):   _nbastats_team_stats,
     ("nbastats", "player_stats"): _nbastats_player_stats,
     # NHL API
     ("nhl", "games"):        _nhl_games,
     ("nhl", "standings"):    _nhl_standings,
     ("nhl", "players"):      _nhl_players,
     ("nhl", "player_stats"): _nhl_player_stats,
+    ("nhl", "draft"):        _nhl_draft,
     # StatsBomb
     ("statsbomb", "games"):        _statsbomb_games,
     ("statsbomb", "players"):      _statsbomb_players,
@@ -9403,6 +11891,8 @@ PROVIDER_LOADERS: dict[tuple[str, str], LoaderFn] = {
     ("opendota", "standings"):    _opendota_standings,
     ("opendota", "games"):        _opendota_games,
     ("opendota", "player_stats"): _opendota_player_stats,
+    ("opendota", "draft"):        _opendota_draft,
+    ("opendota", "draft_picks"):  _opendota_draft,
     # CFBData
     ("cfbdata", "games"):      _cfbdata_games,
     ("cfbdata", "teams"):      _cfbdata_teams,
@@ -9411,6 +11901,59 @@ PROVIDER_LOADERS: dict[tuple[str, str], LoaderFn] = {
     ("cfbdata", "player_stats"): _cfbdata_player_stats,
     ("cfbdata", "team_stats"): _cfbdata_team_stats,
     ("cfbdata", "odds"):       _cfbdata_odds,
+    ("cfbdata", "odds_history"): _cfbdata_odds,
+    ("cfbdata", "play_by_play"): _cfbdata_play_by_play,
+    ("cfbdata", "drives"):     _cfbdata_drives,
+    ("cfbdata", "coaches"):    _cfbdata_coaches,
+    ("cfbdata", "draft"):      _cfbdata_draft,
+    ("cfbdata", "draft_picks"): _cfbdata_draft,
+    ("cfbdata", "draft_positions"): _cfbdata_draft_positions,
+    ("cfbdata", "draft_teams"): _cfbdata_draft_teams,
+    ("cfbdata", "player_portal"): _cfbdata_player_portal,
+    ("cfbdata", "player_returning"): _cfbdata_player_returning,
+    ("cfbdata", "player_usage"): _cfbdata_player_usage,
+    ("cfbdata", "rankings"):  _cfbdata_rankings,
+    ("cfbdata", "records"):   _cfbdata_records,
+    ("cfbdata", "recruiting"): _cfbdata_recruiting,
+    ("cfbdata", "recruiting_teams"): _cfbdata_recruiting_teams,
+    ("cfbdata", "recruiting_groups"): _cfbdata_recruiting_groups,
+    ("cfbdata", "talent"):    _cfbdata_talent,
+    ("cfbdata", "ratings_sp"): _cfbdata_ratings_sp,
+    ("cfbdata", "ratings_sp_conferences"): _cfbdata_ratings_sp_conferences,
+    ("cfbdata", "ratings_srs"): _cfbdata_ratings_srs,
+    ("cfbdata", "ratings_elo"): _cfbdata_ratings_elo,
+    ("cfbdata", "ratings_fpi"): _cfbdata_ratings_fpi,
+    ("cfbdata", "ppa_teams"): _cfbdata_ppa_teams,
+    ("cfbdata", "ppa_games"): _cfbdata_ppa_games,
+    ("cfbdata", "ppa_players_season"): _cfbdata_ppa_players_season,
+    ("cfbdata", "plays_stats"): _cfbdata_plays_stats,
+    ("cfbdata", "plays_types"): _cfbdata_plays_types,
+    ("cfbdata", "plays_stats_types"): _cfbdata_plays_stats_types,
+    ("cfbdata", "stats_game_advanced"): _cfbdata_stats_game_advanced,
+    ("cfbdata", "stats_game_havoc"): _cfbdata_stats_game_havoc,
+    ("cfbdata", "games_teams"): _cfbdata_games_teams,
+    ("cfbdata", "games_media"): _cfbdata_games_media,
+    ("cfbdata", "conferences"): _cfbdata_conferences,
+    ("cfbdata", "metrics_fg_ep"): _cfbdata_metrics_fg_ep,
+    ("cfbdata", "venues"):    _cfbdata_venues,
+    ("cfbdata", "stats_categories"): _cfbdata_stats_categories,
+    ("cfbdata", "wp_pregame"): _cfbdata_wp_pregame,
+    ("cfbdata", "teams_ats"): _cfbdata_teams_ats,
+    ("cfbdata", "teams_fbs"): _cfbdata_teams_fbs,
+    ("cfbdata", "games_players"): _cfbdata_games_players,
+    ("cfbdata", "lines"): _cfbdata_lines,
+    ("cfbdata", "plays"): _cfbdata_plays,
+    ("cfbdata", "roster"): _cfbdata_roster,
+    ("cfbdata", "stats_advanced"): _cfbdata_stats_advanced,
+    ("cfbdata", "stats_player_season"): _cfbdata_stats_player_season,
+    ("cfbdata", "stats_season"): _cfbdata_stats_season,
+    ("cfbdata", "info"): _cfbdata_info,
+    ("cfbdata", "calendar"): _cfbdata_calendar,
+    ("cfbdata", "game_box_advanced"): _cfbdata_game_box_advanced,
+    ("cfbdata", "scoreboard"): _cfbdata_scoreboard,
+    ("cfbdata", "metrics_wp"): _cfbdata_metrics_wp,
+    ("cfbdata", "ppa_players_games"): _cfbdata_ppa_players_games,
+    ("cfbdata", "ppa_predicted"): _cfbdata_ppa_predicted,
     # Football-data.org
     ("footballdata", "games"):     _footballdata_games,
     ("footballdata", "standings"): _footballdata_standings,
@@ -9483,7 +12026,7 @@ class Normalizer:
                 ("understat", "seriea"),
                 ("understat", "ligue1"),
             }
-            if (provider, sport) in _start_year_providers:
+            if data_type != "draft" and (provider, sport) in _start_year_providers:
                 try:
                     shifted = str(int(season) - 1)
                     shifted_dir = self._resolve_provider_dir(sport, provider, shifted)
@@ -9527,10 +12070,38 @@ class Normalizer:
             logger.debug("No raw data for %s/%s/%s", sport, data_type, season)
             return 0
 
-        merged = _merge_records(raw_by_provider, id_field, providers)
+        merged = _merge_records(raw_by_provider, id_field, providers, sport=sport, data_type=data_type)
         primary_source = providers[0] if providers else "unknown"
         validated = _validate_batch(merged, schema_cls, sport, source=primary_source)
         return _write_parquet(validated, self._out_path(sport, data_type, season))
+
+    def _normalize_untyped(
+        self,
+        sport: str,
+        data_type: str,
+        season: str,
+        id_field: str,
+    ) -> int:
+        """Normalize and merge records without schema validation.
+
+        Used for exploratory/auxiliary categories where providers vary by sport.
+        """
+        providers = providers_for(sport, data_type)
+        raw_by_provider = self._gather_raw(sport, data_type, season)
+        if not raw_by_provider:
+            logger.debug("No raw data for %s/%s/%s", sport, data_type, season)
+            return 0
+
+        if providers:
+            merged = _merge_records(raw_by_provider, id_field, providers, sport=sport, data_type=data_type)
+        else:
+            merged = []
+            for rows in raw_by_provider.values():
+                merged.extend(rows)
+
+        if not merged:
+            return 0
+        return _write_parquet(merged, self._out_path(sport, data_type, season))
 
     # ── public per-data-type methods ──────────────────────
 
@@ -9597,6 +12168,52 @@ class Normalizer:
 
         # Compute derived stats on all merged records (faceoff_pct, shot_pct, etc.)
         for rec in deduped:
+            # Ensure season_type is always queryable downstream.
+            if not rec.get("season_type"):
+                rec["season_type"] = "regular"
+
+            # Preserve richer game-level media when providers use non-canonical names.
+            if not rec.get("broadcast"):
+                for media_name_key in (
+                    "broadcast_network",
+                    "tv_network",
+                    "channel",
+                    "network",
+                    "media_name",
+                ):
+                    media_name = rec.get(media_name_key)
+                    if media_name:
+                        rec["broadcast"] = media_name
+                        break
+
+            if not rec.get("broadcast_url"):
+                for media_url_key in (
+                    "watch_url",
+                    "stream_url",
+                    "video_url",
+                    "highlights_url",
+                    "recap_url",
+                    "replay_url",
+                ):
+                    media_url = rec.get(media_url_key)
+                    if media_url:
+                        rec["broadcast_url"] = media_url
+                        break
+
+            # Keep future/scheduled scores as null (not 0/0) for consistent semantics.
+            status = str(rec.get("status") or "").strip().lower()
+            if status in {"scheduled", "pre", "preview", "upcoming", "postponed", "canceled", "cancelled"}:
+                for score_col in (
+                    "home_score",
+                    "away_score",
+                    "score_home",
+                    "score_away",
+                    "home_runs",
+                    "away_runs",
+                ):
+                    if score_col in rec:
+                        rec[score_col] = None
+
             _consolidate_stat_aliases(rec, sport)
             _compute_derived_stats(rec, sport)
 
@@ -9737,7 +12354,25 @@ class Normalizer:
 
     def normalize_odds(self, sport: str, season: str) -> int:
         # Keep one row per game/bookmaker so downstream APIs can show all books.
-        return self._normalize_generic(sport, "odds", season, Odds, "game_id+bookmaker")
+        count = self._normalize_generic(sport, "odds", season, Odds, "game_id+bookmaker")
+        # Promote → normalized_curated and remove the intermediate flat file.
+        import shutil
+        from normalization.curated_parquet_builder import CuratedParquetBuilder
+        try:
+            CuratedParquetBuilder().build_sport(sport, [season], categories=["odds"])
+            odds_file = self._out_path(sport, "odds", season)
+            if odds_file.exists():
+                odds_file.unlink()
+                sport_dir = odds_file.parent
+                if sport_dir.exists() and not any(sport_dir.iterdir()):
+                    shutil.rmtree(sport_dir)
+        except Exception as _exc:
+            logger.warning(
+                "CuratedParquetBuilder failed for %s odds — intermediate file retained: %s",
+                sport,
+                _exc,
+            )
+        return count
 
     def normalize_player_props(self, sport: str, season: str) -> int:
         # Preserve per-player/per-market bookmaker rows for each game.
@@ -9797,6 +12432,207 @@ class Normalizer:
         if not merged:
             return 0
         return _write_parquet(merged, self._out_path(sport, "team_stats", season))
+
+    def normalize_coaches(self, sport: str, season: str) -> int:
+        count = self._normalize_untyped(sport, "coaches", season, "coach_id")
+        if count:
+            return count
+
+        # Fallback: synthesize one coach row per team so all sports expose
+        # a consistent coaches dataset even when providers omit coach entities.
+        team_rows = self._gather_raw(sport, "teams", season)
+        if not team_rows:
+            return 0
+
+        providers = providers_for(sport, "teams")
+        if providers:
+            merged_teams = _merge_records(team_rows, "id", providers)
+        else:
+            merged_teams = []
+            for rows in team_rows.values():
+                merged_teams.extend(rows)
+
+        synthetic: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for t in merged_teams:
+            team_id = _safe_str(t.get("id") or t.get("team_id")) or ""
+            team_name = _safe_str(t.get("name") or t.get("team_name") or t.get("abbreviation")) or team_id
+            if not team_id and not team_name:
+                continue
+
+            coach_name = _safe_str(t.get("coach") or t.get("head_coach") or t.get("headCoach")) or "Unknown"
+            key_id = team_id or team_name.lower().replace(" ", "_")
+            coach_id = f"synthetic|{sport}|{season}|{key_id}"
+            if coach_id in seen:
+                continue
+            seen.add(coach_id)
+            synthetic.append({
+                "coach_id": coach_id,
+                "coach_name": coach_name,
+                "team_id": team_id or team_name,
+                "team_name": team_name,
+                "season": season,
+                "sport": sport,
+                "source": "synthetic",
+            })
+
+        if not synthetic:
+            return 0
+        return _write_parquet(synthetic, self._out_path(sport, "coaches", season))
+
+    def normalize_draft(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "draft", season, "draft_id")
+
+    def normalize_draft_picks(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "draft_picks", season, "draft_id")
+
+    def normalize_draft_positions(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "draft_positions", season, "draft_position_id")
+
+    def normalize_draft_teams(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "draft_teams", season, "draft_team_id")
+
+    def normalize_drives(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "drives", season, "game_id+drive_id")
+
+    def normalize_odds_history(self, sport: str, season: str) -> int:
+        # Keep one row per game/bookmaker snapshot; this includes historical line snapshots.
+        return self._normalize_generic(sport, "odds_history", season, Odds, "game_id+bookmaker+timestamp")
+
+    def normalize_player_portal(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "player_portal", season, "record_id")
+
+    def normalize_player_returning(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "player_returning", season, "record_id")
+
+    def normalize_player_usage(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "player_usage", season, "record_id")
+
+    def normalize_rankings(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "rankings", season, "record_id")
+
+    def normalize_records(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "records", season, "record_id")
+
+    def normalize_recruiting(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "recruiting", season, "record_id")
+
+    def normalize_recruiting_teams(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "recruiting_teams", season, "record_id")
+
+    def normalize_recruiting_groups(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "recruiting_groups", season, "record_id")
+
+    def normalize_talent(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "talent", season, "record_id")
+
+    def normalize_ratings_sp(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "ratings_sp", season, "record_id")
+
+    def normalize_ratings_sp_conferences(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "ratings_sp_conferences", season, "record_id")
+
+    def normalize_ratings_srs(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "ratings_srs", season, "record_id")
+
+    def normalize_ratings_elo(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "ratings_elo", season, "record_id")
+
+    def normalize_ratings_fpi(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "ratings_fpi", season, "record_id")
+
+    def normalize_ppa_teams(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "ppa_teams", season, "record_id")
+
+    def normalize_ppa_games(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "ppa_games", season, "record_id")
+
+    def normalize_ppa_players_season(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "ppa_players_season", season, "record_id")
+
+    def normalize_plays_stats(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "plays_stats", season, "record_id")
+
+    def normalize_plays_types(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "plays_types", season, "record_id")
+
+    def normalize_plays_stats_types(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "plays_stats_types", season, "record_id")
+
+    def normalize_stats_game_advanced(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "stats_game_advanced", season, "record_id")
+
+    def normalize_stats_game_havoc(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "stats_game_havoc", season, "record_id")
+
+    def normalize_games_teams(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "games_teams", season, "record_id")
+
+    def normalize_games_media(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "games_media", season, "record_id")
+
+    def normalize_conferences(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "conferences", season, "record_id")
+
+    def normalize_metrics_fg_ep(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "metrics_fg_ep", season, "record_id")
+
+    def normalize_venues(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "venues", season, "record_id")
+
+    def normalize_stats_categories(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "stats_categories", season, "record_id")
+
+    def normalize_wp_pregame(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "wp_pregame", season, "record_id")
+
+    def normalize_teams_ats(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "teams_ats", season, "record_id")
+
+    def normalize_teams_fbs(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "teams_fbs", season, "record_id")
+
+    def normalize_games_players(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "games_players", season, "record_id")
+
+    def normalize_lines(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "lines", season, "record_id")
+
+    def normalize_plays(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "plays", season, "record_id")
+
+    def normalize_roster(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "roster", season, "record_id")
+
+    def normalize_stats_advanced(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "stats_advanced", season, "record_id")
+
+    def normalize_stats_player_season(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "stats_player_season", season, "record_id")
+
+    def normalize_stats_season(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "stats_season", season, "record_id")
+
+    def normalize_info(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "info", season, "record_id")
+
+    def normalize_calendar(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "calendar", season, "record_id")
+
+    def normalize_game_box_advanced(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "game_box_advanced", season, "record_id")
+
+    def normalize_scoreboard(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "scoreboard", season, "record_id")
+
+    def normalize_metrics_wp(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "metrics_wp", season, "record_id")
+
+    def normalize_ppa_players_games(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "ppa_players_games", season, "record_id")
+
+    def normalize_ppa_predicted(self, sport: str, season: str) -> int:
+        return self._normalize_untyped(sport, "ppa_predicted", season, "record_id")
 
     def normalize_transactions(self, sport: str, season: str) -> int:
         """Normalize transaction records from ESPN transaction files."""
@@ -10233,6 +13069,45 @@ class Normalizer:
         dest = self._out_path(sport, "match_events", season)
         return _write_parquet(records, dest)
 
+    def normalize_play_by_play(self, sport: str, season: str) -> int:
+        """Normalize provider play-by-play feeds into a unified per-play table."""
+        providers = providers_for(sport, "play_by_play")
+        raw_by_provider = self._gather_raw(sport, "play_by_play", season)
+        if not raw_by_provider:
+            return 0
+
+        merged: list[dict[str, Any]] = []
+        if providers:
+            for provider in providers:
+                merged.extend(raw_by_provider.get(provider, []))
+        else:
+            for rows in raw_by_provider.values():
+                merged.extend(rows)
+
+        if not merged:
+            return 0
+
+        deduped: dict[str, dict[str, Any]] = {}
+        for rec in merged:
+            game_id = _safe_str(rec.get("game_id") or rec.get("match_id")) or ""
+            play_id = _safe_str(rec.get("play_id") or rec.get("event_id") or rec.get("id"))
+            if not play_id:
+                play_id = "|".join(
+                    [
+                        _safe_str(rec.get("clock")) or "",
+                        _safe_str(rec.get("period")) or "",
+                        _safe_str(rec.get("sequence_number")) or "",
+                        (_safe_str(rec.get("description")) or "")[:80],
+                    ],
+                )
+            key = f"{game_id}|{play_id}|{_safe_str(rec.get('source')) or ''}"
+            deduped[key] = rec
+
+        if not deduped:
+            return 0
+
+        return _write_parquet(list(deduped.values()), self._out_path(sport, "play_by_play", season))
+
     def normalize_ratings(self, sport: str, season: str) -> int:
         """Ratings normalization is currently disabled."""
         return 0
@@ -10562,11 +13437,62 @@ class Normalizer:
         "standings":        "normalize_standings",
         "player_stats":     "normalize_player_stats",
         "odds":             "normalize_odds",
+        "odds_history":     "normalize_odds_history",
         "player_props":     "normalize_player_props",
         "injuries":         "normalize_injuries",
         "news":             "normalize_news",
         "weather":          "normalize_weather",
         "team_stats":       "normalize_team_stats",
+        "coaches":          "normalize_coaches",
+        "draft":            "normalize_draft",
+        "draft_picks":      "normalize_draft_picks",
+        "draft_positions":  "normalize_draft_positions",
+        "draft_teams":      "normalize_draft_teams",
+        "player_portal":    "normalize_player_portal",
+        "player_returning": "normalize_player_returning",
+        "player_usage":     "normalize_player_usage",
+        "rankings":         "normalize_rankings",
+        "records":          "normalize_records",
+        "recruiting":       "normalize_recruiting",
+        "recruiting_teams": "normalize_recruiting_teams",
+        "recruiting_groups": "normalize_recruiting_groups",
+        "talent":           "normalize_talent",
+        "ratings_sp":       "normalize_ratings_sp",
+        "ratings_sp_conferences": "normalize_ratings_sp_conferences",
+        "ratings_srs":      "normalize_ratings_srs",
+        "ratings_elo":      "normalize_ratings_elo",
+        "ratings_fpi":      "normalize_ratings_fpi",
+        "ppa_teams":        "normalize_ppa_teams",
+        "ppa_games":        "normalize_ppa_games",
+        "ppa_players_season": "normalize_ppa_players_season",
+        "plays_stats":      "normalize_plays_stats",
+        "plays_types":      "normalize_plays_types",
+        "plays_stats_types": "normalize_plays_stats_types",
+        "stats_game_advanced": "normalize_stats_game_advanced",
+        "stats_game_havoc": "normalize_stats_game_havoc",
+        "games_teams":      "normalize_games_teams",
+        "games_media":      "normalize_games_media",
+        "conferences":      "normalize_conferences",
+        "metrics_fg_ep":    "normalize_metrics_fg_ep",
+        "venues":           "normalize_venues",
+        "stats_categories": "normalize_stats_categories",
+        "wp_pregame":       "normalize_wp_pregame",
+        "teams_ats":        "normalize_teams_ats",
+        "teams_fbs":        "normalize_teams_fbs",
+        "games_players":    "normalize_games_players",
+        "lines":            "normalize_lines",
+        "plays":            "normalize_plays",
+        "roster":           "normalize_roster",
+        "stats_advanced":   "normalize_stats_advanced",
+        "stats_player_season": "normalize_stats_player_season",
+        "stats_season":     "normalize_stats_season",
+        "info":             "normalize_info",
+        "calendar":         "normalize_calendar",
+        "game_box_advanced": "normalize_game_box_advanced",
+        "scoreboard":       "normalize_scoreboard",
+        "metrics_wp":       "normalize_metrics_wp",
+        "ppa_players_games": "normalize_ppa_players_games",
+        "ppa_predicted":    "normalize_ppa_predicted",
         "transactions":     "normalize_transactions",
         "team_game_stats":  "normalize_team_game_stats",
         "batter_game_stats": "normalize_batter_game_stats",
@@ -10574,6 +13500,8 @@ class Normalizer:
         "advanced_batting": "normalize_advanced_batting",
         "advanced_stats":   "normalize_advanced_stats",
         "match_events":     "normalize_match_events",
+        "play_by_play":     "normalize_play_by_play",
+        "drives":           "normalize_drives",
         "ratings":          "normalize_ratings",
         "market_signals":   "normalize_market_signals",
         "schedule_fatigue": "normalize_schedule_fatigue",
@@ -10609,51 +13537,108 @@ class Normalizer:
         # Parallelize data type normalization — each writes to a separate
         # parquet file so there are no shared-state conflicts.
         from concurrent.futures import ThreadPoolExecutor, as_completed
+        import shutil
+        from normalization.curated_parquet_builder import CuratedParquetBuilder
 
         def _norm_dtype(dtype: str, method_name: str) -> tuple[str, int]:
             method = getattr(self, method_name)
             count = 0
             for season in seasons:
-                count += method(sport, season)
+                written = method(sport, season)
+                count += written
             return dtype, count
 
         totals: dict[str, int] = {}
-        workers = min(len(methods), 4)
-        if workers > 1:
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futs = {
-                    pool.submit(_norm_dtype, dt, mn): dt
-                    for dt, mn in methods.items()
-                }
-                for fut in as_completed(futs):
-                    dtype, count = fut.result()
+        try:
+            workers = min(len(methods), 4)
+            if workers > 1:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    futs = {
+                        pool.submit(_norm_dtype, dt, mn): dt
+                        for dt, mn in methods.items()
+                    }
+                    for fut in as_completed(futs):
+                        dtype = futs[fut]
+                        try:
+                            _, count = fut.result()
+                        except Exception as exc:
+                            logger.exception("%s/%s normalization failed: %s", sport, dtype, exc)
+                            totals[dtype] = 0
+                            continue
+                        totals[dtype] = count
+                        if count:
+                            logger.info("%s/%s: %d total rows", sport, dtype, count)
+            else:
+                for dtype, method_name in methods.items():
+                    try:
+                        _, count = _norm_dtype(dtype, method_name)
+                    except Exception as exc:
+                        logger.exception("%s/%s normalization failed: %s", sport, dtype, exc)
+                        count = 0
                     totals[dtype] = count
                     if count:
                         logger.info("%s/%s: %d total rows", sport, dtype, count)
-        else:
-            for dtype, method_name in methods.items():
-                _, count = _norm_dtype(dtype, method_name)
-                totals[dtype] = count
-                if count:
-                    logger.info("%s/%s: %d total rows", sport, dtype, count)
 
-        # Auto-sync: fingerprint curated parquets and refresh DuckDB views.
-        try:
-            from normalization.auto_curated_sync import post_normalize_hook
-            post_normalize_hook(sport, list(seasons))
-        except Exception as _hook_exc:
-            logger.warning(
-                "auto_curated_sync hook failed for %s (non-fatal): %s",
-                sport,
-                _hook_exc,
-            )
+            # Promote flat normalized parquets → normalized_curated hive layout.
+            try:
+                CuratedParquetBuilder().build_sport(sport, list(seasons))
+            except Exception as _exc:
+                logger.warning(
+                    "CuratedParquetBuilder failed for %s: %s",
+                    sport,
+                    _exc,
+                )
 
-        return totals
+            # Auto-sync: fingerprint curated parquets and refresh DuckDB views.
+            try:
+                from normalization.auto_curated_sync import post_normalize_hook
+                post_normalize_hook(sport, list(seasons))
+            except Exception as _hook_exc:
+                logger.warning(
+                    "auto_curated_sync hook failed for %s (non-fatal): %s",
+                    sport,
+                    _hook_exc,
+                )
+
+            return totals
+        finally:
+            # Always remove legacy normalized intermediates for this sport.
+            sport_dir = self.out_dir / sport
+            if sport_dir.exists():
+                try:
+                    shutil.rmtree(sport_dir)
+                    logger.debug("Cleaned up intermediate normalized dir: %s", sport_dir)
+                except Exception as cleanup_exc:
+                    logger.warning("Failed cleaning intermediate dir %s: %s", sport_dir, cleanup_exc)
+
+            # Remove deprecated root when empty so operators only see curated storage.
+            if self.out_dir.exists() and not any(self.out_dir.iterdir()):
+                try:
+                    self.out_dir.rmdir()
+                    logger.debug("Removed empty deprecated normalized root: %s", self.out_dir)
+                except Exception:
+                    pass
+
+    def _discover_raw_seasons(self, sport: str) -> list[str]:
+        """Discover available raw seasons from provider folders for a sport."""
+        season_set: set[str] = set()
+        provider_dirs = SPORT_PROVIDER_DIR.get(sport, {})
+        for provider, provider_sport_dir in provider_dirs.items():
+            root = self.raw_dir / provider / provider_sport_dir
+            if not root.is_dir():
+                continue
+            try:
+                for child in root.iterdir():
+                    if child.is_dir() and child.name.isdigit() and len(child.name) == 4:
+                        season_set.add(child.name)
+            except Exception:
+                continue
+        return sorted(season_set)
 
     def run_all(
         self,
         sports: Sequence[str] | None = None,
-        seasons: Sequence[str] = ("2024",),
+        seasons: Sequence[str] | None = None,
     ) -> dict[str, dict[str, int]]:
         """Normalize all data types for the requested sports and seasons.
 
@@ -10663,7 +13648,8 @@ class Normalizer:
             List of sport keys (e.g. ``["nba", "nfl"]``).
             Defaults to every sport in ``SPORT_DEFINITIONS``.
         seasons:
-            Season identifiers to process.
+            Season identifiers to process. If ``None`` or includes ``"all"``,
+            seasons are auto-discovered from raw provider folders per sport.
         """
         if sports is None:
             sports = list(SPORT_DEFINITIONS.keys())
@@ -10674,7 +13660,22 @@ class Normalizer:
                 logger.warning("Unknown sport %r — skipping", sport)
                 continue
             logger.info("═══ Normalizing %s ═══", sport.upper())
-            results[sport] = self.run_sport(sport, seasons)
+            explicit = [] if seasons is None else [str(s) for s in seasons]
+            wants_all = not explicit or any(s.lower() == "all" for s in explicit)
+
+            if wants_all:
+                discovered = self._discover_raw_seasons(sport)
+                manual = [s for s in explicit if s.lower() != "all"]
+                seasons_to_run = sorted(set(discovered + manual))
+            else:
+                seasons_to_run = sorted(set(explicit))
+
+            if not seasons_to_run:
+                logger.warning("No seasons discovered for %s — skipping", sport)
+                results[sport] = {}
+                continue
+
+            results[sport] = self.run_sport(sport, seasons_to_run)
 
         total_rows = sum(v for sport in results.values() for v in sport.values())
         logger.info(

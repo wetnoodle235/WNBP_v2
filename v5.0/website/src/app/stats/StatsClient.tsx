@@ -30,11 +30,12 @@ interface Props {
   teamStatsBySport: Record<string, any[]>;
   teamMapBySport?: Record<string, Record<string, string>>;
   sports: string[];
+  initialWarning?: string | null;
 }
 
 const PER_PAGE = 20;
 
-export function StatsClient({ playerStatsBySport, teamStatsBySport, teamMapBySport, sports }: Props) {
+export function StatsClient({ playerStatsBySport, teamStatsBySport, teamMapBySport, sports, initialWarning = null }: Props) {
   // Show all sports as tabs — sports without data get an empty-state message
   const hasSportData = (s: string) =>
     (playerStatsBySport[s]?.length ?? 0) > 0 || (teamStatsBySport[s]?.length ?? 0) > 0;
@@ -163,6 +164,19 @@ export function StatsClient({ playerStatsBySport, teamStatsBySport, teamMapBySpo
   return (
     <main>
       <SectionBand title="Stats">
+        {initialWarning && (
+          <div role="status" style={{
+            padding: "var(--space-3) var(--space-4)",
+            background: "var(--color-warning-bg, #fffbeb)",
+            color: "var(--color-warning, #b45309)",
+            borderRadius: "var(--radius-md)",
+            marginBottom: "var(--space-4)",
+            fontSize: "var(--text-sm)",
+          }}>
+            {initialWarning}
+          </div>
+        )}
+
         {/* Sport filter tabs */}
         <div
           className="stats-sport-tabs"

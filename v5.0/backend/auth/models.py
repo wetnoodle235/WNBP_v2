@@ -54,10 +54,12 @@ class APIKey:
 class Subscription:
     id: str
     user_id: str
-    stripe_subscription_id: str
+    stripe_subscription_id: Optional[str]
     tier: str
     sports: list[str] = field(default_factory=list)
     status: str = "active"
+    source: str = "stripe"
+    billing_interval: Optional[str] = None
     current_period_start: Optional[str] = None
     current_period_end: Optional[str] = None
 
@@ -130,7 +132,7 @@ async def create_user(
 async def get_user_by_email(email: str) -> Optional[User]:
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, created_at, updated_at FROM users WHERE email = ?",
+            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, referral_reward_tier, created_at, updated_at FROM users WHERE email = ?",
             (email,),
         )
         row = await cursor.fetchone()
@@ -142,7 +144,7 @@ async def get_user_by_email(email: str) -> Optional[User]:
 async def get_user_by_id(user_id: str) -> Optional[User]:
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, created_at, updated_at FROM users WHERE id = ?",
+            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, referral_reward_tier, created_at, updated_at FROM users WHERE id = ?",
             (user_id,),
         )
         row = await cursor.fetchone()
@@ -154,7 +156,7 @@ async def get_user_by_id(user_id: str) -> Optional[User]:
 async def get_user_by_api_key(api_key: str) -> Optional[User]:
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, created_at, updated_at FROM users WHERE api_key = ?",
+            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, referral_reward_tier, created_at, updated_at FROM users WHERE api_key = ?",
             (api_key,),
         )
         row = await cursor.fetchone()
@@ -166,7 +168,7 @@ async def get_user_by_api_key(api_key: str) -> Optional[User]:
 async def get_user_by_referral_code(code: str) -> Optional[User]:
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, created_at, updated_at FROM users WHERE referral_code = ?",
+            "SELECT id, email, password_hash, display_name, tier, api_key, referral_code, referred_by, stripe_customer_id, referral_reward_tier, created_at, updated_at FROM users WHERE referral_code = ?",
             (code,),
         )
         row = await cursor.fetchone()
@@ -467,9 +469,12 @@ async def update_user_keys_tier(user_id: str, tier: str, sport_access: list[str]
 
 async def create_subscription(
     user_id: str,
-    stripe_subscription_id: str,
+    stripe_subscription_id: Optional[str],
     tier: str,
     sports: list[str],
+    status: str = "active",
+    source: str = "stripe",
+    billing_interval: Optional[str] = None,
     current_period_start: Optional[str] = None,
     current_period_end: Optional[str] = None,
 ) -> Subscription:
@@ -480,6 +485,9 @@ async def create_subscription(
         stripe_subscription_id=stripe_subscription_id,
         tier=tier,
         sports=sports,
+        status=status,
+        source=source,
+        billing_interval=billing_interval,
         current_period_start=current_period_start,
         current_period_end=current_period_end,
     )
@@ -487,11 +495,12 @@ async def create_subscription(
         await db.execute(
             """INSERT INTO subscriptions
                (id, user_id, stripe_subscription_id, tier, sports, status,
-                current_period_start, current_period_end)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                source, billing_interval, current_period_start, current_period_end)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 sub.id, sub.user_id, sub.stripe_subscription_id, sub.tier,
                 json.dumps(sub.sports), sub.status,
+                sub.source, sub.billing_interval,
                 sub.current_period_start, sub.current_period_end,
             ),
         )
@@ -499,10 +508,31 @@ async def create_subscription(
     return sub
 
 
+async def create_trial_subscription(
+    user_id: str,
+    tier: str,
+    sports: list[str],
+    duration_days: int = 7,
+) -> Subscription:
+    now = datetime.now(timezone.utc)
+    ends_at = now + timedelta(days=duration_days)
+    return await create_subscription(
+        user_id=user_id,
+        stripe_subscription_id=None,
+        tier=tier,
+        sports=sports,
+        status="trial",
+        source="trial",
+        billing_interval="trial",
+        current_period_start=now.isoformat(),
+        current_period_end=ends_at.isoformat(),
+    )
+
+
 async def get_active_subscription(user_id: str) -> Optional[dict[str, Any]]:
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT id, user_id, stripe_subscription_id, tier, sports, status, current_period_start, current_period_end, created_at FROM subscriptions WHERE user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+            "SELECT id, user_id, stripe_subscription_id, tier, sports, status, source, billing_interval, current_period_start, current_period_end, created_at FROM subscriptions WHERE user_id = ? AND status IN ('active', 'trial') ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at DESC LIMIT 1",
             (user_id,),
         )
         row = await cursor.fetchone()
@@ -514,6 +544,8 @@ async def get_active_subscription(user_id: str) -> Optional[dict[str, Any]]:
             "tier": row["tier"],
             "sports": json.loads(row["sports"]) if row["sports"] else [],
             "status": row["status"],
+            "source": row["source"] if "source" in row.keys() else "stripe",
+            "billing_interval": row["billing_interval"] if "billing_interval" in row.keys() else None,
             "current_period_start": row["current_period_start"],
             "current_period_end": row["current_period_end"],
         }
@@ -528,23 +560,39 @@ async def update_subscription_status(stripe_subscription_id: str, status: str) -
         await db.commit()
 
 
+async def update_subscription_status_by_id(subscription_id: str, status: str) -> None:
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE subscriptions SET status = ? WHERE id = ?",
+            (status, subscription_id),
+        )
+        await db.commit()
+
+
 async def update_subscription_period(
     stripe_subscription_id: str,
     current_period_start: str,
     current_period_end: str,
+    billing_interval: Optional[str] = None,
 ) -> None:
     async with get_db() as db:
-        await db.execute(
-            "UPDATE subscriptions SET current_period_start = ?, current_period_end = ? WHERE stripe_subscription_id = ?",
-            (current_period_start, current_period_end, stripe_subscription_id),
-        )
+        if billing_interval is None:
+            await db.execute(
+                "UPDATE subscriptions SET current_period_start = ?, current_period_end = ? WHERE stripe_subscription_id = ?",
+                (current_period_start, current_period_end, stripe_subscription_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE subscriptions SET current_period_start = ?, current_period_end = ?, billing_interval = ? WHERE stripe_subscription_id = ?",
+                (current_period_start, current_period_end, billing_interval, stripe_subscription_id),
+            )
         await db.commit()
 
 
 async def get_subscription_by_user_and_tier(user_id: str, tier: str) -> Optional[dict]:
     async with get_db() as db:
         cursor = await db.execute(
-            "SELECT id, user_id, stripe_subscription_id, tier, sports, status, current_period_start, current_period_end, created_at FROM subscriptions WHERE user_id = ? AND tier = ? AND status = 'active' LIMIT 1",
+            "SELECT id, user_id, stripe_subscription_id, tier, sports, status, source, billing_interval, current_period_start, current_period_end, created_at FROM subscriptions WHERE user_id = ? AND tier = ? AND status IN ('active', 'trial') LIMIT 1",
             (user_id, tier),
         )
         row = await cursor.fetchone()
@@ -555,4 +603,90 @@ async def get_subscription_by_user_and_tier(user_id: str, tier: str) -> Optional
             "stripe_subscription_id": row["stripe_subscription_id"],
             "tier": row["tier"],
             "status": row["status"],
+            "source": row["source"] if "source" in row.keys() else "stripe",
+            "billing_interval": row["billing_interval"] if "billing_interval" in row.keys() else None,
         }
+
+
+async def list_lifecycle_subscriptions(statuses: tuple[str, ...] = ("trial", "active")) -> list[dict[str, Any]]:
+    placeholders = ",".join("?" for _ in statuses)
+    async with get_db() as db:
+        cursor = await db.execute(
+            f"""
+            SELECT
+                s.id,
+                s.user_id,
+                s.stripe_subscription_id,
+                s.tier,
+                s.sports,
+                s.status,
+                s.source,
+                s.billing_interval,
+                s.current_period_start,
+                s.current_period_end,
+                s.created_at,
+                u.email,
+                u.display_name
+            FROM subscriptions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.status IN ({placeholders})
+            ORDER BY s.created_at ASC
+            """,
+            statuses,
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "stripe_subscription_id": row["stripe_subscription_id"],
+                "tier": row["tier"],
+                "sports": json.loads(row["sports"]) if row["sports"] else [],
+                "status": row["status"],
+                "source": row["source"] if "source" in row.keys() else "stripe",
+                "billing_interval": row["billing_interval"] if "billing_interval" in row.keys() else None,
+                "current_period_start": row["current_period_start"],
+                "current_period_end": row["current_period_end"],
+                "created_at": row["created_at"],
+                "email": row["email"],
+                "display_name": row["display_name"],
+            }
+            for row in rows
+        ]
+
+
+async def has_subscription_notification(
+    subscription_id: str,
+    event_type: str,
+    period_end: Optional[str],
+) -> bool:
+    async with get_db() as db:
+        if period_end is None:
+            cursor = await db.execute(
+                "SELECT 1 FROM subscription_notifications WHERE subscription_id = ? AND event_type = ? AND period_end IS NULL LIMIT 1",
+                (subscription_id, event_type),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT 1 FROM subscription_notifications WHERE subscription_id = ? AND event_type = ? AND period_end = ? LIMIT 1",
+                (subscription_id, event_type, period_end),
+            )
+        return await cursor.fetchone() is not None
+
+
+async def record_subscription_notification(
+    user_id: str,
+    subscription_id: str,
+    event_type: str,
+    period_end: Optional[str],
+) -> None:
+    async with get_db() as db:
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO subscription_notifications
+            (id, user_id, subscription_id, event_type, period_end, sent_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (str(uuid4()), user_id, subscription_id, event_type, period_end, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()

@@ -2,9 +2,9 @@ export const dynamic = "force-dynamic";
 
 import { buildPageMetadata, buildCollectionJsonLd } from "@/lib/seo";
 import type { Metadata } from "next";
-import { getPlayers, getTeams } from "@/lib/api";
+import { getAggregatePlayers, getAggregateTeams } from "@/lib/api";
 import type { Team } from "@/lib/schemas";
-import { ALL_SPORT_KEYS } from "@/lib/sports";
+import { AGGREGATE_SPORT_KEYS } from "@/lib/sports";
 import { PlayersClient } from "./PlayersClient";
 
 export const metadata: Metadata = buildPageMetadata({
@@ -43,47 +43,35 @@ export interface TeamInfo {
 }
 
 export default async function PlayersPage() {
-  const sports = [...ALL_SPORT_KEYS];
-  const results = await Promise.allSettled(
-    sports.map(async (sport) => {
-      const [players, teams] = await Promise.all([
-        getPlayers(sport, { limit: "1000", offset: "0" }),
-        getTeams(sport),
-      ]);
-      let allPlayers = players as Player[];
-      // Fetch additional pages for sports with many players (college, esports)
-      let offset = 1000;
-      while (allPlayers.length >= offset && offset < 5000) {
-        const page = await getPlayers(sport, { limit: "1000", offset: String(offset) });
-        const arr = page as Player[];
-        if (arr.length === 0) break;
-        allPlayers = [...allPlayers, ...arr];
-        offset += 1000;
-      }
-      return { sport, players: allPlayers, teams: teams as Team[] };
-    }),
-  );
+  const sports = [...AGGREGATE_SPORT_KEYS];
+  const [allPlayersRaw, allTeamsRaw] = await Promise.all([
+    getAggregatePlayers(sports, 5000),
+    getAggregateTeams(sports, 1000),
+  ]);
 
   const playersBySport: Record<string, Player[]> = {};
   const teamLookup: Record<string, TeamInfo> = {};
 
-  for (let i = 0; i < results.length; i++) {
-    const sport = sports[i];
-    const result = results[i];
-    if (result.status === "fulfilled") {
-      playersBySport[sport] = result.value.players;
-      for (const t of result.value.teams) {
-        teamLookup[`${sport}-${t.id}`] = {
-          id: t.id,
-          sport: t.sport ?? sport,
-          name: t.name,
-          abbreviation: t.abbreviation ?? "",
-          city: t.city ?? "",
-          logo_url: t.logo_url ?? null,
-          color_primary: t.color_primary ?? null,
-        };
-      }
-    } else {
+  for (const sport of sports) {
+    playersBySport[sport] = (allPlayersRaw as Player[]).filter((p) => (p.sport ?? sport) === sport);
+  }
+
+  for (const t of allTeamsRaw as Team[]) {
+    const sport = t.sport ?? "unknown";
+    if (!sport) continue;
+    teamLookup[`${sport}-${t.id}`] = {
+      id: t.id,
+      sport,
+      name: t.name,
+      abbreviation: t.abbreviation ?? "",
+      city: t.city ?? "",
+      logo_url: t.logo_url ?? null,
+      color_primary: t.color_primary ?? null,
+    };
+  }
+
+  for (const sport of sports) {
+    if (!playersBySport[sport]) {
       playersBySport[sport] = [];
     }
   }

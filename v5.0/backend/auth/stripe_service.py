@@ -7,8 +7,10 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any, Optional
+from pathlib import Path
 
 import stripe
+from dotenv import load_dotenv
 
 from .models import (
     create_referral_reward,
@@ -16,6 +18,7 @@ from .models import (
     get_active_subscription,
     get_user_by_id,
     update_referral_reward_tier,
+    update_subscription_status_by_id,
     update_subscription_period,
     update_subscription_status,
     update_user_keys_tier,
@@ -26,36 +29,42 @@ from .tiers import TIERS, tier_level
 
 logger = logging.getLogger(__name__)
 
+_env_file = Path(__file__).resolve().parent.parent / ".env"
+if _env_file.exists():
+    load_dotenv(_env_file, override=False)
+
 
 class StripeService:
     """Manages Stripe checkout, webhooks, and subscription lifecycle."""
 
     def __init__(self) -> None:
-        stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
+        stripe.api_key = os.getenv("STRIPE_SECRET_KEY") or os.getenv("STRIPE_API_KEY", "")
         self.webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
-    # ── Tier × Billing → Stripe price mapping ────────────
-    _TIER_PRICE_IDS: dict[str, dict[str, str]] = {
-        "starter": {
-            "monthly": os.getenv("STRIPE_PRICE_STARTER_MONTHLY", "price_starter_monthly_placeholder"),
-            "yearly": os.getenv("STRIPE_PRICE_STARTER_YEARLY", "price_starter_yearly_placeholder"),
-        },
-        "pro": {
-            "monthly": os.getenv("STRIPE_PRICE_PRO_MONTHLY", "price_pro_monthly_placeholder"),
-            "yearly": os.getenv("STRIPE_PRICE_PRO_YEARLY", "price_pro_yearly_placeholder"),
-        },
-        "enterprise": {
-            "monthly": os.getenv("STRIPE_PRICE_ENTERPRISE_MONTHLY", "price_enterprise_monthly_placeholder"),
-            "yearly": os.getenv("STRIPE_PRICE_ENTERPRISE_YEARLY", "price_enterprise_yearly_placeholder"),
-        },
-    }
+    def _build_price_map(self) -> dict[str, dict[str, str]]:
+        generic_monthly = os.getenv("STRIPE_PRICE_ID_MONTHLY", "")
+        generic_yearly = os.getenv("STRIPE_PRICE_ID_YEARLY", "")
+        return {
+            "starter": {
+                "monthly": os.getenv("STRIPE_PRICE_STARTER_MONTHLY", ""),
+                "yearly": os.getenv("STRIPE_PRICE_STARTER_YEARLY", ""),
+            },
+            "pro": {
+                "monthly": os.getenv("STRIPE_PRICE_PRO_MONTHLY", generic_monthly),
+                "yearly": os.getenv("STRIPE_PRICE_PRO_YEARLY", generic_yearly),
+            },
+            "enterprise": {
+                "monthly": os.getenv("STRIPE_PRICE_ENTERPRISE_MONTHLY", ""),
+                "yearly": os.getenv("STRIPE_PRICE_ENTERPRISE_YEARLY", ""),
+            },
+        }
 
     def _get_price_id(self, tier: str, billing: str = "monthly") -> str:
-        tier_prices = self._TIER_PRICE_IDS.get(tier)
+        tier_prices = self._build_price_map().get(tier)
         if not tier_prices:
             raise ValueError(f"No Stripe price configured for tier '{tier}'")
         price_id = tier_prices.get(billing, tier_prices.get("monthly"))
-        if not price_id:
+        if not price_id or price_id.startswith("price_") is False:
             raise ValueError(f"No Stripe price for tier '{tier}' billing '{billing}'")
         return price_id
 
@@ -180,18 +189,46 @@ class StripeService:
 
         # Cancel lower-tier active subscriptions
         existing_sub = await get_active_subscription(user_id)
-        if existing_sub and tier_level(existing_sub["tier"]) < tier_level(tier):
-            try:
-                if existing_sub.get("stripe_subscription_id"):
-                    await self.cancel_subscription(existing_sub["stripe_subscription_id"])
-            except Exception as e:
-                logger.warning("Could not cancel old subscription: %s", e)
+        if existing_sub:
+            if existing_sub.get("status") == "trial":
+                await update_subscription_status_by_id(existing_sub["id"], "converted")
+            elif tier_level(existing_sub["tier"]) < tier_level(tier):
+                try:
+                    if existing_sub.get("stripe_subscription_id"):
+                        await self.cancel_subscription(existing_sub["stripe_subscription_id"])
+                except Exception as e:
+                    logger.warning("Could not cancel old subscription: %s", e)
+
+        current_period_start = None
+        current_period_end = None
+        billing_interval = billing
+        try:
+            stripe_sub = stripe.Subscription.retrieve(stripe_sub_id)
+            start = stripe_sub.get("current_period_start")
+            end = stripe_sub.get("current_period_end")
+            if start:
+                from datetime import datetime, timezone
+                current_period_start = datetime.fromtimestamp(start, tz=timezone.utc).isoformat()
+            if end:
+                from datetime import datetime, timezone
+                current_period_end = datetime.fromtimestamp(end, tz=timezone.utc).isoformat()
+            items = stripe_sub.get("items", {}).get("data", [])
+            if items:
+                recurring = items[0].get("price", {}).get("recurring", {})
+                billing_interval = recurring.get("interval") or billing
+        except Exception as e:
+            logger.warning("Could not hydrate subscription period from Stripe: %s", e)
 
         await create_subscription(
             user_id=user_id,
             stripe_subscription_id=stripe_sub_id,
             tier=tier,
             sports=sports,
+            status="active",
+            source="stripe",
+            billing_interval=billing_interval,
+            current_period_start=current_period_start,
+            current_period_end=current_period_end,
         )
         await update_user_tier(user_id, tier)
         await update_user_keys_tier(
@@ -225,7 +262,11 @@ class StripeService:
 
             start_iso = datetime.fromtimestamp(start, tz=timezone.utc).isoformat()
             end_iso = datetime.fromtimestamp(end, tz=timezone.utc).isoformat()
-            await update_subscription_period(stripe_sub_id, start_iso, end_iso)
+            items = sub.get("items", {}).get("data", [])
+            interval = None
+            if items:
+                interval = items[0].get("price", {}).get("recurring", {}).get("interval")
+            await update_subscription_period(stripe_sub_id, start_iso, end_iso, interval)
 
     async def _on_subscription_deleted(self, sub: dict) -> None:
         stripe_sub_id = sub.get("id")

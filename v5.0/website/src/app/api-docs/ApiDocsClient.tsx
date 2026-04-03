@@ -84,7 +84,7 @@ function buildEndpoints(sport: string, slug: string): EndpointDef[] {
   return [
     {
       id: `${slug}-games`,
-      path: `/api/${slug}/games`,
+      path: `/v1/${slug}/games`,
       title: "Games",
       description: `Retrieve ${sport} game schedules and results. Filter by season, date, or team.`,
       params: [COMMON_PARAMS.season, COMMON_PARAMS.date, COMMON_PARAMS.team, COMMON_PARAMS.limit, COMMON_PARAMS.offset, COMMON_PARAMS.sort, COMMON_PARAMS.order],
@@ -107,7 +107,7 @@ function buildEndpoints(sport: string, slug: string): EndpointDef[] {
     },
     {
       id: `${slug}-teams`,
-      path: `/api/${slug}/teams`,
+      path: `/v1/${slug}/teams`,
       title: "Teams",
       description: `List all ${sport} teams for a given season.`,
       params: [COMMON_PARAMS.season, COMMON_PARAMS.limit, COMMON_PARAMS.offset],
@@ -122,7 +122,7 @@ function buildEndpoints(sport: string, slug: string): EndpointDef[] {
     },
     {
       id: `${slug}-standings`,
-      path: `/api/${slug}/standings`,
+      path: `/v1/${slug}/standings`,
       title: "Standings",
       description: `Get current ${sport} standings for a season.`,
       params: [COMMON_PARAMS.season, COMMON_PARAMS.sort, COMMON_PARAMS.order],
@@ -137,7 +137,7 @@ function buildEndpoints(sport: string, slug: string): EndpointDef[] {
     },
     {
       id: `${slug}-player-stats`,
-      path: `/api/${slug}/player-stats`,
+      path: `/v1/${slug}/player-stats`,
       title: "Player Stats",
       description: `Retrieve ${sport} player statistics. Use aggregate=true for season totals.`,
       params: [COMMON_PARAMS.season, COMMON_PARAMS.player, COMMON_PARAMS.team, COMMON_PARAMS.aggregate, COMMON_PARAMS.date, COMMON_PARAMS.limit, COMMON_PARAMS.offset, COMMON_PARAMS.sort, COMMON_PARAMS.order],
@@ -152,7 +152,7 @@ function buildEndpoints(sport: string, slug: string): EndpointDef[] {
     },
     {
       id: `${slug}-odds`,
-      path: `/api/${slug}/odds`,
+      path: `/v1/${slug}/odds`,
       title: "Odds",
       description: `Get betting odds for ${sport} games. Includes moneyline, spread, and totals.`,
       params: [COMMON_PARAMS.date, COMMON_PARAMS.team, COMMON_PARAMS.limit, COMMON_PARAMS.offset],
@@ -173,7 +173,7 @@ function buildEndpoints(sport: string, slug: string): EndpointDef[] {
     },
     {
       id: `${slug}-injuries`,
-      path: `/api/${slug}/injuries`,
+      path: `/v1/${slug}/injuries`,
       title: "Injuries",
       description: `Get current ${sport} injury reports.`,
       params: [COMMON_PARAMS.team, COMMON_PARAMS.limit, COMMON_PARAMS.offset],
@@ -187,7 +187,7 @@ function buildEndpoints(sport: string, slug: string): EndpointDef[] {
     },
     {
       id: `${slug}-news`,
-      path: `/api/${slug}/news`,
+      path: `/v1/${slug}/news`,
       title: "News",
       description: `Get latest ${sport} news articles.`,
       params: [COMMON_PARAMS.team, { name: "limit", type: "int", required: false, default: "20", description: "Maximum articles to return" }, COMMON_PARAMS.offset],
@@ -202,7 +202,7 @@ function buildEndpoints(sport: string, slug: string): EndpointDef[] {
     },
     {
       id: `${slug}-predictions`,
-      path: `/api/${slug}/predictions`,
+      path: `/v1/predictions/${slug}`,
       title: "Predictions",
       description: `Get AI-powered ${sport} game predictions with confidence scores.`,
       params: [COMMON_PARAMS.date, COMMON_PARAMS.team, COMMON_PARAMS.limit, COMMON_PARAMS.offset],
@@ -224,7 +224,7 @@ function buildEndpoints(sport: string, slug: string): EndpointDef[] {
     },
     {
       id: `${slug}-player-props`,
-      path: `/api/${slug}/predictions/player-props`,
+      path: `/v1/predictions/${slug}/player-props`,
       title: "Player Props Models",
       description: `Get trained player prop model metadata for ${sport}. Returns available prop types, inferred lines, ensemble counts, and feature information.`,
       params: [
@@ -276,7 +276,7 @@ function buildEndpoints(sport: string, slug: string): EndpointDef[] {
     },
     {
       id: `${slug}-player-props-opportunities`,
-      path: `/api/${slug}/predictions/player-props/opportunities`,
+      path: `/v1/predictions/${slug}/player-props/opportunities`,
       title: "Player Props Opportunities",
       description: `Get ranked player-prop opportunities for open ${sport} games using model availability, schedule context, and live momentum signals.`,
       params: [
@@ -336,52 +336,43 @@ function buildEndpoints(sport: string, slug: string): EndpointDef[] {
     },
     {
       id: `${slug}-model-health`,
-      path: `/api/${slug}/predictions/health`,
-      title: "Model Health",
-      description: `Real-time health diagnostics for all ML models serving ${sport}. Includes accuracy, inference latency, data freshness, and operational alerts.`,
+      path: `/v1/predictions/${slug}/history`,
+      title: "Prediction History",
+      description: `Historical prediction results for ${sport}, including evaluated counts and aggregate accuracy in the response metadata.`,
       params: [],
       exampleQuery: ``,
       exampleResponse: JSON.stringify({
         success: true,
-        data: {
-          game_prediction: {
+        data: [
+          {
+            game_id: "401710800",
             sport: "nba",
-            model_type: "game_prediction",
-            status: "healthy",
-            accuracy: 0.6234,
-            win_rate: 0.6234,
-            total_predictions: 520,
-            predictions_today: 12,
-            mean_confidence: 0.68,
-            last_prediction_date: "2026-03-30T23:15:00Z",
-            data_freshness_hours: 0.25,
-            warnings: [],
-            cached_at: "2026-03-30T23:20:00Z",
+            model: "catboost_v5.2",
+            home_win_prob: 0.68,
+            away_win_prob: 0.32,
+            predicted_spread: -5.5,
+            home_score: 115,
+            away_score: 102,
           },
-          player_props: {
-            sport: "nba",
-            model_type: "player_props",
-            status: "healthy",
-            total_predictions: 4,
-            last_training_date: "2026-03-30T20:06:44.554752",
-            data_freshness_hours: 3.23,
-            warnings: [],
-            cached_at: "2026-03-30T23:20:00Z",
-          },
-        },
+        ],
         meta: {
           sport: "nba",
-          timestamp: "2026-03-30T23:20:00Z",
-          models_count: 2,
-          health_summary: "healthy",
+          total_predictions: 1048,
+          count: 1,
+          limit: 50,
+          offset: 0,
+          evaluated: 986,
+          correct: 612,
+          accuracy: 0.6207,
+          cached_at: "2026-03-30T23:20:00Z",
         },
       }, null, 2),
     },
     {
       id: `${slug}-live`,
-      path: `/api/${slug}/live`,
+      path: `/v1/sse/${slug}/live`,
       title: "Live",
-      description: `Get live ${sport} game scores and in-progress data.`,
+      description: `Server-sent event stream for live ${sport} updates.`,
       params: [],
       exampleQuery: ``,
       exampleResponse: JSON.stringify({
@@ -515,7 +506,7 @@ function Collapsible({ title, children, defaultOpen = false, idBase }: { title: 
 const GLOBAL_ENDPOINTS: EndpointDef[] = [
   {
     id: "global-opportunities",
-    path: "/api/predictions/opportunities",
+    path: "/v1/predictions/opportunities",
     title: "Aggregate Prop Opportunities",
     description:
       "Fetch ranked player-prop opportunities across ALL trained sports in one call. Useful for scanning every available market without querying each sport individually.",
@@ -572,7 +563,7 @@ const GLOBAL_ENDPOINTS: EndpointDef[] = [
   },
   {
     id: "global-leaderboard",
-    path: "/api/predictions/leaderboard",
+    path: "/v1/predictions/leaderboard",
     title: "Prediction Leaderboard",
     description:
       "Rank all sports by historical prediction accuracy. Compare model performance across leagues using win-rate, calibration (Brier score), and evaluation sample size.",
@@ -599,7 +590,7 @@ const GLOBAL_ENDPOINTS: EndpointDef[] = [
   },
   {
     id: "global-trained-sports",
-    path: "/api/predictions/trained-sports",
+    path: "/v1/predictions/trained-sports",
     title: "Trained Sports",
     description:
       "List every sport that has a trained player-props model available. Returns model file size and last training timestamp. Useful for checking readiness before querying sport-specific endpoints.",
@@ -616,7 +607,7 @@ const GLOBAL_ENDPOINTS: EndpointDef[] = [
   },
   {
     id: "global-cache",
-    path: "/api/predictions/cache",
+    path: "/v1/predictions/cache",
     method: "DELETE",
     title: "Invalidate Bundle Cache",
     description:
@@ -1029,7 +1020,7 @@ export default function ApiDocsClient() {
                     <Link href="/account">account page</Link>.
                   </p>
                   <pre className="apidocs-code"><code>{`curl -H "X-API-Key: ${apiKey || "your-api-key-here"}" \\
-  "${DOCS_BASE_URL}/api/nba/games?season=2025"`}</code></pre>
+  "${DOCS_BASE_URL}/v1/nba/games?season=2025"`}</code></pre>
                   <div className="apidocs-warning-box">
                     <strong>⚠ Keep your key secret.</strong> Do not expose it in client-side code
                     or public repositories. Rotate your key from the account page if compromised.

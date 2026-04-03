@@ -29,6 +29,7 @@ class EsportsExtractor(BaseFeatureExtractor):
         super().__init__(data_dir)
         self.sport = sport
         self._all_games_cache: pd.DataFrame | None = None
+        self._esports_fatigue_cache: dict[str, pd.DataFrame] = {}
 
     # ── Helpers ────────────────────────────────────────────
 
@@ -175,19 +176,18 @@ class EsportsExtractor(BaseFeatureExtractor):
         if games.empty:
             return {"side_win_pct": 0.0, "side_matches": 0}
 
-        ts = pd.Timestamp(date)
-        status_mask = games.get("status", pd.Series("final", index=games.index)).str.lower().isin(
-            ["final", "closed", "complete", "finished"]
-        )
+        # Use precomputed index for O(log n) lookup instead of O(n) full scan
+        recent = self._team_games_before(games, team_id, date, limit=window * 2)
+        if recent.empty:
+            return {"side_win_pct": 0.0, "side_matches": 0}
+
+        # Filter to correct side (home=blue, away=red)
         if is_blue_side:
-            side_mask = games.get("home_team_id") == team_id
+            side_mask = recent["home_team_id"].astype(str) == str(team_id)
         else:
-            side_mask = games.get("away_team_id") == team_id
+            side_mask = recent["away_team_id"].astype(str) == str(team_id)
 
-        side_games = games.loc[side_mask & status_mask & (games["date"] < ts)].sort_values(
-            "date", ascending=False
-        ).head(window)
-
+        side_games = recent[side_mask].head(window)
         if side_games.empty:
             return {"side_win_pct": 0.0, "side_matches": 0}
 
@@ -453,14 +453,15 @@ class EsportsExtractor(BaseFeatureExtractor):
         return 1.0  # default regional/unknown
 
     def _load_schedule_fatigue(self, season: int) -> pd.DataFrame:
-        """Load schedule fatigue file for a season (team-level rows)."""
-        try:
-            df = self._reader.load(self.sport, "schedule_fatigue", season=season)
-            if not df.empty:
-                return df
-        except Exception:
-            pass
-        return pd.DataFrame()
+        """Load schedule fatigue file for a season (team-level rows) — cached."""
+        cache_key = str(season)
+        if cache_key not in self._esports_fatigue_cache:
+            try:
+                df = self._reader.load(self.sport, "schedule_fatigue", season=season)
+                self._esports_fatigue_cache[cache_key] = df if not df.empty else pd.DataFrame()
+            except Exception:
+                self._esports_fatigue_cache[cache_key] = pd.DataFrame()
+        return self._esports_fatigue_cache[cache_key]
 
     def _fatigue_features(self, team_id: str, game_id: str, season: int) -> dict[str, float]:
         """Return rest/fatigue metrics for a team from schedule_fatigue parquet."""

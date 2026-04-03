@@ -11,6 +11,7 @@ import Link from "next/link";
 
 import type { Player } from "../page";
 import { resolveServerApiBase } from "@/lib/api-base";
+import { preferredPlayerHeadshotUrls } from "@/lib/media";
 
 /* ------------------------------------------------------------------ */
 /*  Types & helpers                                                    */
@@ -34,6 +35,21 @@ async function getPlayerStats(sport: string, playerId: string) {
     return json?.data ?? json ?? null;
   } catch {
     return null;
+  }
+}
+
+async function getPlayerGameLog(sport: string, playerId: string) {
+  try {
+    const res = await fetch(
+      `${API_BASE}/v1/${sport}/player-stats?player_id=${playerId}&aggregate=false&limit=10`,
+      { cache: "no-store" },
+    );
+    if (!res.ok) return [];
+    const json = await res.json();
+    const data = json?.data ?? json ?? [];
+    return Array.isArray(data) ? data as Record<string, unknown>[] : [];
+  } catch {
+    return [];
   }
 }
 
@@ -293,10 +309,11 @@ export default async function PlayerDetailPage({
   const { id } = await params;
   const { sport = "nba" } = await searchParams;
 
-  const [players, teams, rawStats] = await Promise.all([
+  const [players, teams, rawStats, gameLog] = await Promise.all([
     getPlayers(sport) as Promise<Player[]>,
     getTeams(sport),
     getPlayerStats(sport, id),
+    getPlayerGameLog(sport, id),
   ]);
 
   const player = players.find((p) => p.id === id);
@@ -305,6 +322,11 @@ export default async function PlayerDetailPage({
   const team = player.team_id
     ? teams.find((t) => t.id === player.team_id)
     : null;
+  const headshotUrl = preferredPlayerHeadshotUrls({
+    sport,
+    playerId: player.id,
+    headshotUrl: player.headshot_url,
+  })[0] ?? null;
 
   const sportName = getDisplayName(sport);
 
@@ -343,9 +365,9 @@ export default async function PlayerDetailPage({
           }}
         >
           {/* Headshot / initials avatar */}
-          {player.headshot_url ? (
+          {headshotUrl ? (
             <Image
-              src={player.headshot_url}
+              src={headshotUrl}
               alt={player.name}
               width={96}
               height={96}
@@ -475,6 +497,53 @@ export default async function PlayerDetailPage({
           </div>
         )}
       </SectionBand>
+
+      {/* ── Recent Games ──────────────────────────────────── */}
+      {gameLog.length > 0 && (
+        <SectionBand title="Recent Games">
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border, #333)" }}>
+                  <th style={{ textAlign: "left", padding: "6px 10px", color: "var(--muted, #888)", fontWeight: 500 }}>Date</th>
+                  <th style={{ textAlign: "left", padding: "6px 10px", color: "var(--muted, #888)", fontWeight: 500 }}>Game</th>
+                  {statDefs.slice(0, 4).map((def) => (
+                    <th key={def.key} style={{ textAlign: "right", padding: "6px 10px", color: "var(--muted, #888)", fontWeight: 500 }}>{def.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {gameLog.map((row, i) => {
+                  const rowDate = typeof row.date === "string" ? row.date.slice(0, 10) : String(row.date ?? "");
+                  const gameId = row.game_id ?? row.id;
+                  const opponent = row.opponent ?? row.opponent_team ?? row.away_team ?? row.home_team ?? "—";
+                  return (
+                    <tr key={i} style={{ borderBottom: "1px solid var(--border-subtle, #222)" }}>
+                      <td style={{ padding: "6px 10px", color: "var(--muted, #888)" }}>{rowDate || "—"}</td>
+                      <td style={{ padding: "6px 10px" }}>
+                        {gameId ? (
+                          <a href={`/games/${sport}/${gameId}`} style={{ color: "var(--accent, #60a5fa)", textDecoration: "none" }}>
+                            {String(opponent)}
+                          </a>
+                        ) : (
+                          <span>{String(opponent)}</span>
+                        )}
+                      </td>
+                      {statDefs.slice(0, 4).map((def) => {
+                        const raw = row[def.key];
+                        const display = def.format ? def.format(raw) : num(raw as number | string | undefined | null);
+                        return (
+                          <td key={def.key} style={{ textAlign: "right", padding: "6px 10px" }}>{display}</td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </SectionBand>
+      )}
 
       {/* ── Team Info ─────────────────────────────────────── */}
       {team && (

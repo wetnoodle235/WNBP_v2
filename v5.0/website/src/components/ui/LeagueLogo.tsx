@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Image from "next/image";
 import { getDisplayName, getLeagueLogoUrl, getSportIcon } from "@/lib/sports-config";
+import { leagueMediaProxyUrl } from "@/lib/media";
 
 interface LeagueLogoProps {
   sport: string;
@@ -11,10 +12,14 @@ interface LeagueLogoProps {
 }
 
 export function LeagueLogo({ sport, size = 14, className }: LeagueLogoProps) {
-  const [imgError, setImgError] = useState(false);
-  const src = useMemo(() => getLeagueLogoUrl(sport), [sport]);
+  const [attempt, setAttempt] = useState(0);
+  const sources = useMemo(() => {
+    const fallback = getLeagueLogoUrl(sport);
+    return [leagueMediaProxyUrl(sport), fallback].filter(Boolean) as string[];
+  }, [sport]);
+  const src = sources[attempt];
 
-  if (!src || imgError) {
+  if (!src) {
     return (
       <span
         aria-label={`${getDisplayName(sport)} icon`}
@@ -42,7 +47,7 @@ export function LeagueLogo({ sport, size = 14, className }: LeagueLogoProps) {
       height={size}
       className={className}
       unoptimized
-      onError={() => setImgError(true)}
+      onError={() => setAttempt((current) => current + 1)}
       style={{ borderRadius: 9999, objectFit: "contain", background: "#fff" }}
     />
   );

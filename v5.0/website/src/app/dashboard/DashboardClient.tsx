@@ -139,8 +139,8 @@ export default function DashboardClient() {
 
   // Initialize referral tier pref from user data
   useEffect(() => {
-    if (user && (user as any).referral_reward_tier) {
-      setReferralTierPref((user as any).referral_reward_tier);
+    if (user?.referral_reward_tier) {
+      setReferralTierPref(user.referral_reward_tier);
     }
   }, [user]);
 
@@ -213,6 +213,7 @@ export default function DashboardClient() {
   }
 
   async function handleSaveReferralTier(newTier: string) {
+    const prevTier = referralTierPref;
     setSavingReferralTier(true);
     const res = await fetchAPI<Record<string, unknown>>("/auth/referrals/reward-tier", {
       method: "PUT",
@@ -220,7 +221,13 @@ export default function DashboardClient() {
       body: JSON.stringify({ tier: newTier }),
     });
     setSavingReferralTier(false);
-    if (res.ok) setReferralTierPref(newTier);
+    if (res.ok) {
+      setReferralTierPref(newTier);
+      await refreshUser();
+      return;
+    }
+    setReferralTierPref(prevTier);
+    setActionError("Failed to save referral reward tier");
   }
 
   function handleCopyReferralLink() {
@@ -437,7 +444,7 @@ export default function DashboardClient() {
                   key={t}
                   type="button"
                   className={`btn btn-sm ${referralTierPref === t ? "btn-primary" : "btn-outline"}`}
-                  onClick={() => { setReferralTierPref(t); handleSaveReferralTier(t); }}
+                  onClick={() => handleSaveReferralTier(t)}
                   disabled={savingReferralTier}
                 >
                   {t}
@@ -553,6 +560,53 @@ export default function DashboardClient() {
                 </div>
               </section>
             )}
+
+            <section className="card dashboard-mt-6" aria-labelledby="dash-tools-heading">
+              <div className="card-header dashboard-card-header-flex">
+                <h2 id="dash-tools-heading" className="card-heading">Signal Tools</h2>
+                <Link href="/market-intel" className="dashboard-link-accent">
+                  Open boards →
+                </Link>
+              </div>
+              <div className="card-body">
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.85rem" }}>
+                  {[
+                    {
+                      href: "/market-intel",
+                      title: "Market Intelligence",
+                      body: tier === "free" ? "Preview live regime shifts, then upgrade for the full board." : "Monitor volatile and moving markets across the full slate.",
+                    },
+                    {
+                      href: "/fatigue",
+                      title: "Fatigue Board",
+                      body: tier === "free" ? "Preview the fatigue leaders, then unlock the full ranking." : "Rank every team by rest disadvantage and schedule load.",
+                    },
+                    {
+                      href: "/injuries",
+                      title: "Injury Report",
+                      body: "Scan player status, return timelines, and major availability changes by sport.",
+                    },
+                  ].map((item) => (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      style={{
+                        display: "block",
+                        padding: "0.9rem",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid var(--color-border)",
+                        background: "var(--color-bg-2)",
+                        textDecoration: "none",
+                        color: "inherit",
+                      }}
+                    >
+                      <div style={{ fontWeight: 800, marginBottom: "0.35rem" }}>{item.title}</div>
+                      <div style={{ color: "var(--color-text-muted)", fontSize: "0.84rem", lineHeight: 1.5 }}>{item.body}</div>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            </section>
 
             {/* Upcoming Racing & Golf Events */}
             <UpcomingEventsWidget sports={["f1", "indycar", "golf", "lpga"]} days={60} maxEvents={8} apiBase={API_BASE} />

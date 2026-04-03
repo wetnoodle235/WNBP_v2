@@ -1,0 +1,83 @@
+sport,source_data_type,major_category,minor_category,type_category,canonical_entity_key,snapshot_targets,status,owner,notes
+ncaaf,teams,team,identity,base,team_id|season,game.schedule,implemented,data-platform,Core team identity
+ncaaf,teams_fbs,team,identity,fbs,team_id|season,game.schedule,implemented,data-platform,FBS enrichment fields
+ncaaf,conferences,reference,conferences,base,conference_id,,implemented,data-platform,Static reference table
+ncaaf,venues,reference,venues,base,venue_id,team.context|game.schedule,implemented,data-platform,Canonical venue reference
+ncaaf,games,game,schedule,base,game_id,,implemented,data-platform,Canonical game schedule rows
+ncaaf,games_media,game,schedule,media,game_id|media_type|outlet,team.context,implemented,data-platform,Broadcast assignments
+ncaaf,games_teams,game,box,teams,game_id|team_id,season.team_stats,implemented,data-platform,Per-game team box stats
+ncaaf,stats_game_advanced,game,advanced,epa,game_id|team_name,season.team_stats,implemented,data-platform,Per-game advanced team stats
+ncaaf,stats_game_havoc,game,advanced,havoc,game_id|team_name,season.team_stats,implemented,data-platform,Havoc splits
+ncaaf,ppa_games,game,advanced,ppa,game_id|team_name,season.ppa,implemented,data-platform,Per-game PPA
+ncaaf,wp_pregame,game,advanced,win_prob,game_id,game.schedule,implemented,data-platform,Pre-game win probability
+ncaaf,records,team,record,wl,team_name|season,season.rankings,implemented,data-platform,W-L split records
+ncaaf,teams_ats,team,record,ats,team_id|season,market.signals,implemented,data-platform,Against the spread record
+ncaaf,standings,team,record,standings,team_id|season,season.rankings,planned,data-platform,Conference standing
+ncaaf,ratings_sp,team,ratings,sp,team_name|season,game.advanced,implemented,data-platform,Canonical SP+
+ncaaf,ratings_sp_conferences,team,ratings,sp_conference,conference|season,season.rankings,implemented,data-platform,Conference SP+
+ncaaf,ratings_elo,team,ratings,elo,team_name|season,game.advanced,implemented,data-platform,Elo scores
+ncaaf,ratings_fpi,team,ratings,fpi,team_name|season,game.advanced,implemented,data-platform,FPI scores
+ncaaf,ratings_srs,team,ratings,srs,team_name|season,game.advanced,implemented,data-platform,SRS scores
+ncaaf,talent,team,ratings,talent,team_name|season,game.advanced,implemented,data-platform,Talent ratings
+ncaaf,recruiting_teams,team,recruiting,class,team_name|season,team.ratings,implemented,data-platform,Recruit class rating
+ncaaf,recruiting_groups,team,recruiting,groups,team_name|season,team.ratings,implemented,data-platform,Position group composition
+ncaaf,recruiting,player,identity,recruit,player_id|season,player.season_stats,implemented,data-platform,Player recruiting profile
+ncaaf,players,player,identity,base,player_id|season,player.season_stats,planned,data-platform,Core player profile
+ncaaf,player_portal,player,portal,base,player_id|season,player.identity,implemented,data-platform,Transfer portal
+ncaaf,player_returning,player,returning,base,player_id|season,player.identity,implemented,data-platform,Returning production
+ncaaf,player_usage,player,usage,base,player_id|season,player.season_stats,implemented,data-platform,Usage rates
+ncaaf,player_stats,player,season_stats,base,player_id|season,season.player_stats,planned,data-platform,Season player aggregates
+ncaaf,ppa_players_season,player,season_stats,ppa,player_id|season,season.player_stats,implemented,data-platform,Season player PPA
+ncaaf,team_stats,season,team_stats,base,team_id|season,team.record,planned,data-platform,Season team aggregates
+ncaaf,stats,season,team_stats,box,team_id|season,team.record,planned,data-platform,Legacy aggregate stats
+ncaaf,ppa_teams,season,ppa,base,team_id|season,team.ratings,implemented,data-platform,Season team PPA
+ncaaf,rankings,season,rankings,polls,poll|week|rank,game.schedule,implemented,data-platform,Weekly rankings
+ncaaf,plays_stats,game,play_by_play,season_rollup,game_id|team_name|season,season.team_stats,implemented,data-platform,Play stats rollups
+ncaaf,play_by_play,game,play_by_play,events,play_id|game_id,season.team_stats,planned,data-platform,Per-play events
+ncaaf,plays_types,reference,play_types,types,play_type_id,,implemented,data-platform,Play type lookup
+ncaaf,plays_stats_types,reference,play_types,stat_types,play_stat_type_id,,implemented,data-platform,Play stat type lookup
+ncaaf,stats_categories,reference,metrics,categories,stat_category,,implemented,data-platform,Stat category lookup
+ncaaf,metrics_fg_ep,reference,metrics,fg_ep,distance|yards_to_goal,,implemented,data-platform,FG expected points grid
+ncaaf,odds,market,odds,live,event_id|bookmaker,market.signals,planned,data-platform,Current odds
+ncaaf,odds_history,market,odds_history,history,event_id|bookmaker|timestamp,market.signals,planned,data-platform,Historical odds
+ncaaf,player_props,market,props,live,event_id|player_id|market_type,market.signals,planned,data-platform,Player props
+ncaaf,market_signals,market,signals,derived,event_id|bookmaker|snapshot_ts,,planned,data-platform,Derived market features
+ncaaf,injuries,player,identity,injury,player_id|date,game.schedule,planned,data-platform,Availability annotations
+ncaaf,news,player,identity,news,item_id|published_at,,planned,data-platform,News and notes
+ncaaf,coaches,team,context,staff,coach_id|season,team.identity,implemented,data-platform,Staff records
+ncaaf,draft_picks,player,identity,draft_pick,pick_id|season,player.identity,implemented,data-platform,Draft picks
+ncaaf,draft,player,identity,draft,player_id|season,player.identity,planned,data-platform,Draft records
+ncaaf,draft_positions,reference,draft,positions,draft_position,,implemented,data-platform,Draft position lookup
+ncaaf,draft_teams,reference,draft,teams,draft_team_id,,implemented,data-platform,Draft team lookup
+ncaaf,drives,game,play_by_play,drives,game_id|drive_id,season.team_stats,implemented,data-platform,Drive-level events
+ncaaf,calendar,reference,calendar,windows,season|week,,implemented,data-platform,Implemented as lightweight season window metadata
+ncaaf,game_box_advanced,game,box,advanced,game_id|team_id,game.advanced,implemented,data-platform,Loader implemented and wired
+ncaaf,games_players,game,box,players,game_id|player_id,player.season_stats,implemented,data-platform,Loader implemented and wired
+ncaaf,info,reference,metadata,info,info_key,,implemented,data-platform,Loader implemented and wired
+ncaaf,lines,market,odds,lines,game_id|provider,market.signals,implemented,data-platform,Loader implemented and wired
+ncaaf,metrics_wp,reference,metrics,wp,yard_line|time_remaining,,implemented_guarded,data-platform,Loader implemented and safe when no files exist
+ncaaf,plays,game,play_by_play,plays,game_id|play_id,season.team_stats,implemented,data-platform,Loader implemented and wired
+ncaaf,ppa_players_games,player,game_stats,ppa,game_id|player_id,player.season_stats,implemented,data-platform,Loader implemented and wired
+ncaaf,ppa_predicted,season,ppa,predicted,team_id|season|week,game.advanced,implemented,data-platform,Loader implemented and wired
+ncaaf,roster,team,identity,roster,team_id|player_id|season,player.identity,implemented,data-platform,Loader implemented and wired
+ncaaf,scoreboard,game,schedule,scoreboard,game_id,game.schedule,implemented,data-platform,Loader implemented and wired
+ncaaf,stats_advanced,season,team_stats,advanced,team_id|season,team.ratings,implemented,data-platform,Loader implemented and wired
+ncaaf,stats_player_season,player,season_stats,rollup,player_id|season,season.player_stats,implemented,data-platform,Loader implemented and wired
+ncaaf,stats_season,season,team_stats,rollup,team_id|season,season.team_stats,implemented,data-platform,Loader implemented and wired
+nba,games,game,schedule,base,game_id,,implemented,data-platform,Core NBA schedule and results
+nba,teams,team,identity,base,team_id|season,game.schedule,implemented,data-platform,Core NBA team identity
+nba,players,player,identity,base,player_id|season,player.season_stats,implemented,data-platform,Core NBA player identity
+nba,standings,team,record,standings,team_id|season,season.rankings,implemented,data-platform,NBA standings
+nba,player_stats,player,season_stats,base,player_id|season,season.player_stats,implemented,data-platform,NBA player stat rollups
+nba,team_stats,season,team_stats,base,team_id|season,team.record,implemented,data-platform,NBA team season stats
+nba,venues,reference,venues,base,venue_id,team.context|game.schedule,implemented_guarded,data-platform,NBA venues derived from teams and games when provider venue feeds are sparse
+nba,play_by_play,game,play_by_play,events,play_id|game_id,season.team_stats,implemented,data-platform,NBA play-by-play now sourced from nbastats with ESPN fallback
+nba,drives,game,play_by_play,drives,game_id|drive_id,season.team_stats,implemented_guarded,data-platform,Loader wired; basketball summaries may not expose football-style drive blocks
+nba,coaches,team,context,staff,coach_id|season,team.identity,implemented_guarded,data-platform,ESPN coach metadata is opportunistic and may be sparse by season
+nba,odds,market,odds,live,event_id|bookmaker,market.signals,implemented,data-platform,NBA live odds
+nba,odds_history,market,odds_history,history,event_id|bookmaker|timestamp,market.signals,implemented,data-platform,NBA historical odds
+nba,player_props,market,props,live,event_id|player_id|market_type,market.signals,implemented,data-platform,NBA player props
+nba,market_signals,market,signals,derived,event_id|bookmaker|snapshot_ts,,implemented,data-platform,NBA derived market signals
+nba,injuries,player,identity,injury,player_id|date,game.schedule,implemented,data-platform,NBA injury annotations
+nba,news,player,identity,news,item_id|published_at,,implemented,data-platform,NBA news feed
+nba,transactions,team,context,transactions,transaction_id|date,team.identity,implemented,data-platform,NBA transactions

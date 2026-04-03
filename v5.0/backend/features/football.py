@@ -65,22 +65,25 @@ _NFL_NAME_TO_ABBREV: dict[str, str] = {
 _nfl_abbrev_cache: dict[str, str] = {}
 
 
-def _build_nfl_abbrev_map(mapping: dict[str, str], sport_dir: "Path") -> None:
+def _build_nfl_abbrev_map(mapping: dict[str, str], sport_dir: "Path", reader=None) -> None:
     """Supplement NFL name→abbrev mapping by cross-referencing older game files with player_stats."""
     global _nfl_abbrev_cache
     if _nfl_abbrev_cache:
         mapping.update(_nfl_abbrev_cache)
         return
-    from pathlib import Path as _Path
     built: dict[str, str] = {}
     for yr in range(2020, 2026):
-        g_path = sport_dir / f"games_{yr}.parquet"
-        ps_path = sport_dir / f"player_stats_{yr}.parquet"
-        if not g_path.exists() or not ps_path.exists():
-            continue
         try:
-            g = pd.read_parquet(g_path)
-            ps = pd.read_parquet(ps_path)
+            if reader is not None:
+                g = reader.load("nfl", "games", season=yr)
+                ps = reader.load("nfl", "player_stats", season=yr)
+            else:
+                g_path = sport_dir / f"games_{yr}.parquet"
+                ps_path = sport_dir / f"player_stats_{yr}.parquet"
+                if not g_path.exists() or not ps_path.exists():
+                    continue
+                g = pd.read_parquet(g_path)
+                ps = pd.read_parquet(ps_path)
         except Exception:
             continue
         if "home_team" not in g.columns or "game_id" not in ps.columns:
@@ -129,7 +132,7 @@ class FootballExtractor(BaseFeatureExtractor):
             return fallback
 
     def _build_team_id_map(self, season: int | None = None) -> None:
-        """Build numeric ESPN team ID → abbreviation mapping from teams parquets.
+        """Build numeric ESPN team ID → abbreviation mapping from teams data.
 
         NFL/NCAAF games use numeric IDs (e.g. '1', '59', '124179') while
         player_stats use abbreviations ('KC', 'APP', 'VILL').  This map
@@ -137,10 +140,13 @@ class FootballExtractor(BaseFeatureExtractor):
         """
         if self._team_id_map_built:
             return
-        sport_dir = self.data_dir / "normalized" / self.sport
-        for p in sorted(sport_dir.glob("teams_*.parquet")):
+        try:
+            seasons = self._reader.available_seasons(self.sport, "teams")
+        except Exception:
+            seasons = []
+        for s in seasons:
             try:
-                t = pd.read_parquet(p)
+                t = self._reader.load(self.sport, "teams", season=s)
                 if "id" in t.columns and "abbreviation" in t.columns:
                     for _, row in t.iterrows():
                         numeric = str(row["id"]).strip()
@@ -165,16 +171,11 @@ class FootballExtractor(BaseFeatureExtractor):
         """
         if self._all_games_cache is not None:
             return self._all_games_cache
-        sport_dir = self.data_dir / "normalized" / self.sport
-        frames = []
-        for p in sorted(sport_dir.glob("games_*.parquet")):
-            try:
-                df = pd.read_parquet(p)
-                frames.append(df)
-            except Exception:
-                pass
-        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        if not combined.empty and "date" in combined.columns:
+        combined = self._reader.load_all_seasons(self.sport, "games")
+        if combined.empty:
+            self._all_games_cache = combined
+            return combined
+        if "date" in combined.columns:
             combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
             combined.sort_values("date", inplace=True, ignore_index=True)
         # Augment NFL games missing box-score stats from player_stats
@@ -211,11 +212,8 @@ class FootballExtractor(BaseFeatureExtractor):
         logger.info("NFL: deriving box stats from player_stats for seasons %s", seasons_to_fix)
 
         for season in seasons_to_fix:
-            ps_path = self.data_dir / "normalized" / self.sport / f"player_stats_{season}.parquet"
-            if not ps_path.exists():
-                continue
             try:
-                ps = pd.read_parquet(ps_path)
+                ps = self._reader.load(self.sport, "player_stats", season=season)
             except Exception:
                 continue
             if "game_id" not in ps.columns or "team_id" not in ps.columns:
@@ -285,7 +283,7 @@ class FootballExtractor(BaseFeatureExtractor):
             # We match by finding which abbreviation belongs to each team using team names
             name_to_abbrev: dict[str, str] = _NFL_NAME_TO_ABBREV.copy()
             # Supplement with dynamic cross-reference from any year with both data
-            _build_nfl_abbrev_map(name_to_abbrev, self.data_dir / "normalized" / self.sport)
+            _build_nfl_abbrev_map(name_to_abbrev, self.data_dir, reader=self._reader)
 
             for idx, row in games_s.iterrows():
                 gid = str(row["id"])

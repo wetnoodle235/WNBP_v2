@@ -19,10 +19,15 @@ logger = logging.getLogger(__name__)
 
 _ALL_KINDS = (
     "games", "teams", "standings", "players", "player_stats",
-    "odds", "predictions", "injuries", "news",
+    "odds", "odds_history", "odds_all", "predictions", "injuries", "news",
+    "player_props", "player_props_history", "player_props_all",
     "team_game_stats", "batter_game_stats", "pitcher_game_stats",
-    "advanced_batting", "advanced_stats", "team_stats", "transactions",
+    "advanced_batting", "advanced_stats", "team_stats", "all_stats", "transactions",
+    "coaches", "draft", "player_portal", "player_returning", "player_usage",
+    "draft_picks", "draft_positions", "draft_teams",
+    "match_events", "play_by_play", "drives", "ratings",
     "market_signals", "schedule_fatigue",
+    "market_history",
 )
 
 
@@ -534,6 +539,58 @@ class DataService:
             return self._df_to_records(df.head(limit))
 
         return self._get_cached(key, ttl, loader)
+
+    def query_cross_sport(
+        self,
+        kind: str,
+        sports: list[str],
+        *,
+        date_filter: str | None = None,
+        limit_per_sport: int | None = None,
+    ) -> list[dict]:
+        """Return records for *kind* across *sports*.
+
+        This base implementation fans out per sport in Python.
+        ``DataServiceDuckDB`` overrides this to execute a single UNION ALL query.
+        """
+        combined: list[dict] = []
+        for sport in sports:
+            try:
+                season = get_current_season(sport)
+                if kind == "games":
+                    rows: list[dict] = self.get_games(sport, season=season, date=date_filter)
+                elif kind == "teams":
+                    rows = self.get_teams(sport, season=season)
+                elif kind == "players":
+                    rows = self.get_players(sport, season=season)
+                elif kind == "news":
+                    rows = self.get_news(sport, limit=limit_per_sport or 50)
+                elif kind == "odds":
+                    rows = self.get_odds(sport, season=season)
+                    if date_filter:
+                        rows = [r for r in rows if str(r.get("date", "")).startswith(date_filter)]
+                elif kind == "injuries":
+                    rows = self.get_injuries(sport)
+                elif kind == "standings":
+                    rows = self.get_standings(sport, season=season)
+                elif kind == "predictions":
+                    rows = self.get_predictions(sport, date=date_filter)
+                elif kind == "player_stats":
+                    rows = self.get_player_stats(sport, season=season, aggregate=True)
+                elif kind == "team_stats":
+                    df = self._load_kind(sport, "team_stats", season=season)
+                    rows = self._df_to_records(df)
+                else:
+                    rows = []
+                if limit_per_sport:
+                    rows = rows[:limit_per_sport]
+                for r in rows:
+                    if not r.get("sport"):
+                        r["sport"] = sport
+                combined.extend(rows)
+            except Exception:
+                logger.debug("query_cross_sport: sport=%s kind=%s failed, skipping", sport, kind)
+        return combined
 
     # ── Inventory helpers (for meta endpoints) ────────────
 

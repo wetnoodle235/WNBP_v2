@@ -2,9 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { buildPageMetadata } from "@/lib/seo";
-import { getGames, getPredictions, getNews } from "@/lib/api";
+import { getGames, getPredictions, getNews, getSports } from "@/lib/api";
 import { isSportKey, SPORTS, type SportKey } from "@/lib/sports";
 import { getSportIcon, getSportFullName } from "@/lib/sports-config";
+import { resolveMediaUrl } from "@/lib/media";
 import { VenueVisual } from "@/components/venue";
 
 export const dynamic = "force-dynamic";
@@ -96,6 +97,10 @@ export default async function SportHubDetailPage({ params }: PageProps) {
     getPredictions(sport),
     getNews(sport, 4),
   ]);
+  const sportCatalog = (await getSports()) ?? [];
+  const leagueImage = resolveMediaUrl(
+    (sportCatalog.find((entry) => String(entry.key ?? "") === sport)?.image_url ?? null) as string | null,
+  );
 
   const theme = SPORT_THEME[sport] ?? fallbackTheme(sport);
   const topPredictions = predictions
@@ -107,6 +112,13 @@ export default async function SportHubDetailPage({ params }: PageProps) {
     <main className="sport-detail-shell" data-tone={theme.tone}>
       <section className="sport-detail-hero">
         <div className="sport-detail-badge">{getSportIcon(sport)} {SPORTS[sport].label}</div>
+        {leagueImage ? (
+          <img
+            src={leagueImage}
+            alt={`${SPORTS[sport].label} logo`}
+            style={{ width: 84, height: 84, objectFit: "contain", borderRadius: 9999, background: "rgba(255,255,255,0.92)", padding: "0.5rem" }}
+          />
+        ) : null}
         <h1>{theme.headline}</h1>
         <p>{theme.subline}</p>
         <div className="sport-detail-hero-links">

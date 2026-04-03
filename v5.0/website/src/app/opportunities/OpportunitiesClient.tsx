@@ -61,17 +61,15 @@ type SortKey = "recommendation_score" | "sport" | "recommendation_tier" | "prop_
 type SortDir = "asc" | "desc";
 const FREE_PREVIEW_LIMIT = 3;
 
-function getFriendlyProp(raw: string): { label: string; projectedText: string; playerLabel: string } {
+function getFriendlyProp(raw: string): { label: string; projectedText: string } {
   const overUnder = raw.match(/^(.*)_(over|under)_(-?\d+(?:\.\d+)?)$/i);
   const line = overUnder ? Number(overUnder[3]) : null;
   const projectedText = line !== null && Number.isFinite(line)
     ? line.toFixed(Number.isInteger(line) ? 0 : 1)
     : "—";
-  const base = overUnder ? overUnder[1]!.toLowerCase() : "";
   return {
     label: formatPropType(raw),
     projectedText,
-    playerLabel: base.startsWith("pitchr_") ? "Starting Pitcher (TBD)" : "Player (Not Provided)",
   };
 }
 
@@ -309,10 +307,6 @@ export function OpportunitiesClient({ hasPremium }: { hasPremium: boolean }) {
                   </div>
                 )}
 
-                <div style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginBottom: "0.75rem" }}>
-                  Current feed is market-level and does not yet include individual player names.
-                </div>
-
         <div style={{ marginBottom: "1rem" }}>
           <p style={{ fontSize: "0.9rem", color: "var(--color-text-muted)", margin: 0 }}>
             Player-prop recommendation rows sorted by confidence score and live momentum context.
@@ -483,12 +477,11 @@ export function OpportunitiesClient({ hasPremium }: { hasPremium: boolean }) {
                   <tr style={{ borderBottom: "2px solid var(--color-border)" }}>
                     <SortHeader k="sport">Sport</SortHeader>
                     <th style={{ padding: "0.45rem 0.5rem" }}>Matchup</th>
-                    <th style={{ padding: "0.45rem 0.5rem" }}>Player</th>
                     <th style={{ padding: "0.45rem 0.5rem" }}>Status</th>
                     <SortHeader k="recommendation_score">Score</SortHeader>
                     <SortHeader k="recommendation_tier">Tier</SortHeader>
                     <SortHeader k="prop_type">Prop Market</SortHeader>
-                    <th style={{ padding: "0.45rem 0.5rem" }}>Projected</th>
+                    <th style={{ padding: "0.45rem 0.5rem" }}>Line</th>
                     <th style={{ padding: "0.45rem 0.5rem" }}>Live</th>
                     <th style={{ padding: "0.45rem 0.5rem" }}>Detail</th>
                   </tr>
@@ -539,10 +532,6 @@ export function OpportunitiesClient({ hasPremium }: { hasPremium: boolean }) {
                           )}
                         </td>
 
-                        <td style={{ padding: "0.5rem 0.5rem", fontSize: "0.76rem", color: "var(--color-text-muted)" }}>
-                          {friendly.playerLabel}
-                        </td>
-
                         <td style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "var(--color-text-muted)" }}>
                           {row.status ?? "-"}
                         </td>
@@ -557,14 +546,12 @@ export function OpportunitiesClient({ hasPremium }: { hasPremium: boolean }) {
 
                         <td style={{ padding: "0.5rem 0.5rem" }}>
                           <div style={{ fontWeight: 600, fontSize: "0.8rem" }}>{friendly.label}</div>
-                          <div style={{ fontSize: "0.72rem", color: "var(--color-text-muted)" }}>
-                            {row.line != null ? `Line ${row.line}` : "No line"}
-                            {row.market_type ? ` · ${row.market_type}` : ""}
-                          </div>
                         </td>
 
                         <td style={{ padding: "0.5rem 0.5rem", fontWeight: 600, fontSize: "0.78rem" }}>
-                          {friendly.projectedText}
+                          {friendly.projectedText !== "—" ? (`${row.market_type === "over_under" ? "O/U " : ""}${friendly.projectedText}`) : (
+                            <span style={{ color: "var(--color-text-muted)" }}>{row.line != null ? `L ${row.line}` : "—"}</span>
+                          )}
                         </td>
 
                         <td style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem" }}>

@@ -92,6 +92,11 @@ export const SPORTS: Record<SportKey, SportDef> = {
 
 export const ALL_SPORT_KEYS = Object.keys(SPORTS) as SportKey[];
 
+// Aggregate backend routes currently do not expose a separate `pga` sport key.
+// Keep the site-level registry intact, but avoid sending unsupported keys to
+// cross-sport aggregate endpoints that reject unknown sports with HTTP 422.
+export const AGGREGATE_SPORT_KEYS = ALL_SPORT_KEYS.filter((sport) => sport !== "pga");
+
 export function isSportKey(s: string): s is SportKey {
   return s in SPORTS;
 }

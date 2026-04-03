@@ -15,9 +15,11 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
-from config import ALL_SPORTS, get_settings
+from config import ALL_SPORTS, SPORT_DEFINITIONS, get_current_season, get_settings
 from services.data_service import get_data_service
+from services.media_mirror import MediaTarget, get_media_mirror_service
 from api.routes import (
     autobet_router,
     features_router,
@@ -36,6 +38,7 @@ logger = logging.getLogger(__name__)
 INTERNAL_DOC_PATH_SUFFIXES = {
     "/advanced-stats",
     "/advanced_stats",
+    "/media/status",
     "/match-events",
     "/match_events",
     "/ratings",
@@ -186,12 +189,13 @@ def _build_docs_html(openapi_url: str, oauth2_redirect_url: str | None, base_url
         <main class=\"docs-shell\">
             <section class=\"docs-hero\">
                 <h1>SportStock API Reference</h1>
-                <p>Interactive API explorer for games, odds, standings, predictions, injuries, news, and model diagnostics.</p>
+                <p>Interactive API explorer for normalized games, odds, standings, predictions, injuries, news, and model diagnostics across 30+ sports.</p>
                 <div class=\"docs-chips\">
                     <span class=\"docs-chip\">Base URL: {base_url}</span>
                     <span class="docs-chip">Auth: localhost bypass, remote uses X-API-Key</span>
                     <span class=\"docs-chip\">Version: v5.0</span>
                     <span class=\"docs-chip\">Schema: {openapi_url}</span>
+                    <span class=\"docs-chip\">Discover: /v1/sports + /v1/meta/sports</span>
                     <span class="docs-chip">Local-only developer reference</span>
                 </div>
             </section>
@@ -201,7 +205,7 @@ def _build_docs_html(openapi_url: str, oauth2_redirect_url: str | None, base_url
                     <h2>Quick Start</h2>
                     <div>1) Generate key at <code>/auth/register</code> or dashboard</div>
                     <div>2) Click Authorize and set <code>X-API-Key</code></div>
-                    <div>3) Execute endpoints directly from this reference</div>
+                    <div>3) Start with <code>/v1/sports</code> and <code>/v1/meta/sports</code> before sport-specific routes</div>
                 </section>
                 <section class=\"docs-card\">
                     <h2>Visibility Rules</h2>
@@ -397,13 +401,40 @@ async def lifespan(app: FastAPI):
     """Startup: init auth DB, warm cache. Shutdown: cleanup."""
     import asyncio
     from auth.database import close_pool
+    from auth.subscription_lifecycle import SubscriptionLifecycleService
 
     logger.info("Initialising auth database …")
     await init_db()
-    logger.info("Warming data cache …")
-    ds = get_data_service()
-    ds.warm_cache(ALL_SPORTS)
-    logger.info("Cache warm-up complete.")
+    ds_ref: dict[str, object | None] = {"value": None}
+
+    # Warm cache without blocking startup indefinitely on large datasets.
+    # Disabled by default to avoid startup contention in multi-process/dev runs.
+    warm_task: asyncio.Task | None = None
+    warm_enabled = os.getenv("V5_WARM_CACHE_ON_STARTUP", "false").lower() in {"1", "true", "yes"}
+    warm_timeout_s = int(os.getenv("V5_WARM_CACHE_STARTUP_TIMEOUT", "15"))
+
+    def _init_and_warm_cache() -> None:
+        ds = get_data_service()
+        ds_ref["value"] = ds
+        ds.warm_cache(ALL_SPORTS)
+
+    if warm_enabled:
+        try:
+            logger.info("Warming data cache …")
+            warm_task = asyncio.create_task(asyncio.to_thread(_init_and_warm_cache))
+            await asyncio.wait_for(warm_task, timeout=warm_timeout_s)
+            logger.info("Cache warm-up complete.")
+            warm_task = None
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Cache warm-up still running after %ss; continuing startup and finishing in background.",
+                warm_timeout_s,
+            )
+        except Exception:
+            logger.exception("Cache warm-up failed; continuing without warm cache")
+            warm_task = None
+    else:
+        logger.info("Startup cache warm-up disabled (V5_WARM_CACHE_ON_STARTUP=false)")
 
     # Periodically evict stale rate-limit buckets to prevent unbounded growth.
     _rl_middleware: RateLimitMiddleware | None = None
@@ -421,18 +452,118 @@ async def lifespan(app: FastAPI):
 
     cleanup_task = asyncio.create_task(_cleanup_rate_limiter())
 
+    media_sync_task: asyncio.Task | None = None
+
+    async def _media_sync_loop() -> None:
+        interval_s = int(os.getenv("V5_MEDIA_SYNC_INTERVAL_SECONDS", "0") or "0")
+        if interval_s <= 0:
+            return
+
+        configured = (os.getenv("V5_MEDIA_SYNC_SPORTS", "") or "").strip()
+        sports = [s.strip().lower() for s in configured.split(",") if s.strip()] if configured else ALL_SPORTS
+        media = get_media_mirror_service()
+
+        logger.info("Media mirror sync loop enabled (interval=%ss, sports=%s)", interval_s, ",".join(sports))
+        while True:
+            try:
+                ds = get_data_service()
+                for sport in sports:
+                    try:
+                        season = get_current_season(sport)
+
+                        sport_meta = SPORT_DEFINITIONS.get(sport, {})
+                        league_image = sport_meta.get("image_url") or sport_meta.get("logo_url")
+                        if league_image:
+                            media.sync_target(
+                                MediaTarget(
+                                    sport=sport,
+                                    entity_type="league",
+                                    entity_id=sport,
+                                    field_name="image_url",
+                                    source_url=str(league_image),
+                                )
+                            )
+
+                        teams = ds.get_teams(sport, season=season)
+                        for team in teams:
+                            source_url = team.get("logo_url")
+                            team_id = str(team.get("id", ""))
+                            if not source_url or not team_id:
+                                continue
+                            media.sync_target(
+                                MediaTarget(
+                                    sport=sport,
+                                    entity_type="team",
+                                    entity_id=team_id,
+                                    field_name="logo_url",
+                                    source_url=str(source_url),
+                                )
+                            )
+
+                        players = ds.get_players(sport, season=season)
+                        for player in players:
+                            source_url = player.get("headshot_url")
+                            player_id = str(player.get("id", ""))
+                            if not source_url or not player_id:
+                                continue
+                            media.sync_target(
+                                MediaTarget(
+                                    sport=sport,
+                                    entity_type="player",
+                                    entity_id=player_id,
+                                    field_name="headshot_url",
+                                    source_url=str(source_url),
+                                )
+                            )
+                    except Exception:
+                        logger.exception("Media mirror sync failed for sport=%s", sport)
+            except Exception:
+                logger.exception("Media mirror sync loop iteration failed")
+
+            await asyncio.sleep(interval_s)
+
+    maybe_media_task = asyncio.create_task(_media_sync_loop())
+    media_sync_task = maybe_media_task
+
+    subscription_lifecycle_task: asyncio.Task | None = None
+
+    async def _subscription_lifecycle_loop() -> None:
+        interval_s = int(os.getenv("V5_SUBSCRIPTION_LIFECYCLE_INTERVAL_SECONDS", "3600") or "3600")
+        if interval_s <= 0:
+            return
+
+        service = SubscriptionLifecycleService()
+        logger.info("Subscription lifecycle loop enabled (interval=%ss)", interval_s)
+        while True:
+            try:
+                stats = await service.run_cycle()
+                if any(stats.values()):
+                    logger.info("Subscription lifecycle processed: %s", stats)
+            except Exception:
+                logger.exception("Subscription lifecycle loop iteration failed")
+
+            await asyncio.sleep(interval_s)
+
+    subscription_lifecycle_task = asyncio.create_task(_subscription_lifecycle_loop())
+
     # ── DuckDB deferred refresh loop ─────────────────────────────────
-    # When the auto_curated_sync pipeline writes new curated parquets and
-    # refreshes DuckDB views (in its own write connection), it drops a
-    # pending file.  This loop picks it up and reconnects the API server's
-    # read-only DuckDB connection so new views become visible immediately.
+    # When the auto_curated_sync pipeline runs externally and can't acquire
+    # the DuckDB write lock (because this server holds it), it writes a
+    # `.duckdb_refresh_pending.json` file.  This loop picks it up and
+    # refreshes the affected sport views inside the server's connection.
     duckdb_refresh_task: asyncio.Task | None = None
 
     async def _duckdb_deferred_refresh_loop() -> None:
+        """Poll for deferred DuckDB refresh requests from the auto-sync pipeline.
+
+        When the sync pipeline writes new curated parquets and refreshes DuckDB
+        views (in its own write connection), it drops a pending file.  This loop
+        picks it up and tells the API server's DataServiceDuckDB to reconnect
+        in read-only mode so new views become visible immediately.
+        """
         from pathlib import Path as _Path
         import json as _json
 
-        settings = get_settings()
         poll_s = int(os.getenv("V5_DUCKDB_REFRESH_POLL_SECONDS", "30"))
         if poll_s <= 0:
             return
@@ -450,8 +581,8 @@ async def lifespan(app: FastAPI):
 
                         def _do_refresh():
                             # The sync pipeline already wrote views in its own
-                            # write connection.  We just reconnect the API
-                            # server's read-only connection to see them.
+                            # write connection.  We just need to reconnect the
+                            # API server's read-only connection to see them.
                             ds = get_data_service()
                             if hasattr(ds, "reconnect"):
                                 ds.reconnect()
@@ -473,6 +604,18 @@ async def lifespan(app: FastAPI):
         await cleanup_task
     except asyncio.CancelledError:
         pass
+    if media_sync_task is not None and not media_sync_task.done():
+        media_sync_task.cancel()
+        try:
+            await media_sync_task
+        except asyncio.CancelledError:
+            pass
+    if subscription_lifecycle_task is not None and not subscription_lifecycle_task.done():
+        subscription_lifecycle_task.cancel()
+        try:
+            await subscription_lifecycle_task
+        except asyncio.CancelledError:
+            pass
     if duckdb_refresh_task is not None and not duckdb_refresh_task.done():
         duckdb_refresh_task.cancel()
         try:
@@ -480,7 +623,18 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     logger.info("Shutting down — clearing cache and closing DB pool.")
-    ds.clear_cache()
+    ds = ds_ref.get("value")
+    if ds is not None:
+        try:
+            ds.clear_cache()
+        except Exception:
+            logger.exception("Data service cache clear failed during shutdown")
+    if warm_task is not None and not warm_task.done():
+        warm_task.cancel()
+        try:
+            await warm_task
+        except asyncio.CancelledError:
+            pass
     await close_pool()
 
 
@@ -492,7 +646,7 @@ def create_app() -> FastAPI:
         version="5.0.0",
         description=(
             "Professional sports data API providing real-time and historical data "
-            "across 10+ sports. Includes games, predictions, odds, player stats, "
+            "across 30+ sports. Includes games, predictions, odds, player stats, "
             "standings, news, and ML-powered insights.\n\n"
             "## Data Coverage\n"
             "- **Games**: schedules, live scores, final results, venues, broadcasts\n"
@@ -503,9 +657,13 @@ def create_app() -> FastAPI:
             "- **Player Stats**: per-game box scores with sport-specific stat categories\n"
             "- **Injuries & News**: real-time injury reports and news articles\n"
             "- **Features**: ML feature datasets for data scientists (pro tier+)\n\n"
+            "## Discovery Endpoints\n"
+            "- **/v1/sports**: live catalog of available sports\n"
+            "- **/v1/meta/sports**: per-sport endpoint capability map\n"
+            "- **/v1/health**: cache stats, uptime, and data freshness\n\n"
             "## Supported Sports\n"
-            "NBA, NFL, MLB, NHL, NCAA Football, NCAA Basketball, Soccer (EPL/MLS/Champions League), "
-            "Tennis, Golf, MMA/UFC, F1, and more.\n\n"
+            "NBA, NFL, MLB, NHL, NCAA Football, NCAA Basketball, major soccer leagues "
+            "(EPL, LaLiga, Bundesliga, Serie A), Tennis tours, Golf, MMA/UFC, F1, esports, and more.\n\n"
             "## Authentication\n"
             "Register at /auth/register for a free API key. "
             "Pass your key via `X-API-Key` header or `?api_key=` query parameter.\n\n"
@@ -579,6 +737,11 @@ def create_app() -> FastAPI:
     app.include_router(paper_router)
     app.include_router(stripe_router)
     app.include_router(autobet_router)
+
+    # Serve mirrored media assets as static files.
+    media_dir = settings.media_dir
+    media_dir.mkdir(parents=True, exist_ok=True)
+    app.mount(settings.media_public_base_path, StaticFiles(directory=str(media_dir)), name="media")
 
     # ── Root health check ─────────────────────────────────
     @app.get(

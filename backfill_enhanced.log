@@ -1,0 +1,439 @@
+16:08:27.667 [INFO ] V5.0 Importer CLI starting…
+16:08:27.670 [INFO ] Data directory: /home/derek/Documents/stock/v5.0/data
+16:08:27.670 [INFO ] Seasons: 2020, 2021, 2022, 2023, 2024, 2025
+16:08:27.708 [INFO ] [registry] Running 10 provider(s) in parallel: nflverse, wikipedia, reddit, googlenews, rssnews, ticketmaster, youtube, draftkings, actionnetwork, openmeteo
+16:08:27.920 [INFO ] [actionnetwork/nfl] trends — 0 games with bet percentages
+16:08:27.924 [INFO ] [wikipedia/nfl] leagues — Saved "National Football League"
+16:08:27.971 [INFO ] [ticketmaster/nfl] events — 3 events
+16:08:28.489 [INFO ] [nflverse/nfl] schedules — 269 games
+16:08:28.502 [INFO ] [openmeteo/nfl] game_weather — 0 files written
+16:08:28.503 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:28.510 [INFO ] [rssnews/nfl] news — bbc: 50 articles
+16:08:28.520 [INFO ] [ticketmaster/nfl] events — 3 events
+16:08:28.521 [INFO ] [openmeteo/nfl] game_weather — 0 files written
+16:08:28.523 [INFO ] [youtube/nfl] highlights — 0 videos
+16:08:28.536 [INFO ] [googlenews/nfl] news — "NFL football": 113 articles
+16:08:28.538 [INFO ] [openmeteo/nfl] game_weather — 0 files written
+16:08:28.550 [INFO ] [googlenews/nfl] news — "NFL football": 113 articles
+16:08:28.555 [INFO ] [openmeteo/nfl] game_weather — 0 files written
+16:08:28.565 [INFO ] [openmeteo/nfl] game_weather — 0 files written
+16:08:28.575 [INFO ] [openmeteo/nfl] game_weather — 0 files written
+16:08:28.825 [INFO ] [nflverse/nfl] rosters — 3068 players
+16:08:28.837 [INFO ] [ticketmaster/nfl] events — 3 events
+16:08:28.856 [INFO ] [googlenews/nfl] news — "NFL football": 113 articles
+16:08:28.865 [INFO ] [reddit/nfl] posts — r/nfl (new): 100 posts
+16:08:28.977 [INFO ] [ticketmaster/nfl] events — 3 events
+16:08:29.005 [INFO ] [rssnews/nfl] news — yahoo: 50 articles
+16:08:29.027 [INFO ] [rssnews/nfl] news — bbc: 50 articles
+16:08:29.080 [INFO ] [ticketmaster/nfl] events — 3 events
+16:08:29.102 [INFO ] [youtube/nfl] highlights — 0 videos
+16:08:29.213 [INFO ] [ticketmaster/nfl] events — 3 events
+16:08:29.611 [INFO ] [googlenews/nfl] news — "NFL football": 113 articles
+16:08:29.622 [INFO ] [draftkings] No events found for nfl/2020
+16:08:29.687 [INFO ] [rssnews/nfl] news — yahoo: 50 articles
+16:08:29.689 [INFO ] [wikipedia/nfl] teams — 15/15 team pages saved
+16:08:29.721 [INFO ] [ticketmaster/nba] events — 90 events
+16:08:29.725 [INFO ] [wikipedia/nfl] leagues — Saved "National Football League"
+16:08:29.752 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:29.900 [INFO ] [googlenews/nfl] news — "NFL football": 113 articles
+16:08:30.285 [INFO ] [nflverse/nfl] player_stats — 5447 stat rows
+16:08:30.292 [INFO ] [youtube/nfl] highlights — 0 videos
+16:08:30.307 [INFO ] [rssnews/nfl] news — bbc: 50 articles
+16:08:30.611 [INFO ] [reddit/nfl] posts — r/fantasyfootball (new): 100 posts
+16:08:32.035 [INFO ] [nflverse/nfl] players — 24375 players
+16:08:32.061 [INFO ] [googlenews/nfl] news — "NFL football": 113 articles
+16:08:32.078 [INFO ] [rssnews/nfl] news — yahoo: 50 articles
+16:08:32.104 [INFO ] [actionnetwork/nfl] trends — 0 games with bet percentages
+16:08:32.520 [INFO ] [nflverse/nfl] schedules — 285 games
+16:08:32.535 [INFO ] [draftkings] No events found for nfl/2021
+16:08:32.538 [INFO ] [rssnews/nfl] news — bbc: 50 articles
+16:08:32.539 [INFO ] [youtube/nfl] highlights — 0 videos
+16:08:32.556 [INFO ] [ticketmaster/nba] events — 90 events
+16:08:32.593 [INFO ] [googlenews/nba] news — "NBA basketball": 109 articles
+16:08:32.609 [INFO ] [googlenews/nba] news — "NBA basketball": 109 articles
+16:08:32.656 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:32.879 [INFO ] [nflverse/nfl] rosters — 2961 players
+16:08:32.880 [INFO ] [wikipedia/nfl] teams — 15/15 team pages saved
+16:08:32.894 [INFO ] [rssnews/nfl] news — yahoo: 50 articles
+16:08:32.905 [INFO ] [reddit/nfl] posts — r/nfl (new): 100 posts
+16:08:32.913 [INFO ] [wikipedia/nfl] leagues — Saved "National Football League"
+16:08:33.093 [INFO ] [ticketmaster/nba] events — 90 events
+16:08:33.123 [INFO ] [googlenews/nba] news — "NBA basketball": 109 articles
+16:08:33.148 [INFO ] [rssnews/nfl] news — bbc: 50 articles
+16:08:33.451 [INFO ] [youtube/nfl] highlights — 0 videos
+16:08:33.630 [INFO ] [ticketmaster/nba] events — 90 events
+16:08:33.665 [INFO ] [googlenews/nba] news — "NBA basketball": 109 articles
+16:08:33.769 [INFO ] [rssnews/nfl] news — yahoo: 50 articles
+16:08:33.777 [INFO ] [draftkings] No events found for nfl/2022
+16:08:33.878 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:34.171 [INFO ] [ticketmaster/nba] events — 90 events
+16:08:34.186 [INFO ] [googlenews/nba] news — "NBA basketball": 109 articles
+16:08:34.198 [INFO ] [rssnews/nfl] news — bbc: 50 articles
+16:08:34.643 [INFO ] [nflverse/nfl] player_stats — 5698 stat rows
+16:08:34.648 [INFO ] [youtube/nfl] highlights — 0 videos
+16:08:34.675 [INFO ] [wikipedia/nfl] teams — 15/15 team pages saved
+16:08:34.710 [INFO ] [wikipedia/nfl] leagues — Saved "National Football League"
+16:08:34.720 [INFO ] [googlenews/nba] news — "NBA basketball": 109 articles
+16:08:36.198 [INFO ] [nflverse/nfl] players — 24375 players
+16:08:36.224 [INFO ] [rssnews/nfl] news — yahoo: 50 articles
+16:08:36.240 [INFO ] [reddit/nfl] posts — r/fantasyfootball (new): 100 posts
+16:08:36.637 [INFO ] [nflverse/nfl] schedules — 284 games
+16:08:36.642 [INFO ] [draftkings] No events found for nfl/2023
+16:08:36.654 [INFO ] [actionnetwork/nfl] trends — 0 games with bet percentages
+16:08:36.673 [INFO ] [ticketmaster/nba] events — 90 events
+16:08:36.703 [INFO ] [youtube/nba] highlights — 25 videos
+16:08:36.762 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:36.781 [INFO ] [rssnews/nba] news — yahoo: 50 articles
+16:08:36.798 [INFO ] [googlenews/mlb] news — "MLB baseball": 111 articles
+16:08:36.812 [INFO ] [googlenews/mlb] news — "MLB baseball": 111 articles
+16:08:36.983 [INFO ] [nflverse/nfl] rosters — 3134 players
+16:08:36.995 [INFO ] [rssnews/nba] news — yahoo: 50 articles
+16:08:37.076 [INFO ] [reddit/nfl] posts — r/nfl (new): 100 posts
+16:08:37.098 [INFO ] [openmeteo/mlb] game_weather — 15 files written
+16:08:37.274 [INFO ] [googlenews/mlb] news — "MLB baseball": 111 articles
+16:08:37.409 [INFO ] [ticketmaster/mlb] events — 200 events
+16:08:37.456 [INFO ] [rssnews/nba] news — yahoo: 50 articles
+16:08:37.593 [INFO ] [youtube/nba] highlights — 25 videos
+16:08:37.726 [INFO ] [wikipedia/nfl] teams — 15/15 team pages saved
+16:08:37.759 [INFO ] [wikipedia/nfl] leagues — Saved "National Football League"
+16:08:37.872 [INFO ] [googlenews/mlb] news — "MLB baseball": 111 articles
+16:08:37.878 [INFO ] [draftkings] No events found for nfl/2024
+16:08:37.973 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:37.998 [INFO ] [rssnews/nba] news — yahoo: 50 articles
+16:08:38.324 [INFO ] [googlenews/mlb] news — "MLB baseball": 111 articles
+16:08:38.779 [INFO ] [nflverse/nfl] player_stats — 5631 stat rows
+16:08:38.789 [INFO ] [rssnews/nba] news — yahoo: 50 articles
+16:08:38.794 [INFO ] [youtube/nba] highlights — 25 videos
+16:08:38.835 [INFO ] [ticketmaster/mlb] events — 200 events
+16:08:40.206 [INFO ] [nflverse/nfl] players — 24375 players
+16:08:40.236 [INFO ] [googlenews/mlb] news — "MLB baseball": 111 articles
+16:08:40.243 [INFO ] [reddit/nfl] posts — r/fantasyfootball (new): 100 posts
+16:08:40.257 [INFO ] [actionnetwork/nfl] trends — 0 games with bet percentages
+16:08:40.290 [INFO ] [ticketmaster/mlb] events — 200 events
+16:08:40.306 [INFO ] [draftkings] No events found for nfl/2025
+16:08:40.700 [INFO ] [nflverse/nfl] schedules — 285 games
+16:08:40.714 [INFO ] [rssnews/nba] news — yahoo: 50 articles
+16:08:40.719 [INFO ] [openmeteo/mlb] game_weather — 15 files written
+16:08:40.720 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:40.722 [INFO ] [youtube/nba] highlights — 25 videos
+16:08:40.729 [INFO ] [googlenews/nhl] news — "NHL hockey": 100 articles
+16:08:40.751 [INFO ] [wikipedia/nfl] teams — 15/15 team pages saved
+16:08:40.752 [INFO ] [wikipedia/nfl] teams — 0/15 team pages saved
+16:08:40.784 [INFO ] [wikipedia/nba] leagues — Saved "National Basketball Association"
+16:08:40.864 [INFO ] [rssnews/mlb] news — yahoo: 50 articles
+16:08:41.126 [INFO ] [nflverse/nfl] rosters — 3090 players
+16:08:41.233 [INFO ] [ticketmaster/mlb] events — 200 events
+16:08:41.270 [INFO ] [googlenews/nhl] news — "NHL hockey": 100 articles
+16:08:41.281 [INFO ] [googlenews/nhl] news — "NHL hockey": 100 articles
+16:08:41.415 [INFO ] [rssnews/mlb] news — yahoo: 50 articles
+16:08:41.523 [INFO ] [reddit/nfl] posts — r/nfl (new): 100 posts
+16:08:41.633 [INFO ] [youtube/nba] highlights — 25 videos
+16:08:41.821 [INFO ] [draftkings] No events found for nba/2020
+16:08:41.895 [INFO ] [rssnews/mlb] news — yahoo: 50 articles
+16:08:41.943 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:42.099 [INFO ] [ticketmaster/mlb] events — 200 events
+16:08:42.328 [INFO ] [googlenews/nhl] news — "NHL hockey": 100 articles
+16:08:42.348 [INFO ] [googlenews/nhl] news — "NHL hockey": 100 articles
+16:08:42.408 [INFO ] [openmeteo/mlb] game_weather — 15 files written
+16:08:42.434 [INFO ] [wikipedia/nba] teams — 15/15 team pages saved
+16:08:42.468 [INFO ] [wikipedia/nba] leagues — Saved "National Basketball Association"
+16:08:42.484 [INFO ] [rssnews/mlb] news — yahoo: 50 articles
+16:08:42.900 [INFO ] [nflverse/nfl] player_stats — 5653 stat rows
+16:08:42.910 [INFO ] [youtube/nba] highlights — 25 videos
+16:08:42.952 [INFO ] [ticketmaster/mlb] events — 200 events
+16:08:44.297 [INFO ] [nflverse/nfl] players — 24375 players
+16:08:44.317 [INFO ] [rssnews/mlb] news — yahoo: 50 articles
+16:08:44.322 [INFO ] [draftkings] No events found for nba/2021
+16:08:44.331 [INFO ] [googlenews/nhl] news — "NHL hockey": 100 articles
+16:08:44.340 [INFO ] [reddit/nfl] posts — r/fantasyfootball (new): 100 posts
+16:08:44.353 [INFO ] [actionnetwork/nfl] trends — 0 games with bet percentages
+16:08:44.378 [INFO ] [ticketmaster/nhl] events — 107 events
+16:08:44.859 [INFO ] [nflverse/nfl] schedules — 285 games
+16:08:44.871 [INFO ] [rssnews/mlb] news — yahoo: 50 articles
+16:08:44.875 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:44.879 [INFO ] [youtube/mlb] highlights — 25 videos
+16:08:44.913 [INFO ] [ticketmaster/nhl] events — 107 events
+16:08:44.944 [INFO ] [googlenews/ncaaf] news — "NCAA college football": 102 articles
+16:08:45.009 [INFO ] [rssnews/nhl] news — yahoo: 50 articles
+16:08:45.289 [INFO ] [nflverse/nfl] rosters — 3137 players
+16:08:45.363 [INFO ] [googlenews/ncaaf] news — "NCAA college football": 102 articles
+16:08:45.377 [INFO ] [googlenews/ncaaf] news — "NCAA college football": 102 articles
+16:08:45.446 [INFO ] [wikipedia/nba] teams — 15/15 team pages saved
+16:08:45.479 [INFO ] [wikipedia/nba] leagues — Saved "National Basketball Association"
+16:08:45.516 [INFO ] [rssnews/nhl] news — yahoo: 50 articles
+16:08:45.626 [INFO ] [youtube/mlb] highlights — 25 videos
+16:08:45.690 [INFO ] [ticketmaster/nhl] events — 107 events
+16:08:46.033 [INFO ] [draftkings] No events found for nba/2022
+16:08:46.084 [INFO ] [rssnews/nhl] news — yahoo: 50 articles
+16:08:46.151 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:46.206 [INFO ] [reddit/nfl] posts — r/nfl (new): 100 posts
+16:08:46.317 [INFO ] [openmeteo/mlb] game_weather — 15 files written
+16:08:46.391 [INFO ] [ticketmaster/nhl] events — 107 events
+16:08:46.415 [INFO ] [googlenews/ncaaf] news — "NCAA college football": 102 articles
+16:08:46.428 [INFO ] [googlenews/ncaaf] news — "NCAA college football": 102 articles
+16:08:46.572 [INFO ] [rssnews/nhl] news — yahoo: 50 articles
+16:08:46.766 [INFO ] [youtube/mlb] highlights — 25 videos
+16:08:47.068 [INFO ] [ticketmaster/nhl] events — 107 events
+16:08:47.088 [INFO ] [rssnews/nhl] news — yahoo: 50 articles
+16:08:47.134 [INFO ] [wikipedia/nba] teams — 15/15 team pages saved
+16:08:47.168 [INFO ] [wikipedia/nba] leagues — Saved "National Basketball Association"
+16:08:47.248 [INFO ] [draftkings] No events found for nba/2023
+16:08:47.383 [INFO ] [actionnetwork/nfl] trends — 0 games with bet percentages
+16:08:47.386 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:47.476 [INFO ] [googlenews/ncaaf] news — "NCAA college football": 102 articles
+16:08:47.617 [INFO ] [rssnews/nhl] news — yahoo: 50 articles
+16:08:47.692 [INFO ] [ticketmaster/nhl] events — 107 events
+16:08:49.048 [INFO ] [nflverse/nfl] players — 24375 players
+16:08:49.048 [INFO ] [nflverse] Done: 19 files, ⚠ 1 errors, 21.3s
+16:08:49.055 [INFO ] [ticketmaster/ncaaf] events — 1 events
+16:08:49.057 [INFO ] [youtube/mlb] highlights — 25 videos
+16:08:49.074 [INFO ] [googlenews/ncaab] news — "NCAA college basketball": 102 articles
+16:08:49.080 [INFO ] [reddit/nfl] posts — r/fantasyfootball (new): 100 posts
+16:08:49.091 [INFO ] [googlenews/ncaab] news — "NCAA college basketball": 102 articles
+16:08:49.103 [INFO ] [googlenews/ncaab] news — "NCAA college basketball": 102 articles
+16:08:49.146 [INFO ] [draftkings] No events found for nba/2024
+16:08:49.159 [INFO ] [ticketmaster/ncaaf] events — 1 events
+16:08:49.227 [INFO ] [rssnews/ncaaf] news — yahoo: 50 articles
+16:08:49.256 [INFO ] [openmeteo/mlb] game_weather — 15 files written
+16:08:49.261 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:49.300 [INFO ] [ticketmaster/ncaaf] events — 1 events
+16:08:49.368 [INFO ] [rssnews/ncaaf] news — yahoo: 50 articles
+16:08:49.388 [INFO ] [wikipedia/nba] teams — 15/15 team pages saved
+16:08:49.454 [INFO ] [youtube/mlb] highlights — 25 videos
+16:08:49.458 [INFO ] [ticketmaster/ncaaf] events — 1 events
+16:08:49.582 [INFO ] [ticketmaster/ncaaf] events — 1 events
+16:08:49.703 [INFO ] [ticketmaster/ncaaf] events — 1 events
+16:08:49.841 [INFO ] [reddit/nfl] posts — r/nfl (new): 100 posts
+16:08:50.134 [INFO ] [wikipedia/nba] leagues — Saved "National Basketball Association"
+16:08:50.151 [INFO ] [googlenews/ncaab] news — "NCAA college basketball": 102 articles
+16:08:50.173 [INFO ] [googlenews/ncaab] news — "NCAA college basketball": 102 articles
+16:08:50.256 [INFO ] [rssnews/ncaaf] news — yahoo: 50 articles
+16:08:50.358 [INFO ] [draftkings] No events found for nba/2025
+16:08:50.403 [INFO ] [rssnews/ncaaf] news — yahoo: 50 articles
+16:08:50.407 [INFO ] [ticketmaster/ncaab] events — 5 events
+16:08:50.446 [INFO ] [actionnetwork/nba] trends — 0 games with bet percentages
+16:08:50.479 [INFO ] [youtube/mlb] highlights — 25 videos
+16:08:50.491 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:50.532 [INFO ] [ticketmaster/ncaab] events — 5 events
+16:08:50.638 [INFO ] [ticketmaster/ncaab] events — 5 events
+16:08:50.757 [INFO ] [ticketmaster/ncaab] events — 5 events
+16:08:50.858 [INFO ] [ticketmaster/ncaab] events — 5 events
+16:08:50.895 [INFO ] [openmeteo/mlb] game_weather — 15 files written
+16:08:50.944 [INFO ] [openmeteo/ncaaf] game_weather — 0 files written
+16:08:51.024 [INFO ] [openmeteo/ncaaf] game_weather — 0 files written
+16:08:51.127 [INFO ] [openmeteo/ncaaf] game_weather — 0 files written
+16:08:51.200 [INFO ] [googlenews/ncaab] news — "NCAA college basketball": 102 articles
+16:08:51.201 [INFO ] [googlenews] Done: 36 files, ✓ clean, 23.5s
+16:08:51.239 [INFO ] [openmeteo/ncaaf] game_weather — 0 files written
+16:08:51.262 [INFO ] [ticketmaster/ncaab] events — 5 events
+16:08:51.262 [INFO ] [ticketmaster] Done: 36 files, ✓ clean, 23.6s
+16:08:51.314 [INFO ] [rssnews/ncaaf] news — yahoo: 50 articles
+16:08:51.340 [INFO ] [openmeteo/ncaaf] game_weather — 0 files written
+16:08:51.357 [INFO ] [wikipedia/nba] teams — 15/15 team pages saved
+16:08:51.358 [INFO ] [wikipedia/nba] teams — 0/15 team pages saved
+16:08:51.368 [INFO ] [youtube/nhl] highlights — 0 videos
+16:08:51.391 [INFO ] [wikipedia/mlb] leagues — Saved "Major League Baseball"
+16:08:51.441 [INFO ] [openmeteo/ncaaf] game_weather — 0 files written
+16:08:51.442 [INFO ] [openmeteo] Done: 90 files, ✓ clean, 23.7s
+16:08:51.472 [INFO ] [rssnews/ncaaf] news — yahoo: 50 articles
+16:08:51.588 [INFO ] [draftkings] No events found for mlb/2020
+16:08:51.704 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:52.048 [INFO ] [reddit/nfl] posts — r/fantasyfootball (new): 100 posts
+16:08:52.360 [INFO ] [rssnews/ncaab] news — yahoo: 50 articles
+16:08:52.478 [INFO ] [rssnews/ncaab] news — yahoo: 50 articles
+16:08:52.509 [INFO ] [youtube/nhl] highlights — 0 videos
+16:08:52.512 [INFO ] [wikipedia/mlb] teams — 12/12 team pages saved
+16:08:52.546 [INFO ] [wikipedia/mlb] leagues — Saved "Major League Baseball"
+16:08:53.017 [INFO ] [draftkings] No events found for mlb/2021
+16:08:53.348 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:53.419 [INFO ] [rssnews/ncaab] news — yahoo: 50 articles
+16:08:53.504 [INFO ] [actionnetwork/nba] trends — 0 games with bet percentages
+16:08:53.539 [INFO ] [youtube/nhl] highlights — 0 videos
+16:08:53.912 [INFO ] [rssnews/ncaab] news — yahoo: 50 articles
+16:08:54.213 [INFO ] [reddit/nba] posts — r/nba (new): 100 posts
+16:08:54.377 [INFO ] [wikipedia/mlb] teams — 12/12 team pages saved
+16:08:54.410 [INFO ] [wikipedia/mlb] leagues — Saved "Major League Baseball"
+16:08:54.449 [INFO ] [draftkings] No events found for mlb/2022
+16:08:54.482 [INFO ] [rssnews/ncaab] news — yahoo: 50 articles
+16:08:54.571 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:54.587 [INFO ] [youtube/nhl] highlights — 0 videos
+16:08:54.646 [INFO ] [rssnews/ncaab] news — yahoo: 50 articles
+16:08:54.646 [INFO ] [rssnews] Done: 42 files, ✓ clean, 26.9s
+16:08:55.516 [INFO ] [wikipedia/mlb] teams — 12/12 team pages saved
+16:08:55.550 [INFO ] [wikipedia/mlb] leagues — Saved "Major League Baseball"
+16:08:55.574 [INFO ] [youtube/nhl] highlights — 0 videos
+16:08:55.668 [INFO ] [draftkings] No events found for mlb/2023
+16:08:55.788 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:56.546 [INFO ] [actionnetwork/nba] trends — 0 games with bet percentages
+16:08:56.583 [INFO ] [reddit/nba] posts — r/nbadiscussion (new): 100 posts
+16:08:56.685 [INFO ] [wikipedia/mlb] teams — 12/12 team pages saved
+16:08:56.701 [INFO ] [youtube/nhl] highlights — 0 videos
+16:08:56.718 [INFO ] [wikipedia/mlb] leagues — Saved "Major League Baseball"
+16:08:56.884 [INFO ] [draftkings] No events found for mlb/2024
+16:08:57.000 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:57.840 [INFO ] [youtube/ncaaf] highlights — 25 videos
+16:08:58.096 [INFO ] [draftkings] No events found for mlb/2025
+16:08:58.221 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:58.547 [INFO ] [wikipedia/mlb] teams — 12/12 team pages saved
+16:08:58.547 [INFO ] [wikipedia/mlb] teams — 0/12 team pages saved
+16:08:58.582 [INFO ] [wikipedia/nhl] leagues — Saved "National Hockey League"
+16:08:58.629 [INFO ] [reddit/nba] posts — r/nba (new): 100 posts
+16:08:58.939 [INFO ] [youtube/ncaaf] highlights — 25 videos
+16:08:59.326 [INFO ] [draftkings] No events found for nhl/2020
+16:08:59.450 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:08:59.606 [INFO ] [actionnetwork/nba] trends — 0 games with bet percentages
+16:08:59.674 [INFO ] [wikipedia/nhl] teams — 11/11 team pages saved
+16:08:59.707 [INFO ] [wikipedia/nhl] leagues — Saved "National Hockey League"
+16:08:59.965 [INFO ] [youtube/ncaaf] highlights — 25 videos
+16:09:00.549 [INFO ] [draftkings] No events found for nhl/2021
+16:09:00.675 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:00.777 [INFO ] [reddit/nba] posts — r/nbadiscussion (new): 100 posts
+16:09:00.780 [INFO ] [wikipedia/nhl] teams — 11/11 team pages saved
+16:09:00.813 [INFO ] [wikipedia/nhl] leagues — Saved "National Hockey League"
+16:09:01.008 [INFO ] [youtube/ncaaf] highlights — 25 videos
+16:09:01.787 [INFO ] [draftkings] No events found for nhl/2022
+16:09:01.886 [INFO ] [wikipedia/nhl] teams — 11/11 team pages saved
+16:09:01.901 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:01.919 [INFO ] [wikipedia/nhl] leagues — Saved "National Hockey League"
+16:09:01.961 [INFO ] [youtube/ncaaf] highlights — 25 videos
+16:09:02.334 [INFO ] [reddit/nba] posts — r/nba (new): 100 posts
+16:09:02.657 [INFO ] [actionnetwork/nba] trends — 0 games with bet percentages
+16:09:03.001 [INFO ] [wikipedia/nhl] teams — 11/11 team pages saved
+16:09:03.003 [INFO ] [draftkings] No events found for nhl/2023
+16:09:03.034 [INFO ] [wikipedia/nhl] leagues — Saved "National Hockey League"
+16:09:03.121 [INFO ] [youtube/ncaaf] highlights — 25 videos
+16:09:03.127 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:04.072 [INFO ] [youtube/ncaab] highlights — 25 videos
+16:09:04.226 [INFO ] [draftkings] No events found for nhl/2024
+16:09:04.479 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:04.611 [INFO ] [reddit/nba] posts — r/nbadiscussion (new): 100 posts
+16:09:04.840 [INFO ] [wikipedia/nhl] teams — 11/11 team pages saved
+16:09:04.840 [INFO ] [wikipedia/nhl] teams — 0/11 team pages saved
+16:09:05.361 [INFO ] [youtube/ncaab] highlights — 25 videos
+16:09:05.424 [WARN ] [wikipedia] Attempt 1/2 failed: HTTP 404: {"status":404,"type":"Internal error"} — retrying in 1000ms
+16:09:05.575 [INFO ] [draftkings] No events found for nhl/2025
+16:09:05.704 [INFO ] [actionnetwork/nba] trends — 0 games with bet percentages
+16:09:05.718 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:06.292 [INFO ] [youtube/ncaab] highlights — 25 videos
+16:09:06.456 [INFO ] [wikipedia/ncaaf] teams — 0/0 team pages saved
+16:09:06.556 [WARN ] [wikipedia] Attempt 1/2 failed: HTTP 404: {"status":404,"type":"Internal error"} — retrying in 1000ms
+16:09:06.569 [INFO ] [reddit/nba] posts — r/nba (new): 100 posts
+16:09:06.833 [INFO ] [draftkings] No events found for ncaaf/2020
+16:09:06.952 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:07.454 [INFO ] [youtube/ncaab] highlights — 25 videos
+16:09:07.588 [INFO ] [wikipedia/ncaaf] teams — 0/0 team pages saved
+16:09:07.619 [WARN ] [wikipedia] Attempt 1/2 failed: HTTP 404: {"status":404,"type":"Internal error"} — retrying in 1000ms
+16:09:08.061 [INFO ] [draftkings] No events found for ncaaf/2021
+16:09:08.175 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:08.404 [INFO ] [youtube/ncaab] highlights — 25 videos
+16:09:08.658 [INFO ] [wikipedia/ncaaf] teams — 0/0 team pages saved
+16:09:08.691 [WARN ] [wikipedia] Attempt 1/2 failed: HTTP 404: {"status":404,"type":"Internal error"} — retrying in 1000ms
+16:09:08.777 [INFO ] [actionnetwork/mlb] trends — 0 games with bet percentages
+16:09:08.995 [INFO ] [reddit/nba] posts — r/nbadiscussion (new): 100 posts
+16:09:09.281 [INFO ] [draftkings] No events found for ncaaf/2022
+16:09:09.415 [INFO ] [youtube/ncaab] highlights — 25 videos
+16:09:09.415 [INFO ] [youtube] Done: 36 files, ✓ clean, 41.7s
+16:09:09.528 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:09.721 [INFO ] [wikipedia/ncaaf] teams — 0/0 team pages saved
+16:09:09.753 [WARN ] [wikipedia] Attempt 1/2 failed: HTTP 404: {"status":404,"type":"Internal error"} — retrying in 1000ms
+16:09:10.621 [INFO ] [draftkings] No events found for ncaaf/2023
+16:09:10.658 [INFO ] [reddit/nba] posts — r/nba (new): 100 posts
+16:09:10.740 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:10.785 [INFO ] [wikipedia/ncaaf] teams — 0/0 team pages saved
+16:09:10.816 [WARN ] [wikipedia] Attempt 1/2 failed: HTTP 404: {"status":404,"type":"Internal error"} — retrying in 1000ms
+16:09:11.825 [INFO ] [actionnetwork/mlb] trends — 0 games with bet percentages
+16:09:11.834 [INFO ] [draftkings] No events found for ncaaf/2024
+16:09:11.858 [INFO ] [wikipedia/ncaaf] teams — 0/0 team pages saved
+16:09:11.957 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:12.043 [INFO ] [wikipedia/ncaab] leagues — Saved "NCAA Division I men's basketball tournament"
+16:09:12.043 [INFO ] [wikipedia/ncaab] teams — 0/0 team pages saved
+16:09:12.077 [INFO ] [wikipedia/ncaab] leagues — Saved "NCAA Division I men's basketball tournament"
+16:09:12.077 [INFO ] [wikipedia/ncaab] teams — 0/0 team pages saved
+16:09:12.111 [INFO ] [wikipedia/ncaab] leagues — Saved "NCAA Division I men's basketball tournament"
+16:09:12.111 [INFO ] [wikipedia/ncaab] teams — 0/0 team pages saved
+16:09:12.144 [INFO ] [wikipedia/ncaab] leagues — Saved "NCAA Division I men's basketball tournament"
+16:09:12.145 [INFO ] [wikipedia/ncaab] teams — 0/0 team pages saved
+16:09:12.189 [INFO ] [wikipedia/ncaab] leagues — Saved "NCAA Division I men's basketball tournament"
+16:09:12.189 [INFO ] [wikipedia/ncaab] teams — 0/0 team pages saved
+16:09:12.223 [INFO ] [wikipedia/ncaab] leagues — Saved "NCAA Division I men's basketball tournament"
+16:09:12.223 [INFO ] [wikipedia/ncaab] teams — 0/0 team pages saved
+16:09:12.223 [INFO ] [wikipedia] Done: 291 files, ⚠ 6 errors, 44.5s
+16:09:12.789 [INFO ] [reddit/nba] posts — r/nbadiscussion (new): 100 posts
+16:09:13.056 [INFO ] [draftkings] No events found for ncaaf/2025
+16:09:13.179 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:14.279 [INFO ] [draftkings] No events found for ncaab/2020
+16:09:14.412 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:14.738 [INFO ] [reddit/nba] posts — r/nba (new): 100 posts
+16:09:14.866 [INFO ] [actionnetwork/mlb] trends — 0 games with bet percentages
+16:09:15.510 [INFO ] [draftkings] No events found for ncaab/2021
+16:09:15.617 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:16.716 [INFO ] [draftkings] No events found for ncaab/2022
+16:09:16.841 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:16.889 [INFO ] [reddit/nba] posts — r/nbadiscussion (new): 100 posts
+16:09:17.919 [INFO ] [actionnetwork/mlb] trends — 0 games with bet percentages
+16:09:17.938 [INFO ] [draftkings] No events found for ncaab/2023
+16:09:18.077 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:19.181 [INFO ] [draftkings] No events found for ncaab/2024
+16:09:19.271 [INFO ] [reddit/mlb] posts — r/baseball (new): 100 posts
+16:09:19.305 [WARN ] [draftkings] Attempt 1/2 failed: HTTP 500: {"code":1008,"detail":"script error: unexpected exception or error processing script"} — retrying in 1000ms
+16:09:20.402 [INFO ] [draftkings] No events found for ncaab/2025
+16:09:20.402 [INFO ] [draftkings] Done: 0 files, ✓ clean, 52.7s
+16:09:20.968 [INFO ] [actionnetwork/mlb] trends — 0 games with bet percentages
+16:09:21.249 [INFO ] [reddit/mlb] posts — r/mlb (new): 100 posts
+16:09:23.157 [INFO ] [reddit/mlb] posts — r/baseball (new): 100 posts
+16:09:24.016 [INFO ] [actionnetwork/mlb] trends — 0 games with bet percentages
+16:09:25.005 [INFO ] [reddit/mlb] posts — r/mlb (new): 100 posts
+16:09:27.061 [INFO ] [actionnetwork/nhl] trends — 0 games with bet percentages
+16:09:27.292 [INFO ] [reddit/mlb] posts — r/baseball (new): 100 posts
+16:09:29.204 [INFO ] [reddit/mlb] posts — r/mlb (new): 100 posts
+16:09:30.101 [INFO ] [actionnetwork/nhl] trends — 0 games with bet percentages
+16:09:31.203 [INFO ] [reddit/mlb] posts — r/baseball (new): 100 posts
+16:09:33.143 [INFO ] [actionnetwork/nhl] trends — 0 games with bet percentages
+16:09:33.417 [INFO ] [reddit/mlb] posts — r/mlb (new): 100 posts
+16:09:35.351 [INFO ] [reddit/mlb] posts — r/baseball (new): 100 posts
+16:09:36.209 [INFO ] [actionnetwork/nhl] trends — 0 games with bet percentages
+16:09:37.333 [INFO ] [reddit/mlb] posts — r/mlb (new): 100 posts
+16:09:39.246 [INFO ] [actionnetwork/nhl] trends — 0 games with bet percentages
+16:09:40.140 [INFO ] [reddit/mlb] posts — r/baseball (new): 100 posts
+16:09:41.693 [INFO ] [reddit/mlb] posts — r/mlb (new): 100 posts
+16:09:42.296 [INFO ] [actionnetwork/nhl] trends — 0 games with bet percentages
+16:09:43.680 [INFO ] [reddit/nhl] posts — r/hockey (new): 100 posts
+16:09:45.368 [INFO ] [actionnetwork/ncaaf] trends — 0 games with bet percentages
+16:09:45.559 [INFO ] [reddit/nhl] posts — r/hockey (new): 100 posts
+16:09:47.573 [INFO ] [reddit/nhl] posts — r/hockey (new): 100 posts
+16:09:48.404 [INFO ] [actionnetwork/ncaaf] trends — 0 games with bet percentages
+16:09:49.945 [INFO ] [reddit/nhl] posts — r/hockey (new): 100 posts
+16:09:51.451 [INFO ] [actionnetwork/ncaaf] trends — 0 games with bet percentages
+16:09:51.785 [INFO ] [reddit/nhl] posts — r/hockey (new): 100 posts
+16:09:54.070 [INFO ] [reddit/nhl] posts — r/hockey (new): 100 posts
+16:09:54.500 [INFO ] [actionnetwork/ncaaf] trends — 0 games with bet percentages
+16:09:55.624 [INFO ] [reddit/ncaaf] posts — r/CFB (new): 100 posts
+16:09:57.550 [INFO ] [actionnetwork/ncaaf] trends — 0 games with bet percentages
+16:09:57.926 [INFO ] [reddit/ncaaf] posts — r/CFB (new): 100 posts
+16:09:59.756 [INFO ] [reddit/ncaaf] posts — r/CFB (new): 100 posts
+16:10:00.601 [INFO ] [actionnetwork/ncaaf] trends — 0 games with bet percentages
+16:10:01.832 [INFO ] [reddit/ncaaf] posts — r/CFB (new): 100 posts
+16:10:03.655 [INFO ] [actionnetwork/ncaab] trends — 0 games with bet percentages
+16:10:03.864 [INFO ] [reddit/ncaaf] posts — r/CFB (new): 100 posts
+16:10:05.786 [INFO ] [reddit/ncaaf] posts — r/CFB (new): 100 posts
+16:10:06.704 [INFO ] [actionnetwork/ncaab] trends — 0 games with bet percentages
+16:10:08.504 [INFO ] [reddit/ncaab] posts — r/CollegeBasketball (new): 100 posts
+16:10:09.753 [INFO ] [actionnetwork/ncaab] trends — 0 games with bet percentages
+16:10:10.443 [INFO ] [reddit/ncaab] posts — r/CollegeBasketball (new): 100 posts
+16:10:12.800 [INFO ] [actionnetwork/ncaab] trends — 0 games with bet percentages
+16:10:13.046 [INFO ] [reddit/ncaab] posts — r/CollegeBasketball (new): 100 posts
+16:10:14.587 [INFO ] [reddit/ncaab] posts — r/CollegeBasketball (new): 100 posts
+16:10:15.850 [INFO ] [actionnetwork/ncaab] trends — 0 games with bet percentages
+16:10:16.518 [INFO ] [reddit/ncaab] posts — r/CollegeBasketball (new): 100 posts
+16:10:18.454 [INFO ] [reddit/ncaab] posts — r/CollegeBasketball (new): 100 posts
+16:10:18.454 [INFO ] [reddit] Done: 54 files, ✓ clean, 110.7s
+16:10:18.898 [INFO ] [actionnetwork/ncaab] trends — 0 games with bet percentages
+16:10:18.898 [INFO ] [actionnetwork] Done: 36 files, ✓ clean, 111.2s
+
+── Import Complete ──────────────────────────────────────
+  Providers: 10
+  Files:     640
+  Errors:    7
+  Duration:  479.9s
+────────────────────────────────────────────────────────
+

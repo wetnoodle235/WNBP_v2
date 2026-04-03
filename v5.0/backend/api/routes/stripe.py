@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -19,22 +20,39 @@ router = APIRouter(prefix="/stripe", tags=["Stripe"])
 _stripe = StripeService()
 
 
+def _default_app_base(request: Request) -> str:
+    configured = (os.getenv("APP_BASE_URL") or os.getenv("NEXTAUTH_URL") or "").strip().rstrip("/")
+    if configured:
+        return configured
+    origin = request.headers.get("origin")
+    if origin:
+        return origin.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
 @router.post(
     "/create-checkout",
     summary="Create Stripe checkout session",
     description="Start a Stripe Checkout flow for a tier/billing combo.",
 )
 async def create_checkout(
+    request: Request,
     user: Annotated[dict[str, Any], Depends(get_current_user)],
     tier: str = Body(..., embed=True),
     billing: str = Body("monthly", embed=True),
-    success_url: str = Body("https://sportstock.dev/success", embed=True),
-    cancel_url: str = Body("https://sportstock.dev/cancel", embed=True),
+    billing_period: str | None = Body(None, embed=True),
+    success_url: str | None = Body(None, embed=True),
+    cancel_url: str | None = Body(None, embed=True),
 ):
+    billing = billing_period or billing
     if tier not in TIERS or tier == "free":
         raise HTTPException(status_code=400, detail=f"Invalid tier: {tier}")
     if billing not in ("monthly", "yearly"):
         raise HTTPException(status_code=400, detail="Billing must be 'monthly' or 'yearly'")
+
+    app_base = _default_app_base(request)
+    resolved_success_url = success_url or f"{app_base}/account?checkout=success"
+    resolved_cancel_url = cancel_url or f"{app_base}/pricing?checkout=cancelled"
 
     db_user = await get_user_by_id(user["sub"])
     if not db_user:
@@ -46,8 +64,8 @@ async def create_checkout(
             email=db_user.email,
             tier=tier,
             billing=billing,
-            success_url=success_url,
-            cancel_url=cancel_url,
+            success_url=resolved_success_url,
+            cancel_url=resolved_cancel_url,
             stripe_customer_id=db_user.stripe_customer_id,
         )
         return {"success": True, "data": result}
@@ -79,8 +97,9 @@ async def stripe_webhook(request: Request):
     description="Returns a URL to the Stripe customer portal for managing subscriptions.",
 )
 async def create_portal(
+    request: Request,
     user: Annotated[dict[str, Any], Depends(get_current_user)],
-    return_url: str = "https://sportstock.dev/account",
+    return_url: str | None = None,
 ):
     db_user = await get_user_by_id(user["sub"])
     if not db_user:
@@ -91,7 +110,7 @@ async def create_portal(
     try:
         result = await _stripe.create_portal_session(
             stripe_customer_id=db_user.stripe_customer_id,
-            return_url=return_url,
+            return_url=return_url or f"{_default_app_base(request)}/account",
         )
         return {"success": True, "data": result}
     except Exception as e:

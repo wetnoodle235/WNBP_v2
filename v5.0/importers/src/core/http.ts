@@ -108,6 +108,11 @@ export async function fetchJSON<T = unknown>(
         throw err instanceof Error ? err : new Error(msg);
       }
 
+      // 403 Forbidden is non-retryable (subscription/auth restriction)
+      if (msg.toLowerCase().includes("http 403")) {
+        throw err instanceof Error ? err : new Error(msg);
+      }
+
       if (attempt < retries) {
         const delay = retryDelayMs * attempt;
         logger.warn(`Attempt ${attempt}/${retries} failed: ${msg} — retrying in ${delay}ms`, provider);

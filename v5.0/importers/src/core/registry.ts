@@ -33,6 +33,33 @@ export const PROVIDER_MODULES = [
   "weather",
   "footballdata",
   "mlbstats",
+  "statcast",
+  // Enhanced free data providers
+  "openmeteo",
+  "reddit",
+  "googlenews",
+  "rssnews",
+  "ticketmaster",
+  "seatgeek",
+  "wikipedia",
+  "youtube",
+  "googletrends",
+  "actionnetwork",
+  "draftkings",
+  "nflverse",
+  // Wave 2 providers
+  "footballdotco",
+  "rotowire",
+  "retrosheet",
+  "openligadb",
+  // Wave 3 providers
+  "thesportsdb",
+  "nflfastr",
+  "lolesports",
+  "steam",
+  "apisports",
+  "espnmeta",
+  "sleeper",
 ] as const;
 
 export type ProviderName = (typeof PROVIDER_MODULES)[number];

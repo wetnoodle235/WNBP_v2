@@ -13,18 +13,10 @@ import type {
   MarketSignal,
   ScheduleFatigue,
 } from "./schemas";
+import { resolveServerApiBase } from "./api-base";
+import { normalizeMediaPayload, resolveMediaUrl } from "./media";
 
 const isServer = typeof window === "undefined";
-
-function resolveServerApiBase(): string {
-  return (
-    process.env.PLATFORM_BACKEND_URL
-    ?? process.env.BACKEND_URL
-    ?? process.env.API_URL
-    ?? process.env.NEXT_PUBLIC_API_URL
-    ?? "http://127.0.0.1:8000"
-  ).replace(/\/$/, "");
-}
 
 const API_BASE = isServer
   ? resolveServerApiBase()
@@ -184,9 +176,9 @@ async function getData<T>(path: string, params?: Record<string, string>): Promis
     if ((res.data.success as boolean) === false) {
       warnFetchDegradation(path, "wrapped_unsuccessful_response");
     }
-    return res.data.data as T;
+    return normalizeMediaPayload(res.data.data as T);
   }
-  return res.data as unknown as T;
+  return normalizeMediaPayload(res.data as unknown as T);
 }
 
 // ── Domain endpoints matching v5.0 backend routes ────────────────────────────
@@ -296,7 +288,7 @@ export async function getNews(sport: string, limit = 20): Promise<News[]> {
     headline: (item.headline as string) ?? "",
     description: ((item.description ?? item.summary ?? null) as string | null),
     link: ((item.link ?? item.url ?? null) as string | null),
-    image_url: (item.image_url ?? null) as string | null,
+    image_url: resolveMediaUrl((item.image_url ?? null) as string | null),
     published: ((item.published ?? item.published_at ?? null) as string | null),
     author: (item.author ?? null) as string | null,
   }));
@@ -323,8 +315,151 @@ export async function getTeamStats(
   return (await getData<unknown[]>(`/v1/${sport}/team-stats`, params)) ?? [];
 }
 
-export async function getSports(): Promise<Record<string, unknown> | null> {
-  return getData<Record<string, unknown>>("/v1/sports");
+export async function getSports(): Promise<Record<string, unknown>[] | null> {
+  return getData<Record<string, unknown>[]>("/v1/sports");
+}
+
+export interface HomeFeedPayload {
+  games: Game[];
+  news: News[];
+  predictions: Prediction[];
+  sport_metrics: Array<{
+    sport: string;
+    games_today: number;
+    predictions: number;
+    top_confidence: number;
+  }>;
+}
+
+function buildSportsParam(sports: string[]): string {
+  return sports.map((s) => s.trim().toLowerCase()).filter(Boolean).join(",");
+}
+
+export async function getAggregateGames(
+  sports: string[],
+  params?: { date?: string; limitPerSport?: number; excludeFinal?: boolean },
+): Promise<Game[]> {
+  const query: Record<string, string> = {
+    sports: buildSportsParam(sports),
+  };
+  if (params?.date) query.date_filter = params.date;
+  if (params?.limitPerSport != null) query.limit_per_sport = String(params.limitPerSport);
+  if (params?.excludeFinal != null) query.exclude_final = String(params.excludeFinal);
+  return (await getData<Game[]>("/v1/aggregate/games", query)) ?? [];
+}
+
+export async function getAggregateNews(
+  sports: string[],
+  limitPerSport = 15,
+): Promise<News[]> {
+  const query: Record<string, string> = {
+    sports: buildSportsParam(sports),
+    limit_per_sport: String(limitPerSport),
+  };
+  const raw =
+    (await getData<Record<string, unknown>[]>("/v1/aggregate/news", query)) ?? [];
+  return raw.map((item) => ({
+    source: (item.source as string) ?? "unknown",
+    id: item.id as string | undefined,
+    sport: (item.sport as string) ?? "unknown",
+    headline: (item.headline as string) ?? "",
+    description: ((item.description ?? item.summary ?? null) as string | null),
+    link: ((item.link ?? item.url ?? null) as string | null),
+    image_url: resolveMediaUrl((item.image_url ?? null) as string | null),
+    published: ((item.published ?? item.published_at ?? null) as string | null),
+    author: (item.author ?? null) as string | null,
+  }));
+}
+
+export async function getAggregatePredictions(
+  sports: string[],
+  params?: { date?: string; limitPerSport?: number },
+): Promise<Prediction[]> {
+  const query: Record<string, string> = {
+    sports: buildSportsParam(sports),
+  };
+  if (params?.date) query.date_filter = params.date;
+  if (params?.limitPerSport != null) query.limit_per_sport = String(params.limitPerSport);
+  return (await getData<Prediction[]>("/v1/aggregate/predictions", query)) ?? [];
+}
+
+export async function getAggregateOdds(
+  sports: string[],
+  params?: { date?: string; limitPerSport?: number },
+): Promise<Odds[]> {
+  const query: Record<string, string> = {
+    sports: buildSportsParam(sports),
+  };
+  if (params?.date) query.date_filter = params.date;
+  if (params?.limitPerSport != null) query.limit_per_sport = String(params.limitPerSport);
+  return (await getData<Odds[]>("/v1/aggregate/odds", query)) ?? [];
+}
+
+export async function getAggregateTeams(
+  sports: string[],
+  limitPerSport = 500,
+): Promise<Team[]> {
+  const query: Record<string, string> = {
+    sports: buildSportsParam(sports),
+    limit_per_sport: String(limitPerSport),
+  };
+  return (await getData<Team[]>("/v1/aggregate/teams", query)) ?? [];
+}
+
+export async function getAggregatePlayers(
+  sports: string[],
+  limitPerSport = 2000,
+): Promise<unknown[]> {
+  const query: Record<string, string> = {
+    sports: buildSportsParam(sports),
+    limit_per_sport: String(limitPerSport),
+  };
+  return (await getData<unknown[]>("/v1/aggregate/players", query)) ?? [];
+}
+
+export interface AggregateStatsPayload {
+  [sport: string]: {
+    season: string | null;
+    player_stats: unknown[];
+    team_stats: unknown[];
+  };
+}
+
+export async function getAggregateStats(
+  sports: string[],
+  params?: { playerLimitPerSport?: number; teamLimitPerSport?: number },
+): Promise<AggregateStatsPayload | null> {
+  const query: Record<string, string> = {
+    sports: buildSportsParam(sports),
+  };
+  if (params?.playerLimitPerSport != null) {
+    query.player_limit_per_sport = String(params.playerLimitPerSport);
+  }
+  if (params?.teamLimitPerSport != null) {
+    query.team_limit_per_sport = String(params.teamLimitPerSport);
+  }
+  return getData<AggregateStatsPayload>("/v1/aggregate/stats", query);
+}
+
+export async function getHomeFeed(
+  sports: string[],
+  params?: {
+    date?: string;
+    gamesPerSport?: number;
+    newsPerSport?: number;
+    predictionsPerSport?: number;
+  },
+): Promise<HomeFeedPayload | null> {
+  const query: Record<string, string> = {
+    sports: buildSportsParam(sports),
+  };
+  if (params?.date) query.date_filter = params.date;
+  if (params?.gamesPerSport != null) query.games_per_sport = String(params.gamesPerSport);
+  if (params?.newsPerSport != null) query.news_per_sport = String(params.newsPerSport);
+  if (params?.predictionsPerSport != null) {
+    query.predictions_per_sport = String(params.predictionsPerSport);
+  }
+  return getData<HomeFeedPayload>("/v1/aggregate/home-feed", query);
 }
 
 export async function getStatus(): Promise<Record<string, unknown> | null> {
@@ -425,7 +560,7 @@ export async function createCheckout(
 ): Promise<ApiResult<Record<string, unknown>>> {
   return fetchAuthAPI<Record<string, unknown>>("/stripe/create-checkout", {
     method: "POST",
-    body: JSON.stringify({ tier, billing_period: billingPeriod }),
+    body: JSON.stringify({ tier, billing: billingPeriod }),
   });
 }
 

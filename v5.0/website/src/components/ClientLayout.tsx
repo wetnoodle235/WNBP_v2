@@ -2,7 +2,6 @@
 
 import { Suspense, useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
-import dynamic from "next/dynamic";
 import { TopNav } from "./TopNav";
 import { BackToTop } from "./BackToTop";
 import { ScrollProgress } from "./ScrollProgress";
@@ -10,9 +9,8 @@ import { OfflineBanner } from "./OfflineBanner";
 import { LoadingBar } from "./LoadingBar";
 import { PageTracker } from "./PageTracker";
 import { ScrollToHash } from "./ScrollToHash";
-
-const KeyboardShortcuts = dynamic(() => import("./KeyboardShortcuts").then((m) => m.KeyboardShortcuts), { ssr: false });
-const ChangelogBanner = dynamic(() => import("./ChangelogBanner").then((m) => m.ChangelogBanner), { ssr: false });
+import { KeyboardShortcuts } from "./KeyboardShortcuts";
+import { ChangelogBanner } from "./ChangelogBanner";
 
 /** Move focus to #main-content on route change for screen readers */
 function FocusOnRouteChange() {

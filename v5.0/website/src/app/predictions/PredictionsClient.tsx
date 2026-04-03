@@ -25,6 +25,7 @@ interface Props {
   sports: string[];
   today: string;
   hasPremium: boolean;
+  initialWarning?: string | null;
 }
 
 const PER_PAGE = 25;
@@ -55,7 +56,7 @@ function winProbStyle(
   return numCell;
 }
 
-export function PredictionsClient({ predictions, sports, today, hasPremium }: Props) {
+export function PredictionsClient({ predictions, sports, today, hasPremium, initialWarning = null }: Props) {
   const router = useRouter();
   const [activeSport, setActiveSport] = useState<string | null>(null);
   const [minConfidence, setMinConfidence] = useState(0);
@@ -317,6 +318,19 @@ export function PredictionsClient({ predictions, sports, today, hasPremium }: Pr
             fontSize: "var(--text-sm)",
           }}>
             {fetchError}
+          </div>
+        )}
+
+        {initialWarning && (
+          <div role="status" style={{
+            padding: "var(--space-3) var(--space-4)",
+            background: "var(--color-warning-bg, #fffbeb)",
+            color: "var(--color-warning, #b45309)",
+            borderRadius: "var(--radius-md)",
+            marginBottom: "var(--space-4)",
+            fontSize: "var(--text-sm)",
+          }}>
+            {initialWarning}
           </div>
         )}
 

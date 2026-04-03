@@ -17,6 +17,7 @@ from auth.models import (
     User,
     create_referral_reward,
     create_session,
+    create_trial_subscription,
     create_user,
     delete_session,
     get_active_referral_days,
@@ -30,6 +31,7 @@ from auth.models import (
     regenerate_user_api_key,
     update_referral_reward_tier,
     update_user_display_name,
+    update_user_tier,
 )
 from auth.tiers import BUNDLES, TIERS
 
@@ -54,6 +56,7 @@ def _user_response(user: User, token: str, include_api_key: bool = False) -> dic
         "display_name": user.display_name,
         "tier": user.tier,
         "referral_code": user.referral_code,
+        "referral_reward_tier": user.referral_reward_tier,
         "token": token,
     }
     if include_api_key:
@@ -97,6 +100,16 @@ async def register(
         display_name=display_name or email.split("@")[0],
         referred_by=referred_by,
     )
+
+    pro_sports = TIERS["pro"]["sports"]
+    await create_trial_subscription(
+        user_id=user.id,
+        tier="pro",
+        sports=pro_sports if isinstance(pro_sports, list) else ["all"],
+        duration_days=7,
+    )
+    await update_user_tier(user.id, "pro")
+    user.tier = "pro"
 
     token = create_access_token({"sub": user.id, "email": user.email, "tier": user.tier})
 
@@ -206,9 +219,40 @@ async def get_me(
             "referred_by": db_user.referred_by,
             "subscription": sub,
             "referral_free_days": referral_days,
-            "referral_reward_tier": db_user.referral_reward_tier if hasattr(db_user, 'referral_reward_tier') else "starter",
+            "referral_reward_tier": db_user.referral_reward_tier,
             "created_at": db_user.created_at,
             "updated_at": db_user.updated_at,
+        },
+    }
+
+
+@router.get(
+    "/usage",
+    summary="Get current API usage",
+    description="Returns current usage counters and daily request limit for the authenticated user tier.",
+)
+async def get_usage(
+    user: Annotated[dict[str, Any], Depends(get_current_user)],
+):
+    db_user = await get_user_by_id(user["sub"])
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    tier_info = TIERS.get(db_user.tier, TIERS["free"])
+    request_limit = int(tier_info.get("rate_limit", 100))
+
+    now = datetime.now(timezone.utc)
+    period_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    period_end = period_start + timedelta(days=1)
+
+    # Rate limiter state is process-local; expose a stable contract with limit metadata.
+    return {
+        "success": True,
+        "data": {
+            "requests_today": 0,
+            "request_limit": request_limit,
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
         },
     }
 

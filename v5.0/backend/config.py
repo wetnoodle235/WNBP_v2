@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     raw_dir: Optional[Path] = Field(default=None)
     normalized_dir: Optional[Path] = Field(default=None)
     normalized_curated_dir: Optional[Path] = Field(default=None)
+    media_dir: Optional[Path] = Field(default=None)
 
     # Data reader backend
     backend_reader: str = "duckdb"  # parquet | duckdb
@@ -59,6 +60,12 @@ class Settings(BaseSettings):
     cache_ttl_predictions: int = 600    # 10 min
     cache_ttl_stats: int = 900          # 15 min
 
+    # Media mirroring
+    media_public_base_path: str = "/v1/media"
+    media_auto_sync: bool = False
+    media_stale_warning_hours: int = 48
+    media_stale_error_hours: int = 168
+
     model_config = {"env_prefix": "V5_", "env_file": ".env", "extra": "ignore"}
 
     def __init__(self, **kwargs):
@@ -71,6 +78,8 @@ class Settings(BaseSettings):
             self.normalized_dir = self.data_dir / "normalized"
         if self.normalized_curated_dir is None:
             self.normalized_curated_dir = self.data_dir / "normalized_curated"
+        if self.media_dir is None:
+            self.media_dir = self.data_dir / "media"
         if self.duckdb_path is None:
             self.duckdb_path = self.data_dir / "normalized.duckdb"
 
@@ -85,43 +94,43 @@ def get_settings() -> Settings:
 # ──────────────────────────────────────────────────────────
 
 SPORT_DEFINITIONS: dict[str, dict] = {
-    "nba":        {"label": "NBA",        "category": "basketball", "country": "US"},
-    "wnba":       {"label": "WNBA",       "category": "basketball", "country": "US"},
-    "ncaab":      {"label": "NCAAB",      "category": "basketball", "country": "US"},
-    "ncaaw":      {"label": "NCAAW",      "category": "basketball", "country": "US"},
-    "nfl":        {"label": "NFL",        "category": "football",   "country": "US"},
-    "ncaaf":      {"label": "NCAAF",      "category": "football",   "country": "US"},
-    "mlb":        {"label": "MLB",        "category": "baseball",   "country": "US"},
-    "nhl":        {"label": "NHL",        "category": "hockey",     "country": "US"},
-    "epl":        {"label": "EPL",        "category": "soccer",     "country": "GB"},
-    "laliga":     {"label": "La Liga",    "category": "soccer",     "country": "ES"},
-    "bundesliga": {"label": "Bundesliga", "category": "soccer",     "country": "DE"},
-    "seriea":     {"label": "Serie A",    "category": "soccer",     "country": "IT"},
-    "ligue1":     {"label": "Ligue 1",    "category": "soccer",     "country": "FR"},
-    "mls":        {"label": "MLS",        "category": "soccer",     "country": "US"},
-    "ucl":        {"label": "UCL",        "category": "soccer",     "country": "EU"},
-    "nwsl":       {"label": "NWSL",       "category": "soccer",     "country": "US"},
-    "ligamx":     {"label": "Liga MX",    "category": "soccer",     "country": "MX"},
-    "europa":     {"label": "Europa League", "category": "soccer",  "country": "EU"},
-    "eredivisie":  {"label": "Eredivisie",  "category": "soccer",  "country": "NL"},
-    "primeiraliga":{"label": "Primeira Liga","category": "soccer",  "country": "PT"},
-    "championship":{"label": "Championship","category": "soccer",  "country": "GB"},
-    "bundesliga2": {"label": "Bundesliga 2","category": "soccer",  "country": "DE"},
-    "serieb":      {"label": "Serie B",     "category": "soccer",  "country": "IT"},
-    "ligue2":      {"label": "Ligue 2",     "category": "soccer",  "country": "FR"},
-    "worldcup":    {"label": "World Cup",   "category": "soccer",  "country": "INT"},
-    "euros":       {"label": "Euros",       "category": "soccer",  "country": "EU"},
-    "f1":         {"label": "F1",         "category": "motorsport", "country": "INT"},
-    "indycar":    {"label": "IndyCar",    "category": "motorsport", "country": "US"},
-    "atp":        {"label": "ATP",        "category": "tennis",     "country": "INT"},
-    "wta":        {"label": "WTA",        "category": "tennis",     "country": "INT"},
-    "ufc":        {"label": "UFC",        "category": "mma",        "country": "US"},
-    "lol":        {"label": "LoL",        "category": "esports",    "country": "INT"},
-    "csgo":       {"label": "CS2",        "category": "esports",    "country": "INT"},
-    "dota2":      {"label": "Dota 2",     "category": "esports",    "country": "INT"},
-    "valorant":   {"label": "Valorant",   "category": "esports",    "country": "INT"},
-    "golf":       {"label": "PGA",        "category": "golf",       "country": "US"},
-    "lpga":       {"label": "LPGA",       "category": "golf",       "country": "US"},
+    "nba":        {"label": "NBA",        "category": "basketball", "country": "US",  "image_url": "curated://league/nba"},
+    "wnba":       {"label": "WNBA",       "category": "basketball", "country": "US",  "image_url": "curated://league/wnba"},
+    "ncaab":      {"label": "NCAAB",      "category": "basketball", "country": "US",  "image_url": "curated://league/ncaab"},
+    "ncaaw":      {"label": "NCAAW",      "category": "basketball", "country": "US",  "image_url": "curated://league/ncaaw"},
+    "nfl":        {"label": "NFL",        "category": "football",   "country": "US",  "image_url": "curated://league/nfl"},
+    "ncaaf":      {"label": "NCAAF",      "category": "football",   "country": "US",  "image_url": "curated://league/ncaaf"},
+    "mlb":        {"label": "MLB",        "category": "baseball",   "country": "US",  "image_url": "curated://league/mlb"},
+    "nhl":        {"label": "NHL",        "category": "hockey",     "country": "US",  "image_url": "curated://league/nhl"},
+    "epl":        {"label": "EPL",        "category": "soccer",     "country": "GB",  "image_url": "curated://league/epl"},
+    "laliga":     {"label": "La Liga",    "category": "soccer",     "country": "ES",  "image_url": "curated://league/laliga"},
+    "bundesliga": {"label": "Bundesliga", "category": "soccer",     "country": "DE",  "image_url": "curated://league/bundesliga"},
+    "seriea":     {"label": "Serie A",    "category": "soccer",     "country": "IT",  "image_url": "curated://league/seriea"},
+    "ligue1":     {"label": "Ligue 1",    "category": "soccer",     "country": "FR",  "image_url": "curated://league/ligue1"},
+    "mls":        {"label": "MLS",        "category": "soccer",     "country": "US",  "image_url": "curated://league/mls"},
+    "ucl":        {"label": "UCL",        "category": "soccer",     "country": "EU",  "image_url": "curated://league/ucl"},
+    "nwsl":       {"label": "NWSL",       "category": "soccer",     "country": "US",  "image_url": "curated://league/nwsl"},
+    "ligamx":     {"label": "Liga MX",    "category": "soccer",     "country": "MX",  "image_url": "curated://league/ligamx"},
+    "europa":     {"label": "Europa League", "category": "soccer",  "country": "EU",  "image_url": "curated://league/europa"},
+    "eredivisie":  {"label": "Eredivisie",  "category": "soccer",  "country": "NL",  "image_url": "curated://league/eredivisie"},
+    "primeiraliga":{"label": "Primeira Liga","category": "soccer",  "country": "PT",  "image_url": "curated://league/primeiraliga"},
+    "championship":{"label": "Championship","category": "soccer",  "country": "GB",  "image_url": "curated://league/championship"},
+    "bundesliga2": {"label": "Bundesliga 2","category": "soccer",  "country": "DE",  "image_url": "curated://league/bundesliga2"},
+    "serieb":      {"label": "Serie B",     "category": "soccer",  "country": "IT",  "image_url": "curated://league/serieb"},
+    "ligue2":      {"label": "Ligue 2",     "category": "soccer",  "country": "FR",  "image_url": "curated://league/ligue2"},
+    "worldcup":    {"label": "World Cup",   "category": "soccer",  "country": "INT", "image_url": "curated://league/worldcup"},
+    "euros":       {"label": "Euros",       "category": "soccer",  "country": "EU",  "image_url": "curated://league/euros"},
+    "f1":         {"label": "F1",         "category": "motorsport", "country": "INT", "image_url": "curated://league/f1"},
+    "indycar":    {"label": "IndyCar",    "category": "motorsport", "country": "US",  "image_url": "curated://league/indycar"},
+    "atp":        {"label": "ATP",        "category": "tennis",     "country": "INT", "image_url": "curated://league/atp"},
+    "wta":        {"label": "WTA",        "category": "tennis",     "country": "INT", "image_url": "curated://league/wta"},
+    "ufc":        {"label": "UFC",        "category": "mma",        "country": "US",  "image_url": "curated://league/ufc"},
+    "lol":        {"label": "LoL",        "category": "esports",    "country": "INT", "image_url": "curated://league/lol"},
+    "csgo":       {"label": "CS2",        "category": "esports",    "country": "INT", "image_url": "curated://league/csgo"},
+    "dota2":      {"label": "Dota 2",     "category": "esports",    "country": "INT", "image_url": "curated://league/dota2"},
+    "valorant":   {"label": "Valorant",   "category": "esports",    "country": "INT", "image_url": "curated://league/valorant"},
+    "golf":       {"label": "PGA",        "category": "golf",       "country": "US",  "image_url": "curated://league/golf"},
+    "lpga":       {"label": "LPGA",       "category": "golf",       "country": "US",  "image_url": "curated://league/lpga"},
 }
 
 ALL_SPORTS = [s for s, d in SPORT_DEFINITIONS.items() if not d.get("disabled")]
@@ -160,8 +169,12 @@ def get_available_seasons(sport: str) -> list[str]:
 
     Scans two locations:
     1. Flat ``games_<year>.parquet`` files in ``normalized_dir/<sport>/``
-    2. Hive-partitioned ``season=YYYY`` sub-dirs in
-       ``normalized_curated_dir/<sport>/games/`` (and ``standings/`` as fallback)
+     2. Hive-partitioned ``season=YYYY`` sub-dirs in routed curated paths,
+         with legacy fallback:
+         - ``normalized_curated_dir/<sport>/game/schedule/base/``
+         - ``normalized_curated_dir/<sport>/games/``
+         - ``normalized_curated_dir/<sport>/team/record/standings/``
+         - ``normalized_curated_dir/<sport>/standings/``
     """
     settings = get_settings()
     seasons: set[str] = set()
@@ -176,8 +189,14 @@ def get_available_seasons(sport: str) -> list[str]:
 
     # 2. Curated Hive-partitioned layout: sport/category/season=YYYY/
     if hasattr(settings, "normalized_curated_dir"):
-        for category in ("games", "standings"):
-            cat_dir = settings.normalized_curated_dir / sport / category
+        curated_candidates = (
+            Path("game") / "schedule" / "base",
+            Path("games"),
+            Path("team") / "record" / "standings",
+            Path("standings"),
+        )
+        for rel_path in curated_candidates:
+            cat_dir = settings.normalized_curated_dir / sport / rel_path
             if cat_dir.is_dir():
                 for d in cat_dir.iterdir():
                     if d.is_dir() and d.name.startswith("season="):
@@ -282,9 +301,12 @@ def _season_has_completed_games(sport: str, season: str) -> bool:
         except Exception:
             result = True  # assume valid if we can't check
     elif hasattr(s, "normalized_curated_dir"):
-        # Check curated Hive-partitioned layout: sport/games/season=YYYY/
-        curated_season_dir = s.normalized_curated_dir / sport / "games" / f"season={season}"
-        if curated_season_dir.is_dir():
+        # Check curated Hive-partitioned layout, routed first with legacy fallback.
+        curated_candidates = (
+            s.normalized_curated_dir / sport / "game" / "schedule" / "base" / f"season={season}",
+            s.normalized_curated_dir / sport / "games" / f"season={season}",
+        )
+        if any(path.is_dir() for path in curated_candidates):
             # Presence of the directory implies data exists; assume completed.
             result = True
     _completed_games_cache[cache_key] = (now, result)

@@ -2,8 +2,8 @@ export const dynamic = "force-dynamic";
 
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import type { Prediction, News, Game, Standing, Injury, Odds } from "@/lib/schemas";
-import { getGame, getGames, getStandings, getInjuries, getPredictions, getNews, getOdds } from "@/lib/api";
+import type { Prediction, News, Game, Standing, Injury, Odds, MarketSignal, ScheduleFatigue } from "@/lib/schemas";
+import { getGame, getGames, getStandings, getInjuries, getPredictions, getNews, getOdds, getMarketSignals, getScheduleFatigue } from "@/lib/api";
 import { buildPageMetadata, buildSportsEventJsonLd } from "@/lib/seo";
 import { getDisplayName } from "@/lib/sports-config";
 import {
@@ -105,12 +105,16 @@ export default async function GameDetailPage({ params }: PageProps) {
   let standings: Standing[] = [];
   let allInjuries: Injury[] = [];
   let allOdds: Odds[] = [];
+  let marketSignals: MarketSignal[] = [];
+  let scheduleFatigue: ScheduleFatigue[] = [];
   try {
-    [allGames, standings, allInjuries, allOdds] = await Promise.all([
+    [allGames, standings, allInjuries, allOdds, marketSignals, scheduleFatigue] = await Promise.all([
       getGames(sport, { season: game.season, limit: "500" }).catch(() => [] as Game[]),
       getStandings(sport, Number(game.season) || undefined).catch(() => [] as Standing[]),
       getInjuries(sport).catch(() => [] as Injury[]),
       getOdds(sport).catch(() => [] as Odds[]),
+      getMarketSignals(sport, { game_id: id, limit: "10" }).catch(() => [] as MarketSignal[]),
+      getScheduleFatigue(sport, { game_id: id, limit: "10" }).catch(() => [] as ScheduleFatigue[]),
     ]);
   } catch {
     // Silently continue with empty arrays
@@ -1057,6 +1061,99 @@ export default async function GameDetailPage({ params }: PageProps) {
           )}
         </div>
       </SectionBand>
+
+      {/* ============================================================ */}
+      {/*  GAME CONTEXT (Market Signals + Schedule Fatigue)            */}
+      {/* ============================================================ */}
+      {(marketSignals.length > 0 || scheduleFatigue.length > 0) && (
+        <SectionBand title="Game Context">
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+              gap: "var(--space-4)",
+            }}
+          >
+            {/* Market Regime */}
+            {marketSignals.length > 0 && (() => {
+              const sig = marketSignals[0] as MarketSignal & Record<string, unknown>;
+              const regime = sig.market_regime as string | null | undefined;
+              const regimeColor =
+                regime === "volatile" ? "var(--color-loss)" :
+                regime === "moving" ? "#d97706" :
+                "var(--color-text-muted)";
+              return (
+                <div style={cardStyle}>
+                  <div style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", color: "var(--color-text-muted)", marginBottom: "var(--space-2)" }}>
+                    Market Signals
+                  </div>
+                  {regime && (
+                    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
+                      <span style={{ fontSize: "0.8rem", fontWeight: 600, color: regimeColor }}>
+                        {regime.charAt(0).toUpperCase() + regime.slice(1)} market
+                      </span>
+                    </div>
+                  )}
+                  {sig.bookmaker && (
+                    <div style={{ fontSize: "0.78rem", color: "var(--color-text-muted)" }}>
+                      Source: {String(sig.bookmaker)}
+                    </div>
+                  )}
+                  {!regime && !sig.bookmaker && (
+                    <div style={{ fontSize: "0.78rem", color: "var(--color-text-muted)" }}>
+                      {marketSignals.length} signal{marketSignals.length !== 1 ? "s" : ""} available
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Schedule Fatigue */}
+            {scheduleFatigue.filter((f) => f.team_id === game.home_team_id).map((f) => {
+              const level = (f.fatigue_level ?? "").toLowerCase();
+              const color = level === "high" ? "var(--color-loss)" : level === "medium" ? "#d97706" : "var(--color-win)";
+              return (
+                <div key={`fat-home-${f.team_id}`} style={cardStyle}>
+                  <div style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", color: "var(--color-text-muted)", marginBottom: "var(--space-2)" }}>
+                    {game.home_team} — Schedule Load
+                  </div>
+                  {f.fatigue_level && (
+                    <span style={{ fontSize: "0.8rem", fontWeight: 700, color }}>
+                      {f.fatigue_level.charAt(0).toUpperCase() + f.fatigue_level.slice(1)} fatigue
+                    </span>
+                  )}
+                  {f.fatigue_score != null && (
+                    <div style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginTop: "var(--space-1)" }}>
+                      Score: {f.fatigue_score.toFixed(2)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {scheduleFatigue.filter((f) => f.team_id === game.away_team_id).map((f) => {
+              const level = (f.fatigue_level ?? "").toLowerCase();
+              const color = level === "high" ? "var(--color-loss)" : level === "medium" ? "#d97706" : "var(--color-win)";
+              return (
+                <div key={`fat-away-${f.team_id}`} style={cardStyle}>
+                  <div style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", color: "var(--color-text-muted)", marginBottom: "var(--space-2)" }}>
+                    {game.away_team} — Schedule Load
+                  </div>
+                  {f.fatigue_level && (
+                    <span style={{ fontSize: "0.8rem", fontWeight: 700, color }}>
+                      {f.fatigue_level.charAt(0).toUpperCase() + f.fatigue_level.slice(1)} fatigue
+                    </span>
+                  )}
+                  {f.fatigue_score != null && (
+                    <div style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginTop: "var(--space-1)" }}>
+                      Score: {f.fatigue_score.toFixed(2)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </SectionBand>
+      )}
 
       {/* ============================================================ */}
       {/*  RELATED NEWS                                                 */}

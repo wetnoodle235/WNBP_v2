@@ -36,6 +36,18 @@ logger = logging.getLogger("extract_all")
 
 
 def _discover_seasons(sport: str) -> list[int]:
+    """Discover available seasons using CuratedDataReader (DuckDB) first, with legacy parquet fallback."""
+    # Primary: DuckDB via CuratedDataReader
+    try:
+        sys.path.insert(0, str(BACKEND_DIR))
+        from features.data_reader import get_reader
+        reader = get_reader(DATA_DIR)
+        seasons = reader.available_seasons(sport, "games")
+        if seasons:
+            return sorted(seasons)
+    except Exception:
+        pass
+    # Fallback: legacy normalized parquet files
     sport_dir = DATA_DIR / "normalized" / sport
     seasons = set()
     for p in sport_dir.glob("games_*.parquet"):
@@ -46,7 +58,7 @@ def _discover_seasons(sport: str) -> list[int]:
     return sorted(seasons)
 
 
-def _extract_sport(sport: str, timeout: int = 900) -> dict:
+def _extract_sport(sport: str, timeout: int = 3600) -> dict:
     """Extract ALL available seasons for a sport, save combined parquet."""
     t0 = time.monotonic()
     seasons = _discover_seasons(sport)
@@ -96,7 +108,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sport", help="Single sport to extract")
     parser.add_argument("--parallel", type=int, default=1, help="Worker processes")
-    parser.add_argument("--timeout", type=int, default=900, help="Per-sport timeout (s)")
+    parser.add_argument("--timeout", type=int, default=3600, help="Per-sport timeout (s)")
     args = parser.parse_args()
 
     from features.registry import EXTRACTORS

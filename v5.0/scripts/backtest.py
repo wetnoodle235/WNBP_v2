@@ -45,13 +45,26 @@ MODELS_ROOT = PROJECT_ROOT / "ml" / "models"
 
 sys.path.insert(0, str(BACKEND_DIR))
 
+from features.data_reader import get_reader as _get_reader  # noqa: E402
+
 logger = logging.getLogger("backtest")
+
+# Singleton curated reader (lazy-init)
+_CURATED_READER: Any = None
+
+
+def _curated_reader() -> Any:
+    global _CURATED_READER
+    if _CURATED_READER is None:
+        _CURATED_READER = _get_reader(str(DATA_DIR))
+    return _CURATED_READER
 
 ALL_SPORTS = [
     # Core team sports — models exist
     "nba", "nhl", "mlb", "nfl",
     # Soccer leagues — models exist or trainable
     "epl", "laliga", "bundesliga", "ligue1", "seriea", "ucl", "mls", "nwsl",
+    "championship", "eredivisie", "primeiraliga", "europa", "euros", "ligamx",
     # Combat / individual
     "ufc",
     # Tennis
@@ -61,7 +74,7 @@ ALL_SPORTS = [
     # Esports
     "csgo", "dota2", "lol", "valorant",
     # Motorsport
-    "f1",
+    "f1", "indycar",
     # Golf — player-centric, uses GolfPredictor (not GamePredictor)
     "golf",
 ]
@@ -179,20 +192,46 @@ def _load_recent_games(
     end_date: date | None = None,
 ) -> pd.DataFrame:
     """Load completed games from the last *days* days (ending at *end_date*)
-    across all season parquet files for *sport*.
+    using the CuratedDataReader (normalized_curated), falling back to the
+    legacy normalized parquet files if curated data is unavailable.
 
     Returns a DataFrame with at least: id, date, home_team,
     away_team, home_score, away_score, home_team_id, away_team_id.
     """
-    sport_dir = DATA_DIR / "normalized" / sport
-    parquet_files = sorted(sport_dir.glob("games_*.parquet"))
-    if not parquet_files:
-        logger.warning("No game parquets found for %s in %s", sport, sport_dir)
-        return pd.DataFrame()
+    frames: list[pd.DataFrame] = []
 
-    frames = [pd.read_parquet(p) for p in parquet_files]
+    # ── Primary: CuratedDataReader ───────────────────────
+    try:
+        reader = _curated_reader()
+        # Load across all seasons we care about (last 3 years covers any window)
+        import datetime as _dt
+        current_year = _dt.date.today().year
+        for season in range(current_year - 2, current_year + 2):
+            try:
+                chunk = reader.load(sport, "games", season)
+                if chunk is not None and len(chunk) > 0:
+                    frames.append(chunk)
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.debug("CuratedDataReader failed for %s: %s", sport, exc)
+
+    # ── Fallback: legacy normalized/ ─────────────────────
+    if not frames:
+        sport_dir = DATA_DIR / "normalized" / sport
+        parquet_files = sorted(sport_dir.glob("games_*.parquet"))
+        if not parquet_files:
+            logger.warning("No game parquets found for %s in %s", sport, sport_dir)
+            return pd.DataFrame()
+        frames = [pd.read_parquet(p) for p in parquet_files]
+
     df = pd.concat(frames, ignore_index=True)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+    # Sports without home/away scores (F1, IndyCar, etc.) are not applicable here
+    if "home_score" not in df.columns or "away_score" not in df.columns:
+        logger.debug("%s: no home_score/away_score columns — skipping game backtest", sport)
+        return pd.DataFrame()
 
     if end_date is None:
         end_date = date.today()
@@ -386,17 +425,27 @@ class Backtester:
                     gdf["game_id"] = gdf["id"]
                 try:
                     batch_preds = predictor.predict_batch_precomputed(precomp, gdf)
-                    # Build game lookup for _evaluate
-                    game_id_col = "game_id" if "game_id" in gdf.columns else "id"
-                    game_lookup = {
-                        str(r[game_id_col]): r
-                        for _, r in gdf.iterrows()
-                    }
-                    for pred in batch_preds:
-                        game_dict = game_lookup.get(str(pred.game_id), {})
-                        record = self._evaluate(pred, game_dict)
-                        if record:
-                            self.records.append(record)
+                    # If zero predictions but games exist, IDs likely don't match
+                    # (different ID systems) — fall through to per-game prediction
+                    if not batch_preds and not gdf.empty:
+                        logger.warning(
+                            "  %s: precomputed batch returned 0 predictions "
+                            "(game_id mismatch?), falling back to per-game",
+                            sport,
+                        )
+                        precomp = None
+                    else:
+                        # Build game lookup for _evaluate
+                        game_id_col = "game_id" if "game_id" in gdf.columns else "id"
+                        game_lookup = {
+                            str(r[game_id_col]): r
+                            for _, r in gdf.iterrows()
+                        }
+                        for pred in batch_preds:
+                            game_dict = game_lookup.get(str(pred.game_id), {})
+                            record = self._evaluate(pred, game_dict)
+                            if record:
+                                self.records.append(record)
                 except Exception:
                     logger.warning(
                         "Batch predict failed for %s, falling back to per-game",
@@ -657,7 +706,15 @@ class Backtester:
         # ── Draw prediction ──────────────────────────────
         draw_prob = pred_dict.get("draw_prob")
         if draw_prob is not None:
-            pred_draw = draw_prob >= 0.5
+            # Use argmax of three_way dict when available (draws realistically top
+            # out at ~30-35% so a 0.5 threshold never fires for draw-capable sports).
+            three_way = pred_dict.get("three_way") or {}
+            if three_way:
+                best_outcome = max(three_way, key=three_way.get)
+                pred_draw = best_outcome == "draw"
+            else:
+                # Fallback: draw is most likely when it exceeds either side AND >0.28
+                pred_draw = (float(draw_prob) > home_prob) and (float(draw_prob) > (1.0 - home_prob)) and float(draw_prob) > 0.28
             record["draw_prob"] = round(float(draw_prob), 4)
             record["pred_draw"] = pred_draw
             record["draw_correct"] = pred_draw == is_draw
@@ -914,26 +971,26 @@ class Backtester:
         actual_total = (ah_f + aa_f) if (ah_f is not None and aa_f is not None) else None
         if tb_probs and isinstance(tb_probs, dict) and actual_total is not None:
             pred_tb = max(tb_probs, key=lambda k: tb_probs[k])
-            def _pick_total_band(tot, keys):
-                for k in keys:
-                    try:
-                        up = float(k.split("_")[-1]) if "_" in k else float(k)
-                        if tot <= up:
-                            return k
-                    except (ValueError, TypeError):
-                        pass
-                return keys[-1] if keys else None
-            actual_tb = _pick_total_band(actual_total, sorted(tb_probs.keys()))
-            if actual_tb is not None:
+            # Use stored training thresholds to classify actual total into low/mid/high band
+            band_thresholds = pred_dict.get("total_band_thresholds") or {}
+            p33 = band_thresholds.get("p33")
+            p67 = band_thresholds.get("p67")
+            if p33 is not None and p67 is not None:
+                if actual_total <= p33:
+                    actual_tb = "low"
+                elif actual_total <= p67:
+                    actual_tb = "mid"
+                else:
+                    actual_tb = "high"
                 record["total_band_correct"] = pred_tb == actual_tb
 
         # ── Total over median ──────────────────────────────
         tot_over_prob = pred_dict.get("total_over_median_prob")
         if tot_over_prob is not None and actual_total is not None:
-            pred_total_num = pred_dict.get("predicted_total")
-            if pred_total_num is not None:
-                median_proxy = float(pred_total_num)
-                record["total_over_median_correct"] = (float(tot_over_prob) >= 0.5) == (actual_total > median_proxy)
+            # Use stored training median threshold (not predicted_total which is a different quantity)
+            median_thresh = pred_dict.get("total_median_threshold")
+            if median_thresh is not None:
+                record["total_over_median_correct"] = (float(tot_over_prob) >= 0.5) == (actual_total > float(median_thresh))
 
         # ── Second half winner ─────────────────────────────
         sh_prob = pred_dict.get("second_half_home_win_prob")
@@ -984,7 +1041,10 @@ class Backtester:
             pred_reg_home = float(reg_home_prob) >= 0.5
             record["regulation_home_win_correct"] = pred_reg_home == reg_actual_home_win
             if reg_draw_prob is not None:
-                record["regulation_draw_correct"] = (float(reg_draw_prob) >= 0.5) == reg_actual_draw
+                reg_draw_p = float(reg_draw_prob)
+                reg_home_p = float(reg_home_prob) if reg_home_prob is not None else 0.5
+                pred_reg_draw = (reg_draw_p > reg_home_p) and (reg_draw_p > (1.0 - reg_home_p)) and reg_draw_p > 0.28
+                record["regulation_draw_correct"] = pred_reg_draw == reg_actual_draw
 
         # ── Team totals ────────────────────────────────────
         home_total_pred = pred_dict.get("home_team_total")
@@ -1018,6 +1078,46 @@ class Backtester:
             if comeback_a_prob is not None and away_trailing_ht and ah_f is not None and aa_f is not None:
                 actual_comeback_a = (aa_f > ah_f)
                 record["comeback_away_correct"] = (float(comeback_a_prob) >= 0.5) == actual_comeback_a
+
+        # ── Esports map markets ─────────────────────────────
+        # home_score/away_score = maps won by each team
+        es_cs_prob = pred_dict.get("esports_clean_sweep_prob")
+        if es_cs_prob is not None and ah_f is not None and aa_f is not None:
+            # Clean sweep: loser won 0 maps (2-0 or 3-0)
+            actual_sweep = min(ah_f, aa_f) == 0
+            record["esports_clean_sweep_correct"] = (float(es_cs_prob) >= 0.5) == actual_sweep
+
+        es_mt_pred = pred_dict.get("esports_map_total")
+        if es_mt_pred is not None and ah_f is not None and aa_f is not None:
+            actual_map_total = ah_f + aa_f
+            record["esports_map_total_error"] = abs(float(es_mt_pred) - actual_map_total)
+
+        es_o2_prob = pred_dict.get("esports_map_total_over2_prob")
+        if es_o2_prob is not None and ah_f is not None and aa_f is not None:
+            actual_map_total = ah_f + aa_f
+            record["esports_map_total_over2_correct"] = (float(es_o2_prob) >= 0.5) == (actual_map_total > 2)
+
+        es_dec_prob = pred_dict.get("esports_decider_map_prob")
+        if es_dec_prob is not None and ah_f is not None and aa_f is not None:
+            # Decider map: series went to final decisive map
+            # bo3: 3 total maps (2-1). bo5: 5 total maps (3-2)
+            total_m = ah_f + aa_f
+            winner_m = max(ah_f, aa_f)
+            # Series total == 2*winner - 1 means the loser won winner-1 maps (went full distance)
+            actual_decider = (total_m == 2 * winner_m - 1) if winner_m > 0 else False
+            record["esports_decider_map_correct"] = (float(es_dec_prob) >= 0.5) == actual_decider
+
+        es_hdom_prob = pred_dict.get("esports_home_dominant_prob")
+        if es_hdom_prob is not None and ah_f is not None and aa_f is not None:
+            # Home dominant: home wins 2-0 or 3-0
+            actual_hdom = ah_f > aa_f and aa_f == 0
+            record["esports_home_dominant_correct"] = (float(es_hdom_prob) >= 0.5) == actual_hdom
+
+        es_adom_prob = pred_dict.get("esports_away_dominant_prob")
+        if es_adom_prob is not None and ah_f is not None and aa_f is not None:
+            # Away dominant: away wins 2-0 or 3-0
+            actual_adom = aa_f > ah_f and ah_f == 0
+            record["esports_away_dominant_correct"] = (float(es_adom_prob) >= 0.5) == actual_adom
 
         return record
 
@@ -1598,6 +1698,33 @@ class Backtester:
                 "total": len(mt2_recs),
                 "correct": mt2_c,
                 "accuracy": round(mt2_c / len(mt2_recs), 4),
+            }
+
+        dec_recs = [r for r in records if "esports_decider_map_correct" in r]
+        if dec_recs:
+            dec_c = sum(1 for r in dec_recs if r["esports_decider_map_correct"])
+            result["esports_decider_map"] = {
+                "total": len(dec_recs),
+                "correct": dec_c,
+                "accuracy": round(dec_c / len(dec_recs), 4),
+            }
+
+        hdom_recs = [r for r in records if "esports_home_dominant_correct" in r]
+        if hdom_recs:
+            hdom_c = sum(1 for r in hdom_recs if r["esports_home_dominant_correct"])
+            result["esports_home_dominant"] = {
+                "total": len(hdom_recs),
+                "correct": hdom_c,
+                "accuracy": round(hdom_c / len(hdom_recs), 4),
+            }
+
+        adom_recs = [r for r in records if "esports_away_dominant_correct" in r]
+        if adom_recs:
+            adom_c = sum(1 for r in adom_recs if r["esports_away_dominant_correct"])
+            result["esports_away_dominant"] = {
+                "total": len(adom_recs),
+                "correct": adom_c,
+                "accuracy": round(adom_c / len(adom_recs), 4),
             }
 
         # ── Player props ──────────────────────────────────

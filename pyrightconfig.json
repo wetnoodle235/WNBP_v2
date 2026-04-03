@@ -1,0 +1,10 @@
+{
+  "executionEnvironments": [
+    {
+      "root": "v5.0/backend",
+      "extraPaths": [
+        "v5.0/backend"
+      ]
+    }
+  ]
+}

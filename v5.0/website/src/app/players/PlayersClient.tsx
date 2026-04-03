@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { SectionBand, Badge } from "@/components/ui";
 import { getDisplayName, getSportColor } from "@/lib/sports-config";
+import { preferredPlayerHeadshotUrls } from "@/lib/media";
 import { useDebounce } from "@/lib/hooks";
 import type { Player, TeamInfo } from "./page";
 
@@ -230,6 +231,12 @@ export function PlayersClient({
         >
           {paged.map((player) => {
             const teamName = getTeamName(player);
+            const headshotUrls = preferredPlayerHeadshotUrls({
+              sport: activeSport,
+              playerId: player.id,
+              headshotUrl: player.headshot_url,
+            });
+            const headshotUrl = headshotUrls[0] ?? null;
             return (
               <Link
                 key={`${player.sport}-${player.id}`}
@@ -248,7 +255,7 @@ export function PlayersClient({
                   }}
                 >
                   {/* Headshot */}
-                  {player.headshot_url ? (
+                  {headshotUrl ? (
                     <div
                       style={{
                         width: 56,
@@ -261,7 +268,7 @@ export function PlayersClient({
                       }}
                     >
                       <Image
-                        src={player.headshot_url}
+                        src={headshotUrl}
                         alt={player.name}
                         width={56}
                         height={56}

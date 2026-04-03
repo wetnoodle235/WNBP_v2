@@ -13,8 +13,10 @@ echo "Starting V5.0 services…"
 # Pick a backend runner that works in this repo.
 if [[ -x "$VENV_PY" ]]; then
 	BACKEND_CMD=("$VENV_PY" -m uvicorn)
+	PYTHON_CMD=("$VENV_PY")
 elif command -v uvicorn >/dev/null 2>&1; then
 	BACKEND_CMD=(uvicorn)
+	PYTHON_CMD=(python3)
 else
 	echo "ERROR: uvicorn not found. Install it or create .venv at $ROOT/../.venv" >&2
 	exit 1
@@ -34,6 +36,18 @@ for _ in {1..20}; do
 	fi
 	sleep 0.5
 done
+
+# Bootstrap mirrored media once backend is reachable so the website can use
+# internal media URLs immediately instead of waiting for background refreshes.
+if [[ "${V5_MEDIA_BOOTSTRAP_ON_START:-true}" == "true" ]]; then
+	echo "  → Starting media bootstrap sync…"
+	cd "$ROOT/backend"
+	"${PYTHON_CMD[@]}" scripts/sync_media_assets.py --include-leagues > "$ROOT/backend/media_sync_bootstrap.log" 2>&1 &
+	MEDIA_SYNC_PID=$!
+	echo "    PID: $MEDIA_SYNC_PID (log: $ROOT/backend/media_sync_bootstrap.log)"
+else
+	MEDIA_SYNC_PID=""
+fi
 
 # Start website
 echo "  → Starting website (port 3000)…"
@@ -58,5 +72,5 @@ echo "  Website:  http://localhost:3000"
 echo ""
 echo "Press Ctrl+C to stop all services"
 
-trap "kill $BACKEND_PID $WEBSITE_PID 2>/dev/null; exit" INT TERM
+trap "kill $BACKEND_PID $WEBSITE_PID ${MEDIA_SYNC_PID:-} 2>/dev/null; exit" INT TERM
 wait

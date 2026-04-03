@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { preferredPlayerHeadshotUrls } from "@/lib/media";
 
 interface PlayerChipProps {
   playerId?: string | number;
@@ -33,16 +34,19 @@ export function PlayerChip({
   className,
 }: PlayerChipProps) {
   const px = HEADSHOT_SIZE[size];
-  const [imgError, setImgError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
-  const resolvedUrl = useMemo(() => {
-    if (headshotUrl) return headshotUrl;
-    if (playerId && sport)
-      return `https://a.espncdn.com/i/headshots/${sport}/players/full/${playerId}.png`;
-    return null;
-  }, [headshotUrl, playerId, sport]);
+  const resolvedUrls = useMemo(() => (
+    preferredPlayerHeadshotUrls({
+      sport,
+      playerId,
+      headshotUrl,
+    })
+  ), [sport, playerId, headshotUrl]);
 
-  const showImg = resolvedUrl && !imgError;
+  const resolvedUrl = resolvedUrls[attempt] ?? null;
+
+  const showImg = Boolean(resolvedUrl);
 
 
   const inner = (
@@ -74,7 +78,7 @@ export function PlayerChip({
             height={px}
             style={{ objectFit: "cover" }}
             unoptimized
-            onError={() => setImgError(true)}
+            onError={() => setAttempt((current) => current + 1)}
           />
         </span>
       ) : (

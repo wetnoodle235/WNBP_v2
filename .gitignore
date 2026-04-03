@@ -50,3 +50,5 @@ nohup.out
 v5.0/.env
 v5.0/backend/.env
 v5.0/importers/.env
+.vercel
+.env*.local

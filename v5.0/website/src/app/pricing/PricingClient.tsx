@@ -108,7 +108,7 @@ const PRICING_FAQ = [
   },
   {
     q: "What happens when my free trial ends?",
-    a: "You'll continue to have access to the free tier features. No credit card is required for the free plan, and you won't be charged automatically.",
+    a: "Every new account gets a 7-day Pro trial automatically. No credit card is required to start the trial, and you will not be charged automatically when it ends. If you do nothing, your account is downgraded to Free.",
   },
   {
     q: "Do you offer refunds?",

@@ -1,6 +1,6 @@
 import { buildPageMetadata, buildCollectionJsonLd } from "@/lib/seo";
 import type { Metadata } from "next";
-import { getNews } from "@/lib/api";
+import { getAggregateNews } from "@/lib/api";
 import { NewsClient } from "./NewsClient";
 
 export const dynamic = "force-dynamic";
@@ -16,18 +16,7 @@ export const metadata: Metadata = buildPageMetadata({
 });
 
 export default async function NewsPage() {
-  const results = await Promise.allSettled(
-    NEWS_SPORTS.map((sport) => getNews(sport, 15)),
-  );
-
-  const allNews = results.flatMap((r, i) =>
-    r.status === "fulfilled"
-      ? r.value.map((item) => ({
-          ...item,
-          sport: item.sport ?? NEWS_SPORTS[i],
-        }))
-      : [],
-  );
+  const allNews = await getAggregateNews([...NEWS_SPORTS], 15);
 
   // Deduplicate by headline
   const seen = new Set<string>();

@@ -1,5 +1,25 @@
 import type { NextConfig } from "next";
 
+function normalizeBackendUrl(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const normalized = raw
+    .replace(/\\n|\\r/g, "")
+    .trim()
+    .replace(/^['\"]|['\"]$/g, "")
+    .trim()
+    .replace(/\/$/, "");
+
+  if (!normalized) return null;
+
+  try {
+    const parsed = new URL(normalized);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return normalized;
+  } catch {
+    return null;
+  }
+}
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
@@ -64,13 +84,12 @@ const nextConfig: NextConfig = {
   },
 
   async rewrites() {
-    const apiUrl = (
-      process.env.PLATFORM_BACKEND_URL
-      || process.env.BACKEND_URL
-      || process.env.API_URL
-      || process.env.NEXT_PUBLIC_API_URL
-      || "http://127.0.0.1:8000"
-    ).replace(/\/$/, "");
+    const apiUrl =
+      normalizeBackendUrl(process.env.PLATFORM_BACKEND_URL)
+      || normalizeBackendUrl(process.env.BACKEND_URL)
+      || normalizeBackendUrl(process.env.API_URL)
+      || normalizeBackendUrl(process.env.NEXT_PUBLIC_API_URL)
+      || "http://127.0.0.1:8000";
     return [
       {
         source: "/api/proxy/:path*",

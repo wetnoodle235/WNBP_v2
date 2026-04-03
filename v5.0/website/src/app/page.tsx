@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import type { Metadata } from "next";
-import { getGames, getPredictions, getNews } from "@/lib/api";
+import { getHomeFeed } from "@/lib/api";
 import { buildPageMetadata, buildCollectionJsonLd } from "@/lib/seo";
 import { formatRelativeTime, formatProbability } from "@/lib/formatters";
 import {
@@ -23,7 +23,7 @@ import {
 import { ElitePicksGrid } from "@/components/ElitePicksGrid";
 import type { ElitePick } from "@/components/ElitePickCard";
 import { ConfidenceBar } from "@/components/ConfidenceBar";
-import { getSportIcon, SPORT_CATEGORIES, getDisplayName, getLeagueLogoUrl } from "@/lib/sports-config";
+import { getSportIcon, SPORT_CATEGORIES, getDisplayName } from "@/lib/sports-config";
 import { LeagueLogo } from "@/components/ui/LeagueLogo";
 
 export const dynamic = "auto";
@@ -118,20 +118,21 @@ async function withHomeTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> 
 
 async function getHomeData(hasPremium: boolean) {
   const todayDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  const [gamesResults, newsResults, predictionsResults] = await Promise.all([
-    Promise.allSettled(HOME_SPORTS.map((s) => withHomeTimeout(getGames(s, { date: todayDate, limit: "6" }), []))),
-    Promise.allSettled(HOME_SPORTS.map((s) => withHomeTimeout(getNews(s, 2), []))),
-    Promise.allSettled(HOME_SPORTS.map((s) => withHomeTimeout(getPredictions(s, { date: todayDate, limit: "12" }), []))),
-  ]);
-  const allMatchups: GameMatchup[] = gamesResults.flatMap((r, i) => {
-    if (r.status !== "fulfilled") return [];
+  const feed = await withHomeTimeout(
+    getHomeFeed([...HOME_SPORTS], {
+      date: todayDate,
+      gamesPerSport: 6,
+      newsPerSport: 2,
+      predictionsPerSport: 12,
+    }),
+    null,
+  );
 
-    return r.value
-      .filter((g) => !isFinalStatus(g.status ?? undefined))
-      .slice(0, 6)
-      .map((g) => ({
-      id: g.id ?? `${HOME_SPORTS[i]}-${i}`,
-      sport: g.sport || HOME_SPORTS[i],
+  const allMatchups: GameMatchup[] = (feed?.games ?? [])
+    .filter((g) => !isFinalStatus(g.status ?? undefined))
+    .map((g, i) => ({
+      id: g.id ?? `${g.sport ?? "sport"}-${i}`,
+      sport: g.sport || "unknown",
       homeName: g.home_team ?? "HOME",
       awayName: g.away_team ?? "AWAY",
       homeScore: g.home_score ?? undefined,
@@ -140,27 +141,21 @@ async function getHomeData(hasPremium: boolean) {
       startTime: g.start_time ?? undefined,
       timeLabel: formatTimeToStart(g.start_time ?? undefined),
     }));
-  });
 
-  const stories: Story[] = newsResults.flatMap((r, i) => {
-    if (r.status !== "fulfilled") return [];
-    return r.value.slice(0, 2).map((n, j) => ({
-      id: n.id ?? `${HOME_SPORTS[i]}-${j}`,
-      headline: n.headline,
-      description: n.description ?? undefined,
-      published: n.published ?? undefined,
-      image_url: n.image_url ?? undefined,
-      link: n.link ?? undefined,
-      sport: n.sport || HOME_SPORTS[i],
-    }));
-  });
+  const stories: Story[] = (feed?.news ?? []).map((n, j) => ({
+    id: n.id ?? `${n.sport ?? "sport"}-${j}`,
+    headline: n.headline,
+    description: n.description ?? undefined,
+    published: n.published ?? undefined,
+    image_url: n.image_url ?? undefined,
+    link: n.link ?? undefined,
+    sport: n.sport || "unknown",
+  }));
 
-  // All predictions (raw set)
-  const allPredictionsRaw = predictionsResults.flatMap((r, i) =>
-    r.status === "fulfilled"
-      ? r.value.map((p) => ({ ...p, sport: p.sport || HOME_SPORTS[i] }))
-      : [],
-  );
+  const allPredictionsRaw = (feed?.predictions ?? []).map((p) => ({
+    ...p,
+    sport: p.sport || "unknown",
+  }));
 
   const rankedPredictions = [...allPredictionsRaw].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
   const predictions = hasPremium
@@ -285,70 +280,140 @@ async function HomeDataSections({ hasPremium }: { hasPremium: boolean }) {
         </div>
       </SectionBand>
 
-      {/* ── SPORTS HUB ── */}
-      <SectionBand id="home-sports" title="🏟️ Sports Hub">
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-          gap: "var(--space-4)",
-        }}>
-          {SPORT_CATEGORIES.map((cat) => (
-            <div key={cat.label} style={{
-              background: "var(--color-bg-2)",
-              border: "1px solid var(--color-border)",
-              borderRadius: "var(--radius-md)",
-              padding: "var(--space-4)",
-            }}>
-              <div style={{
-                fontSize: "var(--text-sm)",
-                fontWeight: 700,
-                marginBottom: "var(--space-2)",
-                color: "var(--color-text-muted)",
-                textTransform: "uppercase",
-                letterSpacing: "0.04em",
+      {/* ── SPORTS HUB (PRIMARY LAUNCH SURFACE) ── */}
+      <SectionBand
+        id="home-sports"
+        title="🏟️ Sports Hub"
+        action={<Link href="/sports">Open full hub →</Link>}
+      >
+        <div style={{ display: "grid", gap: "var(--space-4)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "var(--space-3)" }}>
+            {Object.entries(gamesBySport)
+              .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+              .slice(0, 8)
+              .map(([sport, count]) => (
+                <Link
+                  key={sport}
+                  href={`/${sport}`}
+                  style={{
+                    display: "grid",
+                    gap: "0.35rem",
+                    padding: "var(--space-3)",
+                    borderRadius: "var(--radius-md)",
+                    border: "1px solid var(--color-border)",
+                    background: "var(--color-bg-2)",
+                    textDecoration: "none",
+                    color: "inherit",
+                  }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", fontWeight: 700 }}>
+                    <LeagueLogo sport={sport} size={16} className="sports-hub-logo" />
+                    {getDisplayName(sport)}
+                  </span>
+                  <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)" }}>
+                    {count} game{count === 1 ? "" : "s"} today
+                  </span>
+                </Link>
+              ))}
+          </div>
+
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+            gap: "var(--space-4)",
+          }}>
+            {SPORT_CATEGORIES.map((cat) => (
+              <article key={cat.label} style={{
+                background: "var(--color-bg-2)",
+                border: "1px solid var(--color-border)",
+                borderRadius: "var(--radius-md)",
+                padding: "var(--space-4)",
               }}>
-                {cat.icon} {cat.label}
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
-                {cat.sports.map((sport) => (
-                  <Link
-                    key={sport}
-                    href={`/${sport}`}
-                    className="sport-hub-link"
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "0.25rem",
-                      padding: "0.25rem 0.5rem",
-                      borderRadius: "var(--radius)",
-                      fontSize: "var(--text-xs)",
-                      fontWeight: 600,
-                      color: "var(--color-text)",
-                      background: "var(--color-bg-3)",
-                      textDecoration: "none",
-                      transition: "background var(--transition-fast)",
-                    }}
-                  >
-                    {getLeagueLogoUrl(sport) ? (
+                <div style={{
+                  fontSize: "var(--text-sm)",
+                  fontWeight: 800,
+                  marginBottom: "var(--space-2)",
+                  color: "var(--color-text-secondary)",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                }}>
+                  {cat.icon} {cat.label}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+                  {cat.sports.map((sport) => (
+                    <Link
+                      key={sport}
+                      href={`/${sport}`}
+                      className="sport-hub-link"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "0.3rem",
+                        padding: "0.28rem 0.55rem",
+                        borderRadius: "var(--radius)",
+                        fontSize: "var(--text-xs)",
+                        fontWeight: 600,
+                        color: "var(--color-text)",
+                        background: "var(--color-bg-3)",
+                        textDecoration: "none",
+                        border: "1px solid var(--color-border)",
+                        transition: "background var(--transition-fast)",
+                      }}
+                    >
                       <LeagueLogo sport={sport} size={14} className="sports-hub-logo" />
-                    ) : getSportIcon(sport)} {getDisplayName(sport)}
-                    {gamesBySport[sport] != null && (
-                      <span style={{
-                        background: "var(--color-brand)",
-                        color: "#fff",
-                        borderRadius: "var(--radius-full)",
-                        fontSize: 10,
-                        padding: "0 0.35rem",
-                        fontWeight: 700,
-                        marginLeft: "2px",
-                      }}>
-                        {gamesBySport[sport]}
-                      </span>
-                    )}
-                  </Link>
-                ))}
-              </div>
-            </div>
+                      {getDisplayName(sport)}
+                    </Link>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+      </SectionBand>
+
+      <SectionBand
+        id="home-intel"
+        title="Signal Center"
+        action={<Link href="/market-intel">Open board →</Link>}
+      >
+        <div className="grid-3">
+          {[
+            {
+              title: "Market Intelligence",
+              body: "Track volatile and moving lines across the slate before the rest of the market settles.",
+              href: "/market-intel",
+              accent: "◈",
+            },
+            {
+              title: "Fatigue Board",
+              body: "Find teams on short rest, compressed travel, and schedule disadvantage across major leagues.",
+              href: "/fatigue",
+              accent: "⚡",
+            },
+            {
+              title: "Injury Report",
+              body: "Scan the aggregate injury board for outs, questionable tags, and return timelines in one place.",
+              href: "/injuries",
+              accent: "✚",
+            },
+          ].map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              style={{
+                display: "block",
+                padding: "var(--space-4)",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--color-border)",
+                background: "var(--color-bg-2)",
+                textDecoration: "none",
+                color: "inherit",
+              }}
+            >
+              <div style={{ fontSize: "1.1rem", marginBottom: "0.5rem" }}>{item.accent}</div>
+              <div style={{ fontWeight: 800, marginBottom: "0.35rem" }}>{item.title}</div>
+              <div style={{ color: "var(--color-text-muted)", fontSize: "var(--text-sm)", lineHeight: 1.5 }}>{item.body}</div>
+            </Link>
           ))}
         </div>
       </SectionBand>

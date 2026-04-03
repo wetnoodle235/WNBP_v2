@@ -51,7 +51,15 @@ logging.basicConfig(
 log = logging.getLogger("season_sim")
 
 DATA_DIR = PROJECT_ROOT / "data" / "normalized"
+CURATED_DIR = PROJECT_ROOT / "data" / "normalized_curated"
 SIM_OUT = PROJECT_ROOT / "data" / "simulations"
+
+_KIND_CATEGORY_ALIASES: dict[str, list[str]] = {
+    "draft_picks": ["draft/picks", "draft_picks", "draft"],
+    "draft_positions": ["draft/positions", "draft_positions"],
+    "draft_teams": ["draft/teams", "draft_teams"],
+    "odds_history": ["odds/history", "odds_history"],
+}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Data-classes
@@ -315,7 +323,7 @@ def _safe_int(val: Any, default: int = 0) -> int:
 
 
 def _load_parquet(sport: str, kind: str, season: str) -> pd.DataFrame:
-    """Load a parquet file, trying season-specific first, then generic."""
+    """Load parquet from legacy normalized paths, then curated hive layout."""
     path_season = DATA_DIR / sport / f"{kind}_{season}.parquet"
     path_generic = DATA_DIR / sport / f"{kind}.parquet"
     for p in (path_season, path_generic):
@@ -329,18 +337,102 @@ def _load_parquet(sport: str, kind: str, season: str) -> pd.DataFrame:
                 return df
             except Exception as e:
                 log.warning("Failed to read %s: %s", p, e)
+
+    # Curated hive layout fallback.
+    categories = _KIND_CATEGORY_ALIASES.get(kind, [kind])
+    for category in categories:
+        season_glob = CURATED_DIR / sport / Path(*category.split("/")) / f"season={season}" / "*.parquet"
+        files = sorted(season_glob.parent.glob(season_glob.name)) if season_glob.parent.exists() else []
+        if not files:
+            continue
+        try:
+            df = pd.concat((pd.read_parquet(f) for f in files), ignore_index=True)
+            if not df.empty:
+                return df
+        except Exception as e:
+            log.warning("Failed to read curated %s (%s): %s", kind, category, e)
+
     return pd.DataFrame()
 
 
 def _load_parquet_raw(sport: str, kind: str) -> pd.DataFrame:
-    """Load generic (non-season-specific) parquet, all data."""
+    """Load all rows for a kind, preferring legacy then curated layout."""
     path = DATA_DIR / sport / f"{kind}.parquet"
     if path.exists():
         try:
             return pd.read_parquet(path)
         except Exception:
             pass
+
+    categories = _KIND_CATEGORY_ALIASES.get(kind, [kind])
+    for category in categories:
+        cat_dir = CURATED_DIR / sport / Path(*category.split("/"))
+        if not cat_dir.exists():
+            continue
+        files = sorted(cat_dir.glob("season=*/*.parquet"))
+        if not files:
+            continue
+        try:
+            return pd.concat((pd.read_parquet(f) for f in files), ignore_index=True)
+        except Exception:
+            continue
+
     return pd.DataFrame()
+
+
+def _apply_draft_signal_boost(sport: str, season: str, teams: list[Team]) -> None:
+    """Apply a light team-strength boost from draft capital where available."""
+    if not teams:
+        return
+
+    draft_df = _load_parquet(sport, "draft_picks", season)
+    if draft_df.empty and sport == "nfl":
+        # Crosswire CFBData draft into NFL when direct NFL draft dataset is absent.
+        draft_df = _load_parquet("ncaaf", "draft_picks", season)
+    if draft_df.empty:
+        return
+
+    id_to_team: dict[str, Team] = {}
+    name_to_team: dict[str, Team] = {}
+    for t in teams:
+        if t.team_id:
+            id_to_team[str(t.team_id)] = t
+        name_to_team[t.name.lower()] = t
+
+    def _pick_weight(overall: int | None) -> float:
+        if overall is None or overall <= 0:
+            return 0.01
+        if overall <= 5:
+            return 0.06
+        if overall <= 15:
+            return 0.04
+        if overall <= 32:
+            return 0.025
+        return 0.01
+
+    boost_by_team: dict[str, float] = {}
+    for _, row in draft_df.iterrows():
+        overall = _safe_int(row.get("overall_pick") or row.get("overall"), 0)
+        team_id = str(row.get("nfl_team_id") or row.get("team_id") or "").strip()
+        team_name = str(row.get("team_name") or "").strip().lower()
+
+        target = id_to_team.get(team_id)
+        if target is None and team_name:
+            target = name_to_team.get(team_name)
+        if target is None:
+            continue
+
+        boost_by_team[target.name] = boost_by_team.get(target.name, 0.0) + _pick_weight(overall if overall > 0 else None)
+
+    if not boost_by_team:
+        return
+
+    for t in teams:
+        team_boost = min(boost_by_team.get(t.name, 0.0), 0.12)
+        if team_boost <= 0:
+            continue
+        t.rating = min(99.0, t.rating * (1.0 + team_boost))
+        t.recent_form = min(1.0, t.recent_form + team_boost * 0.5)
 
 
 def _pyth_pct(pf: float, pa: float, exp_: float) -> float:
@@ -481,6 +573,8 @@ def load_sport_context(sport: str, season: str | None = None) -> SportContext:
                 games_played=gp, points_for=pf, points_against=pa,
                 pyth_pct=pyth, recent_form=recent,
             ))
+
+    _apply_draft_signal_boost(sport, season, teams)
 
     # Remaining schedule from games
     remaining: list[tuple[str, str, str]] = []

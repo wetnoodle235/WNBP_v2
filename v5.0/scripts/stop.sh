@@ -11,6 +11,7 @@ NC='\033[0m'
 
 PIDFILES=(
     "/tmp/sportstock-website.pid:Website"
+    "/tmp/sportstock-tunnel-watchdog.pid:Tunnel watchdog"
     "/tmp/sportstock-tunnel.pid:Cloudflare tunnel"
     "/tmp/sportstock-backend.pid:Backend"
 )

@@ -573,6 +573,15 @@ class GamePredictor:
             es_o2 = _cls("esports_map_total_over2")
             if es_o2 is not None:
                 result.esports_map_total_over2_prob = round(es_o2, 4)
+            es_dec = _cls("esports_decider_map")
+            if es_dec is not None:
+                result.esports_decider_map_prob = round(es_dec, 4)
+            es_hdom = _cls("esports_home_dominant")
+            if es_hdom is not None:
+                result.esports_home_dominant_prob = round(es_hdom, 4)
+            es_adom = _cls("esports_away_dominant")
+            if es_adom is not None:
+                result.esports_away_dominant_prob = round(es_adom, 4)
 
             band_keys = [
                 "margin_1", "margin_2", "margin_3", "margin_4plus",
@@ -602,9 +611,18 @@ class GamePredictor:
                     total_band_probs[tbk.replace("total_", "")] = round(tp, 4)
             if total_band_probs:
                 result.total_band_probs = total_band_probs
+                # Pass stored thresholds so consumers can classify actual totals correctly
+                band_thresh = extra_models.get("_total_band_thresholds")
+                if band_thresh:
+                    result.total_band_thresholds = band_thresh
             over_med_p = _cls("total_over_median")
             if over_med_p is not None:
                 result.total_over_median_prob = round(over_med_p, 4)
+                # Expose the training median so backtest can compare against it (not predicted_total)
+                band_thresh2 = extra_models.get("_total_band_thresholds", {})
+                med = band_thresh2.get("median")
+                if med is not None:
+                    result.total_median_threshold = round(float(med), 2)
 
             sh_p = _cls("second_half_winner")
             if sh_p is not None:
@@ -1324,9 +1342,16 @@ class GamePredictor:
                 total_band_probs[tbk.replace("total_", "")] = round(tp, 4)
         if total_band_probs:
             result.total_band_probs = total_band_probs
+            band_thresh = extra_models.get("_total_band_thresholds")
+            if band_thresh:
+                result.total_band_thresholds = band_thresh
         over_med_p = _cls_prob("total_over_median")
         if over_med_p is not None:
             result.total_over_median_prob = round(over_med_p, 4)
+            band_thresh2 = extra_models.get("_total_band_thresholds", {})
+            med = band_thresh2.get("median")
+            if med is not None:
+                result.total_median_threshold = round(float(med), 2)
 
         # ── Second Half ───────────────────────────────────
         sh_p = _cls_prob("second_half_winner")
@@ -1424,6 +1449,15 @@ class GamePredictor:
         mt_o2 = _cls_prob("esports_map_total_over2")
         if mt_o2 is not None:
             result.esports_map_total_over2_prob = round(mt_o2, 4)
+        dec_p = _cls_prob("esports_decider_map")
+        if dec_p is not None:
+            result.esports_decider_map_prob = round(dec_p, 4)
+        hdom_p = _cls_prob("esports_home_dominant")
+        if hdom_p is not None:
+            result.esports_home_dominant_prob = round(hdom_p, 4)
+        adom_p = _cls_prob("esports_away_dominant")
+        if adom_p is not None:
+            result.esports_away_dominant_prob = round(adom_p, 4)
 
         # ── F5 Innings (MLB) ──────────────────────────────
         for fk, attr in [

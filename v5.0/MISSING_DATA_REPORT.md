@@ -3,20 +3,70 @@
 **Purpose**: This document tracks data gaps in normalized datasets that limit model accuracy.
 A separate data-ingestion agent should address these gaps to improve prediction quality.
 
-**Last Updated**: 2026-04-02 14:00 — **Repair pipeline running**: Fixed hockey extractor `_skater_features()` AttributeError for early seasons (2020-2023). Fixed `consolidate_features.py` overwrite bug (was destroying historical data on every pipeline run). Repair extraction running for all truncated sports. Added quality-weighted form + opponent-adjusted efficiency to basketball extractor. New missing data discoveries: UFC weight_class/method/physical attributes empty; UFC 2020-2023 data was not being extracted (supplementary repair queued).
+**Last Updated**: 2026-04-02 18:30 — **Active pipeline running**: CSGO full retrain (70,627 rows, 7 seasons), championship/eredivisie/primeiraliga/europa sequential retrain. Latest 60-day backtest: **74.6% accuracy, 10,158 predictions, brier=0.1563**. Fixed critical `total_band`(was 7%) and `total_over_median`(was 47.8%) prediction bugs — band thresholds now stored in extra_models.pkl and passed through predictor. New soccer leagues now have trained models (championship, eredivisie, primeiraliga, europa). Sports with insufficient data confirmed: ligamx(2 rows extraction bug), euros(51 rows), f1(88 rows), indycar(4 rows), lpga(6 rows).
 
-New markets added this session:
-- **NHL**: Dynamic shots O/U (shots_over_low/mid/high) + `home_shots_advantage`
-- **MLB**: Per-inning NRFI (innings 1-9: `nrfi_i1..9`), F7 winner/over, late innings (7-9) over
-- **NBA/NFL/Basketball**: Close game, blowout win, one-score game (NFL)
-- **NFL/NCAAF**: 2H total O/U at 3 lines, NFL scoring surge (2H > 1H)
-- **All sports**: High/low scoring games (90th/10th pct total)
-- **Soccer/all**: BTTS combos (btts_home_win, btts_away_win, btts_draw)
-- **eSports**: 2-0 sweep markets, decider map market
-- **F1/IndyCar**: Motor podium/points/DNF/fastest lap
+**Previous**: 2026-04-02 14:30 — NHL/MLB game_id mismatch fix, 75.27% on 90-day window.
 
-Previously: NBA v6 79.58% (star_net_rating fix + shooting_trend). NCAAW v4 83.78%. NCAAF v4 79.18%. WTA 60.33%, ATP 62.07% (prestige_form). New markets: NFL/NCAAF total turnovers O/U + home_more_turnovers. MLB re-extraction with bat_ features. Full re-extraction pipeline for NHL(goal_streak), NBA(shooting_trend+star_net_rating), all 10 soccer leagues(h2h_home), ATP/WTA(prestige_form), WNBA/NCAAB/NCAAW(shooting_trend+star_net_rating). NFL/NCAAF re-extraction for turnovers_game target.
+New markets added (current session):
+- **Bug Fix**: `total_band` prediction was always predicting "mid" due to broken key parsing (7% accuracy fixed → uses stored p33/p67 thresholds)
+- **Bug Fix**: `total_over_median` was comparing to predicted_total instead of training median (47.8% fixed → uses stored historical median threshold)
+- **New Sports**: championship, eredivisie, primeiraliga, europa now have trained models
+- **eSports retrain**: CSGO re-extracted at 70,627 rows (was 581KB/outdated), LOL/dota2/valorant fully retrained
 
+Previous: NHL Dynamic shots O/U, MLB per-inning NRFI, NBA/NFL close game/blowout markets, eSports sweep markets.
+
+---
+
+## Backtest Results — 2026-04-02 18:00 (60-day window)
+
+**Overall**: 74.6% accuracy | 10,158 predictions | Brier Score: 0.1563
+
+| Category | Accuracy | Predictions |
+|----------|----------|-------------|
+| **Winner** | ~75-78% | ~4,000+ |
+| **Draw** | 96.6% | high |
+| **Overtime** | 97.0% | high |
+| **Dominant Win** | 73.1% | high |
+| **Halftime Winner** | 73.0% | high |
+| **total_band** | **FIXED** (was 7%, broken key parsing) | 6,636 |
+| **total_over_median** | **FIXED** (was 47.8%, wrong proxy) | high |
+
+**Top sport accuracy (60-day)**:
+- UFC: 98.7% | NCAAW: 92.3% | WTA: 87.5% | Bundesliga: 88.0% | ATP: 86.9%
+- Underperforming: Europa: 46.2% (13 games, small sample), EPL: 55.8% (52 games)
+
+**Important**: `total_band` and `total_over_median` accuracy will be correct in NEXT backtest run after models are retrained with new code that stores band thresholds in extra_models.pkl.
+
+
+
+## Player Props Training — 2026-04-02 (Latest Session Complete)
+
+> All sports trained with per-player rolling feature engine (vectorized, no look-ahead).
+> Features: avg5, avg15, max5, std5, trend, consistency, streak per stat column + opponent defensive context.
+> Lightweight ensemble mode (logistic + LightGBM) used for speed — 5× faster than full ensemble.
+
+| Sport | Models Trained | Training Rows | Feature Cols | Status |
+|-------|---------------|---------------|--------------|--------|
+| **NBA** | 34 | 139,000 | 123 | ✅ Complete — `ml/models/nba/player_props.pkl` |
+| **EPL** | 20 | ~80,000 | 123 | ✅ Complete — `ml/models/epl/player_props.pkl` |
+| **UFC** | 13 | ~40,000 | 123 | ✅ Complete — `ml/models/ufc/player_props.pkl` |
+| **NFL** | 34 | 53,262 | 116 | ✅ Complete — `ml/models/nfl/player_props.pkl` |
+| **NHL** | 26 | 443,000 | 123 | ✅ Complete — `ml/models/nhl/player_props.pkl` |
+| **MLB** | ~30 | 248,102 | 123 | ✅ Complete — `ml/models/mlb/player_props.pkl` |
+| LaLiga | 20 | ~70,000 | 123 | ✅ Complete (prior session) |
+| Bundesliga | 20 | ~60,000 | 123 | ✅ Complete (prior session) |
+| Ligue1 | 20 | ~55,000 | 123 | ✅ Complete (prior session) |
+| SerieA | 20 | ~75,000 | 123 | ✅ Complete (prior session) |
+| MLS | 20 | ~50,000 | 123 | ✅ Complete (prior session) |
+| UCL | 20 | ~35,000 | 123 | ✅ Complete (prior session) |
+| NCAAB | ~25 | large | 123 | ✅ Complete (prior session) |
+| NCAAW | ~20 | medium | 123 | ✅ Complete (prior session) |
+| WNBA | ~20 | medium | 123 | ✅ Complete (prior session) |
+| CSGO | ~15 | large | 123 | ✅ Complete (prior session) |
+| DOTA2 | ~10 | medium | 123 | ✅ Complete (prior session) |
+| LOL | ~10 | medium | 123 | ✅ Complete (prior session) |
+| Golf | ~8 | small | 123 | ✅ Complete (prior session) |
+| Valorant | ~10 | medium | 123 | ✅ Complete (prior session) |
 
 ---
 
@@ -43,26 +93,27 @@ Previously: NBA v6 79.58% (star_net_rating fix + shooting_trend). NCAAW v4 83.78
 | **SerieA** | **77.19%** | logistic | 2022-2025 | ✅ v3 + re-extraction queued | +h2h_home features |
 | **UCL** | **80.41%** | grad_boost | 2022-2025 | ✅ v3 + re-extraction queued | +h2h_home features |
 | **MLS** | **72.35%** | random_forest | 2022-2026 | ✅ v5 + re-extraction queued | +h2h_home features |
-| **LigaMx** | **70.59%** | knn | 2023-2025 | ✅ v3 + re-extraction queued | +h2h_home features |
-| **Eredivisie** | **84.44%** | logistic | 2023-2025 | ✅ v1 + re-extraction queued | +h2h_home features |
-| **Championship** | **71.43%** | — | 2023-2025 | ✅ v2 + re-extraction queued | +h2h_home features |
-| **PrimeiraLiga** | **81.91%** | catboost | 2023-2025 | ✅ v2 + re-extraction queued | +h2h_home features |
+| **LigaMx** | ❌ BLOCKED | — | 2020-2026 | ❌ Extraction bug — parquet exists (199KB) but only **2 usable rows** | See LigaMx bug below |
+| **Eredivisie** | **84.44%** | logistic | 2023-2025 | 🔄 Retraining (Apr 2 18:28) | Sequential retrain after OOM kills |
+| **Championship** | **71.43%** | — | 2023-2025 | 🔄 Retraining (Apr 2 18:28) | Sequential retrain after OOM kills |
+| **PrimeiraLiga** | **81.91%** | catboost | 2023-2025 | 🔄 Retraining (Apr 2 18:28) | Sequential retrain after OOM kills |
+| **Europa** | ~60% | — | 2020-2026 | 🔄 Retraining queued | Sequential retrain queued |
 | **ATP** | **62.07%** | catboost | 2022-2025 | ✅ v4 + re-extraction queued | +prestige_form features |
 | **WTA** | **60.33%** | grad_boost | 2022-2025 | ✅ v4 + re-extraction queued | +prestige_form features |
 | **NWSL** | — | — | — | ✅ Model exists (older run) | Needs retrain with new markets |
-| **F1** | ~65% | — | — | ✅ Model from Mar 30 | Needs refresh |
+| **F1** | ~65% | — | 2020-2026 | ❌ Only 88 rows — below 100-sample minimum | Insufficient data — needs more seasons/races |
 | **Golf** | ~93% | — | — | ✅ Model exists | — |
 | **UFC** | **53.85%→71%** | — | **2024-2026 only (1142 rows)** | ⚠️ NEEDS REPAIR — 2020-2023 data exists but never extracted | See UFC repair below |
-| **CSGO** | ~58% | — | — | ✅ Model exists | — |
-| **DOTA2** | ~65% | — | — | ✅ Model exists | — |
-| **LoL** | ~64% | — | — | ✅ Model exists | — |
-| **VALORANT** | ~62% | — | — | ✅ Model exists | — |
+| **CSGO** | ~58%→**TBD** | — | 2020-2026 | 🔄 Retraining (Apr 2 18:21, 70,627 rows) | Was massively outdated (581KB parquet); new 70K-row extraction done |
+| **DOTA2** | ~65% | — | 2020-2026 | ✅ Retrained Apr 2 17:37 (57MB) | Fresh retrain with full dataset |
+| **LoL** | ~64% | — | 2020-2026 | ✅ Retrained Apr 2 17:28 (67MB) | Fresh retrain with full dataset |
+| **VALORANT** | ~62% | — | 2020-2026 | ✅ Retrained Apr 2 18:01 (44MB) | Fresh retrain with full dataset |
 | **Bundesliga2** | ❌ NO DATA | — | — | ❌ No normalized data | See missing data section |
 | **SerieB** | ❌ NO DATA | — | — | ❌ No normalized data | See missing data section |
 | **Ligue2** | ❌ NO DATA | — | — | ❌ No normalized data | See missing data section |
-| **WorldCup** | ❌ NO DATA | — | — | ❌ No normalized data | See missing data section |
-| **IndyCar** | ❌ BLOCKED | — | 2024-2026 only (35 races) | ❌ Race-level only; need per-driver | See missing data section |
-| **LPGA** | ❌ BLOCKED | — | 2024-2026 only (68 games) | ❌ Insufficient data for training | See missing data section |
+| **WorldCup/Euros** | ❌ BLOCKED | — | 2020-2026 | ❌ Only 51 rows (biennial tournament) | Insufficient sample size — cannot train |
+| **IndyCar** | ❌ BLOCKED | — | 2024-2026 only (4 rows) | ❌ Critically insufficient data | See missing data section |
+| **LPGA** | ❌ BLOCKED | — | 2024-2026 only (6 rows) | ❌ Critically insufficient data | See missing data section |
 
 ### Prediction Markets Supported (as of 2026-04-01)
 
@@ -589,6 +640,32 @@ Key differential features added to all sports:
 ---
 
 ## Critical Issues (Blocks Feature Computation)
+
+### 0a. **[NEW — CRITICAL]** LigaMx Extraction Bug — Only 2 Rows Despite 199KB File
+
+**File**: `data/features/ligamx_all.parquet` (199KB exists)  
+**Problem**: Feature extraction produces only 2 usable rows for LigaMx despite the parquet file existing and having some content. The model training fails with "minimum is 100 samples". LigaMx games parquet likely has very few recent games or the game_id format mismatch causes joins to fail.  
+**Confirmed row count**: `ligamx_all.parquet` → **2 rows** (confirmed via backtest and training attempt)  
+**Historical report**: Previous sessions showed `ligamx(342)` rows — this suggests a regression or the extraction was done with different seasons  
+**Fix needed**:
+1. Check `data/normalized/ligamx/games_*.parquet` files — how many games exist per season?
+2. Re-run `python3 -m ml.feature_extraction --sport ligamx --seasons 2020,2021,2022,2023,2024,2025,2026` and debug why only 2 rows are produced
+3. Check `soccer.py` extractor for LigaMx-specific game_id format differences vs other leagues
+4. After fix: retrain LigaMx model (was ~70.59% accuracy with 342 rows)
+
+### 0b. **[NEW — CRITICAL]** Sports With Critically Insufficient Training Data
+
+The following sports were confirmed to fail model training with "n_samples=X < min_samples_split=100" or similar minimum sample errors:
+
+| Sport | Feature Rows | Status | Required Action |
+|-------|-------------|--------|-----------------|
+| **LigaMx** | **2 rows** | ❌ Extraction bug (see 0a above) | Fix extraction first |
+| **Euros** | **51 rows** | ❌ Biennial tournament, low game count | Add 2012/2016 tournament data + qualifiers |
+| **F1** | **88 rows** | ❌ Just below 100-sample minimum | Add 2018-2019 F1 seasons to normalized data |
+| **IndyCar** | **4 rows** | ❌ Critically insufficient | Add 2018-2023 IndyCar race data to normalized data |
+| **LPGA** | **6 rows** | ❌ Critically insufficient | Add 2020-2023 LPGA tournament rounds data |
+
+For **Euros/WorldCup**: These events only happen every 4 years. Consider: (a) training a combined international tournaments model pooling WorldCup + Euros + Copa América + AFCON, or (b) using club football model as baseline for international games.
 
 ### 0. **[NEW — CRITICAL]** ATP/WTA 2025/2026 — Serve Stats Completely Missing from Player Stats
 

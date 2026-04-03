@@ -173,6 +173,18 @@ class DataServiceDuckDB(DataService):
                 )
             return super()._load_kind(sport, kind, season=season, columns=columns)
 
+        # Prefer latest-odds aggregate snapshot when available.
+        if kind == "odds":
+            latest_odds_view = f"{sport}_market_odds_latest"
+            if self._view_exists(latest_odds_view):
+                return self._query_view(latest_odds_view, season=season, columns=columns)
+
+        # Prefer team-season rollup aggregate for team stats when available.
+        if kind == "team_stats":
+            team_rollup_view = f"{sport}_team_season_rollup"
+            if self._view_exists(team_rollup_view):
+                return self._query_view(team_rollup_view, season=season, columns=columns)
+
         if not self._view_exists(base_view):
             return super()._load_kind(sport, kind, season=season, columns=columns)
         
@@ -198,16 +210,21 @@ class DataServiceDuckDB(DataService):
 
             # Prefer already-aggregated curated views to avoid pandas groupby overhead.
             candidate_views: list[tuple[str, str | None]] = [
+                (f"{sport}_player_season_rollup", None),
                 (f"{sport}_player_season_averages", None),
                 (f"{sport}_season_averages_player", None),
-                (f"{sport}_all_season_averages", "avg_scope = 'player'"),
-                (f"{sport}_season_averages", "avg_scope = 'player'"),
+                (f"{sport}_all_season_averages", "season_avg_scope = 'player'"),
+                (f"{sport}_season_averages", "season_avg_scope = 'player'"),
             ]
 
             for view_name, extra_where in candidate_views:
                 if not self._view_exists(view_name):
                     continue
-                df = self._query_view(view_name, season=season, columns=None, extra_where=extra_where)
+                try:
+                    df = self._query_view(view_name, season=season, columns=None, extra_where=extra_where)
+                except Exception:
+                    logger.debug("Skipping invalid aggregate candidate view: %s", view_name)
+                    continue
                 if df.empty:
                     continue
                 if player_id and "player_id" in df.columns:
@@ -217,6 +234,92 @@ class DataServiceDuckDB(DataService):
             return super(DataServiceDuckDB, self).get_player_stats(sport, season=season, player_id=player_id, aggregate=aggregate)
 
         return self._get_cached(key, ttl, loader)
+
+    # ── Cross-sport aggregate query ───────────────────────
+
+    def query_cross_sport(
+        self,
+        kind: str,
+        sports: list[str],
+        *,
+        date_filter: str | None = None,
+        limit_per_sport: int | None = None,
+    ) -> list[dict]:
+        """Single DuckDB UNION ALL query against a pre-built cross-sport view.
+
+        Falls back to the base Python-loop implementation when:
+        - DuckDB is not ready or ``duckdb_use_curated`` is disabled
+        - The ``_all_{kind}`` view was not built by the catalog at startup
+        - The DuckDB query itself fails for any reason
+        """
+        if not self._duckdb_ready or not self._settings.duckdb_use_curated or self._conn is None:
+            return super().query_cross_sport(kind, sports, date_filter=date_filter, limit_per_sport=limit_per_sport)
+
+        all_view = f"_all_{kind}"
+        if not self._view_exists(all_view):
+            return super().query_cross_sport(kind, sports, date_filter=date_filter, limit_per_sport=limit_per_sport)
+
+        try:
+            return self._exec_cross_sport_query(
+                all_view, sports, date_filter=date_filter, limit_per_sport=limit_per_sport
+            )
+        except Exception:
+            logger.exception("query_cross_sport DuckDB failed for kind=%s; falling back to Python loop", kind)
+            return super().query_cross_sport(kind, sports, date_filter=date_filter, limit_per_sport=limit_per_sport)
+
+    def _exec_cross_sport_query(
+        self,
+        all_view: str,
+        sports: list[str],
+        *,
+        date_filter: str | None,
+        limit_per_sport: int | None,
+    ) -> list[dict]:
+        """Build and execute a parameterised DuckDB query against a cross-sport view."""
+        # Introspect the merged view schema once so we can build safe WHERE clauses.
+        try:
+            info_rows = self._conn.execute(f"PRAGMA table_info('{all_view}')").fetchall()
+            available_cols: set[str] = {str(r[1]) for r in info_rows}
+        except Exception:
+            available_cols = set()
+
+        where_parts: list[str] = []
+        params: list[object] = []
+
+        # Sport filter
+        if sports:
+            placeholders = ", ".join("?" * len(sports))
+            where_parts.append(f"sport IN ({placeholders})")
+            params.extend(sports)
+
+        # Date filter — UNION ALL BY NAME ensures all potential date columns exist
+        # (as NULL where a sport doesn't use that column name).
+        if date_filter:
+            date_cols = [
+                c for c in ("date", "start_date", "game_date", "start_time")
+                if c in available_cols
+            ]
+            if date_cols:
+                date_conds = " OR ".join(f'CAST("{c}" AS VARCHAR) LIKE ?' for c in date_cols)
+                where_parts.append(f"({date_conds})")
+                params.extend(f"{date_filter}%" for _ in date_cols)
+
+        where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+        if limit_per_sport and "sport" in available_cols:
+            # Use a window ROW_NUMBER to apply a per-sport row cap in a single pass.
+            sql = (
+                f"SELECT * EXCLUDE (_rn) FROM ("
+                f"  SELECT *, ROW_NUMBER() OVER (PARTITION BY sport) AS _rn"
+                f"  FROM {all_view}{where_sql}"
+                f") WHERE _rn <= ?"
+            )
+            params.append(limit_per_sport)
+        else:
+            sql = f"SELECT * FROM {all_view}{where_sql}"
+
+        df = self._conn.execute(sql, list(params)).df()
+        return self._df_to_records(df)
 
     @staticmethod
     def _view_for_kind(sport: str, kind: str) -> str | None:
@@ -251,18 +354,32 @@ class DataServiceDuckDB(DataService):
             "advanced_stats": f"{sport}_advanced_stats",
             "advanced_batting": f"{sport}_advanced_batting",
             "match_events": f"{sport}_match_events",
+            "play_by_play": f"{sport}_play_by_play",
             "ratings": f"{sport}_ratings",
+            "coaches": f"{sport}_staff_coaches",
+            "draft": f"{sport}_draft_all",
+            "draft_picks": f"{sport}_draft_picks",
+            "draft_positions": f"{sport}_draft_positions",
+            "draft_teams": f"{sport}_draft_teams",
+            "player_portal": f"{sport}_players_categories_portal",
+            "player_returning": f"{sport}_players_categories_returning",
+            "player_usage": f"{sport}_players_categories_usage",
+            "all_stats": f"{sport}_all_stats",
             "season_averages_all": f"{sport}_all_season_averages",
             "all_season_averages": f"{sport}_all_season_averages",
             "odds": f"{sport}_odds",
             "odds_history": f"{sport}_odds_history",
+            "odds_all": f"{sport}_odds_all",
             "injuries": f"{sport}_injuries",
             "news": f"{sport}_news",
             "transactions": f"{sport}_transactions",
             "weather": f"{sport}_weather",
             "market_signals": f"{sport}_market_signals",
+            "market_history": f"{sport}_market_history",
             "schedule_fatigue": f"{sport}_schedule_fatigue",
             "player_props": f"{sport}_player_props",
+            "player_props_history": f"{sport}_player_props_history",
+            "player_props_all": f"{sport}_player_props_all",
             "predictions": f"{sport}_predictions",
         }
         return kind_to_view.get(kind)

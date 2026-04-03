@@ -595,11 +595,14 @@ def _build_player_rolling_features(
 
     grp = ps.groupby("player_id", sort=False)
 
+    # Build all new feature columns into a dict, then concat once to avoid fragmentation
+    new_cols: dict[str, Any] = {}
+
     # ── games_played counter per player ────────────────────────────
-    ps["p_games_played"] = grp.cumcount()  # 0-indexed; 0 = no history
+    new_cols["p_games_played"] = grp.cumcount()  # 0-indexed; 0 = no history
 
     # ── rest days ──────────────────────────────────────────────────
-    ps["p_rest_days"] = (
+    new_cols["p_rest_days"] = (
         grp["date"]
         .diff()
         .dt.days
@@ -608,54 +611,56 @@ def _build_player_rolling_features(
     )
 
     # ── rolling minutes / starter rate (shift by 1 = prior games only) ──
-    ps["p_minutes_avg"] = (
+    new_cols["p_minutes_avg"] = (
         grp["minutes"]
         .transform(lambda x: x.shift(1).rolling(window_short, min_periods=1).mean().fillna(0.0))
     )
-    ps["p_starter_rate"] = (
+    new_cols["p_starter_rate"] = (
         grp["starter"]
         .transform(lambda x: x.shift(1).rolling(window_short, min_periods=1).mean().fillna(0.0))
     )
 
     # ── stat rolling features ───────────────────────────────────────
     for col in available:
-        shifted = grp[col].transform(lambda x: x.shift(1))  # prior games only
+        avg5  = grp[col].transform(lambda x: x.shift(1).rolling(window_short, min_periods=1).mean().fillna(0.0))
+        avg15 = grp[col].transform(lambda x: x.shift(1).rolling(window_long,  min_periods=1).mean().fillna(0.0))
+        max5  = grp[col].transform(lambda x: x.shift(1).rolling(window_short, min_periods=1).max().fillna(0.0))
+        std5  = grp[col].transform(lambda x: x.shift(1).rolling(window_short, min_periods=2).std().fillna(0.0))
 
-        ps[f"p_{col}_avg5"] = (
-            grp[col].transform(lambda x: x.shift(1).rolling(window_short, min_periods=1).mean().fillna(0.0))
-        )
-        ps[f"p_{col}_avg15"] = (
-            grp[col].transform(lambda x: x.shift(1).rolling(window_long, min_periods=1).mean().fillna(0.0))
-        )
-        ps[f"p_{col}_max5"] = (
-            grp[col].transform(lambda x: x.shift(1).rolling(window_short, min_periods=1).max().fillna(0.0))
-        )
-        ps[f"p_{col}_std5"] = (
-            grp[col].transform(lambda x: x.shift(1).rolling(window_short, min_periods=2).std().fillna(0.0))
-        )
-        ps[f"p_{col}_trend"] = ps[f"p_{col}_avg5"] - ps[f"p_{col}_avg15"]
-        ps[f"p_{col}_consistency"] = 1.0 / (1.0 + ps[f"p_{col}_std5"])
+        new_cols[f"p_{col}_avg5"]        = avg5
+        new_cols[f"p_{col}_avg15"]       = avg15
+        new_cols[f"p_{col}_max5"]        = max5
+        new_cols[f"p_{col}_std5"]        = std5
+        new_cols[f"p_{col}_trend"]       = avg5 - avg15
+        new_cols[f"p_{col}_consistency"] = 1.0 / (1.0 + std5)
 
-        # Streak proxy: # of last-5 games where value ≥ player's rolling 15-game avg
-        rolling_med15 = grp[col].transform(
+        # Streak: # of last-5 prior games where value ≥ player's 15-game rolling mean
+        _shifted  = grp[col].transform(lambda x: x.shift(1).fillna(0.0))
+        _baseline = grp[col].transform(
             lambda x: x.shift(1).rolling(window_long, min_periods=3).mean().fillna(0.0)
         )
-        ps[f"p_{col}_streak"] = grp[col].transform(
-            lambda x: x.shift(1).rolling(window_short, min_periods=1)
-            .apply(lambda w: float((w >= w.mean()).sum()) if len(w) > 0 else 0.0, raw=True)
+        _above = (_shifted >= _baseline).astype(float)
+        new_cols[f"p_{col}_streak"] = (
+            _above.groupby(ps["player_id"])
+            .transform(lambda x: x.rolling(window_short, min_periods=1).sum())
             .fillna(0.0)
         )
 
+    # Single concat to avoid highly-fragmented DataFrame
+    feat_df = pd.concat([ps, pd.DataFrame(new_cols, index=ps.index)], axis=1)
+
     # ── select output columns ───────────────────────────────────────
-    meta_cols = ["game_id", "player_id", "team_id", "player_name"] if "player_name" in ps.columns else ["game_id", "player_id", "team_id"]
+    meta_cols = (["game_id", "player_id", "team_id", "player_name"]
+                 if "player_name" in feat_df.columns
+                 else ["game_id", "player_id", "team_id"])
     context_cols = ["p_games_played", "p_rest_days", "p_minutes_avg", "p_starter_rate"]
-    feat_cols = []
+    roll_cols = []
     for col in available:
-        feat_cols += [f"p_{col}_avg5", f"p_{col}_avg15", f"p_{col}_max5",
+        roll_cols += [f"p_{col}_avg5", f"p_{col}_avg15", f"p_{col}_max5",
                       f"p_{col}_std5", f"p_{col}_trend", f"p_{col}_consistency", f"p_{col}_streak"]
 
-    out_cols = [c for c in meta_cols + context_cols + feat_cols if c in ps.columns]
-    return ps[out_cols].reset_index(drop=True)
+    out_cols = [c for c in meta_cols + context_cols + roll_cols if c in feat_df.columns]
+    return feat_df[out_cols].reset_index(drop=True)
 
 
 def _build_opponent_defensive_features(
@@ -666,58 +671,94 @@ def _build_opponent_defensive_features(
 ) -> pd.DataFrame:
     """Build opponent-defensive matchup features per (game_id, team_id).
 
-    For each team in each game, computes how many of the target stats the
-    opponent has allowed in their last N games (from all attackers).
+    Fully vectorized approach:
+    1. Aggregate all player stats to game-level totals per defending team
+    2. Compute rolling N-game mean of stats allowed per team (sorted by date)
+    3. Join back to each (game_id, team_id) pair
+
+    Returns columns: game_id, team_id, opp_def_{col}_pg, opp_def_{col}_roll{window}
     """
     if games_df.empty or player_stats.empty:
         return pd.DataFrame()
 
-    required_g = {"id", "date", "home_team_id", "away_team_id"}
+    id_col = "id" if "id" in games_df.columns else "game_id"
+    required_g = {id_col, "date", "home_team_id", "away_team_id"}
     if not required_g.issubset(games_df.columns):
         return pd.DataFrame()
 
     ps = player_stats.copy()
     ps["date"] = pd.to_datetime(ps["date"], errors="coerce")
-    ps = ps.dropna(subset=["date"]).sort_values("date")
+    ps = ps.dropna(subset=["date", "game_id", "team_id"])
     available = [c for c in stat_cols if c in ps.columns]
     if not available:
         return pd.DataFrame()
     for col in available:
         ps[col] = pd.to_numeric(ps[col], errors="coerce").fillna(0.0)
-
-    gdf = games_df[["id", "date", "home_team_id", "away_team_id"]].copy()
-    gdf["date"] = pd.to_datetime(gdf["date"], errors="coerce")
-    gdf = gdf.dropna(subset=["date"]).rename(columns={"id": "game_id"})
-    gdf["home_team_id"] = gdf["home_team_id"].astype(str)
-    gdf["away_team_id"] = gdf["away_team_id"].astype(str)
     ps["team_id"] = ps["team_id"].astype(str)
 
-    gdf_map = gdf.set_index("game_id")[["home_team_id", "away_team_id", "date"]].to_dict("index")
+    # Game-level totals allowed by each team's OPPONENT
+    # First map each (game_id, player_team) -> opponent_team
+    gdf = games_df[[id_col, "date", "home_team_id", "away_team_id"]].copy()
+    gdf["date"] = pd.to_datetime(gdf["date"], errors="coerce")
+    gdf = gdf.dropna(subset=["date"]).rename(columns={id_col: "game_id"})
+    gdf["home_team_id"] = gdf["home_team_id"].astype(str)
+    gdf["away_team_id"] = gdf["away_team_id"].astype(str)
+    gdf = gdf.drop_duplicates("game_id").sort_values("date").reset_index(drop=True)
 
-    records = []
-    for game_id, info in gdf_map.items():
-        g_date = info["date"]
-        for batting_team, opp_team in [
-            (info["home_team_id"], info["away_team_id"]),
-            (info["away_team_id"], info["home_team_id"]),
-        ]:
-            opp_past = gdf[
-                ((gdf["home_team_id"] == opp_team) | (gdf["away_team_id"] == opp_team)) &
-                (gdf["date"] < g_date)
-            ].tail(window)["game_id"].tolist()
+    # Build (game_id, team_id, opp_team_id, date) lookup
+    home = gdf[["game_id", "date", "home_team_id", "away_team_id"]].rename(
+        columns={"home_team_id": "team_id", "away_team_id": "opp_team_id"}
+    )
+    away = gdf[["game_id", "date", "away_team_id", "home_team_id"]].rename(
+        columns={"away_team_id": "team_id", "home_team_id": "opp_team_id"}
+    )
+    game_map = pd.concat([home, away], ignore_index=True)
 
-            if not opp_past:
-                continue
+    # Total stats scored BY player_team in each game (= stats ALLOWED BY opp_team)
+    game_totals = ps.groupby(["game_id", "team_id"])[available].sum().reset_index()
+    # game_totals[team_id] = team that SCORED these stats
+    # We want: for team X in game G, what did opponent allow against team X?
+    # Merge: game_totals.team_id == game_map.team_id, game_totals.game_id == game_map.game_id
+    merged = game_totals.merge(game_map[["game_id", "team_id", "opp_team_id", "date"]],
+                               on=["game_id", "team_id"], how="left")
+    # Now merged.opp_team_id = the team that was defending, merged.team_id = scorer
+    # Rename: opp_team_id → defending_team, team_id → scoring_team
+    merged = merged.rename(columns={"opp_team_id": "defending_team"})
+    merged = merged.dropna(subset=["defending_team", "date"]).sort_values("date")
 
-            allowed = ps[(ps["game_id"].isin(opp_past)) & (ps["team_id"] != opp_team)]
-            row: dict[str, Any] = {"game_id": game_id, "team_id": batting_team}
-            for col in available:
-                vals = allowed[col].values
-                row[f"opp_def_{col}_pg"]  = float(np.mean(vals)) if len(vals) > 0 else 0.0
-                row[f"opp_def_{col}_max"] = float(np.max(vals))  if len(vals) > 0 else 0.0
-            records.append(row)
+    # Compute rolling average of stats ALLOWED per defending team
+    roll_cols = {}
+    merged_sorted = merged.sort_values(["defending_team", "date"]).reset_index(drop=True)
+    for col in available:
+        # shift(1): don't include current game in rolling average (look-ahead prevention)
+        roll_cols[f"def_{col}_roll{window}"] = (
+            merged_sorted.groupby("defending_team")[col]
+            .transform(lambda x: x.shift(1).rolling(window, min_periods=1).mean())
+        )
+    roll_df = pd.DataFrame(roll_cols)
+    merged_sorted = pd.concat([merged_sorted, roll_df], axis=1)
 
-    return pd.DataFrame(records) if records else pd.DataFrame()
+    # Output: (game_id, defending_team=opp_team_id) → rolling defensive features
+    # For train_player_props: player's team_id = attacking team, opp = defending_team
+    # We need to join as: for player row (game_id, team_id), get defending_team == opponent
+    # So we merge player_feats[game_id, team_id] → game_map[game_id, team_id] → opp_team_id
+    # Then merged_sorted[game_id, defending_team == opp_team_id] → features
+
+    feat_cols = [f"def_{col}_roll{window}" for col in available]
+    result = merged_sorted[["game_id", "defending_team"] + feat_cols].drop_duplicates(
+        subset=["game_id", "defending_team"]
+    ).rename(columns={"defending_team": "opp_team_id"})
+
+    # Rename to opp_def_ prefix for clarity
+    rename_map = {f"def_{col}_roll{window}": f"opp_def_{col}_r{window}" for col in available}
+    result = result.rename(columns=rename_map)
+
+    # Join via game_map to get (game_id, team_id [attacker]) → opp defensive stats
+    game_map_slim = game_map[["game_id", "team_id", "opp_team_id"]].drop_duplicates()
+    out = game_map_slim.merge(result, on=["game_id", "opp_team_id"], how="left")
+    out = out.drop(columns=["opp_team_id"])
+
+    return out if len(out) > 0 else pd.DataFrame()
 
 
 def _make_composite_stats(player_stats: pd.DataFrame, sport: str) -> pd.DataFrame:
@@ -890,7 +931,11 @@ def _fit_cls_safe(
     y_va: pd.Series,
     min_samples: int = 60,
 ) -> Any:
-    """Fit a classifier using EnsembleVoter, or return None on failure."""
+    """Fit a classifier using a lightweight EnsembleVoter (logistic + LightGBM).
+
+    Uses ``lightweight=True`` so high-throughput prop training completes in
+    ~2–5 s per prop rather than ~90 s with the full 12-model ensemble.
+    """
     try:
         from ml.models.ensemble import EnsembleVoter
     except ImportError:
@@ -903,7 +948,7 @@ def _fit_cls_safe(
     if y_tr.nunique() < 2 or y_va.nunique() < 2:
         logger.debug("Skipping %s — only one class present", name)
         return None
-    model = EnsembleVoter()
+    model = EnsembleVoter(lightweight=True)
     model.fit_classifiers(X_tr, y_tr, X_va, y_va)
     return model
 
@@ -916,7 +961,7 @@ def _fit_reg_safe(
     y_va: pd.Series,
     min_samples: int = 60,
 ) -> Any:
-    """Fit a regressor using EnsembleVoter, or return None on failure."""
+    """Fit a regressor using a lightweight EnsembleVoter (ridge + LightGBM)."""
     try:
         from ml.models.ensemble import EnsembleVoter
     except ImportError:
@@ -926,7 +971,7 @@ def _fit_reg_safe(
     if len(X_tr) < min_samples or len(X_va) < 15:
         logger.debug("Skipping %s — too few samples", name)
         return None
-    model = EnsembleVoter()
+    model = EnsembleVoter(lightweight=True)
     model.fit_regressors(X_tr, y_tr, X_va, y_va)
     return model
 
@@ -934,10 +979,14 @@ def _fit_reg_safe(
 def train_player_props(sport: str, seasons: list[int]) -> dict[str, Any]:
     """Train player prop models for the given sport and seasons.
 
-    Returns
-    -------
-    Bundle dict with ``models`` (name → EnsembleVoter), ``feature_names``,
-    ``sport``, ``trained_at``, and ``prop_specs``.
+    ARCHITECTURE:
+    1. Load player stats once from DuckDB curated reader
+    2. Build per-player rolling feature frame ONCE (expensive, ~210k rows for NBA)
+    3. Build opponent defensive features ONCE per sport
+    4. For each prop spec: fast target join + model fit (cheap)
+
+    Returns bundle dict with ``models``, ``feature_names``, ``sport``, ``seasons``,
+    ``prop_specs``, and ``trained_at``.
     """
     logger.info("=" * 60)
     logger.info("Player props training — sport=%s  seasons=%s", sport, seasons)
@@ -948,22 +997,94 @@ def train_player_props(sport: str, seasons: list[int]) -> dict[str, Any]:
         raise ValueError(f"No prop specs defined for sport '{sport}'. "
                          f"Supported: {sorted(_PROP_SPECS)}")
 
-    # Load data
+    # ── 1. Load raw data ─────────────────────────────────────────────
     logger.info("Loading player stats …")
     player_stats = _load_player_stats(sport, seasons)
     if player_stats is None or len(player_stats) == 0:
         raise RuntimeError(f"No player stats found for {sport} seasons {seasons}")
+    player_stats = _make_composite_stats(player_stats, sport)
     logger.info("Player stats loaded: %d rows", len(player_stats))
 
     logger.info("Loading game features …")
     game_features = _load_game_features(sport, seasons)
     if game_features is None or len(game_features) == 0:
-        raise RuntimeError(f"No game features found for {sport}")
-    logger.info("Game features loaded: %d rows", len(game_features))
+        logger.warning("No game features found for %s — using empty context", sport)
+        game_features = pd.DataFrame()
+    else:
+        logger.info("Game features loaded: %d rows", len(game_features))
 
-    # Add composite stats
-    player_stats = _make_composite_stats(player_stats, sport)
+    # ── 2. Collect all stat columns needed across all specs ──────────
+    all_stat_cols_in_specs = list({spec[1] for spec in specs if spec[1] in player_stats.columns})
+    _SPORT_STAT_COLS: dict[str, list[str]] = {
+        "nba":  ["pts", "reb", "ast", "stl", "blk", "to", "minutes", "fga", "three_m",
+                 "plus_minus", "usg_pct", "ts_pct", "_pts_reb_ast", "_double_double"],
+        "nfl":  ["pass_yds", "pass_td", "rush_yds", "rush_td", "rec_yds", "rec_td",
+                 "receptions", "targets", "pass_rating", "sacks", "tackles"],
+        "mlb":  ["hits", "hr", "rbi", "runs", "sb", "bb", "so", "avg",
+                 "strikeouts", "innings", "era", "whip", "total_bases"],
+        "nhl":  ["goals", "assists", "shots", "saves", "toi", "hits", "plus_minus",
+                 "blocked_shots", "_goals_assists", "pp_goals"],
+        "epl":  ["goals", "assists", "shots", "shots_on_target", "fouls_committed",
+                 "saves", "goals_conceded", "yellow_cards"],
+        "ufc":  ["strikes_landed", "strikes_attempted", "sig_strikes_landed", "knockdowns",
+                 "finish_round"],
+    }
+    base_stat_cols = _SPORT_STAT_COLS.get(sport, [])
+    stat_cols_for_rolling = list({
+        c for c in base_stat_cols + all_stat_cols_in_specs if c in player_stats.columns
+    })
 
+    # ── 3. Build per-player rolling features ONCE ───────────────────
+    logger.info("Building per-player rolling features (%d stat cols) …", len(stat_cols_for_rolling))
+    player_feats = _build_player_rolling_features(player_stats, stat_cols_for_rolling)
+    if player_feats.empty:
+        raise RuntimeError(f"Could not build player rolling features for {sport}")
+    logger.info("Player rolling features built: %d rows × %d cols", len(player_feats), len(player_feats.columns))
+
+    # ── 4. Build opponent defensive features ONCE ───────────────────
+    # Use only the most common target stat for efficiency
+    primary_stat = all_stat_cols_in_specs[0] if all_stat_cols_in_specs else None
+    opp_feats: pd.DataFrame = pd.DataFrame()
+    if primary_stat and not game_features.empty:
+        games_with_id = game_features.copy()
+        if "game_id" in games_with_id.columns and "id" not in games_with_id.columns:
+            games_with_id = games_with_id.rename(columns={"game_id": "id"})
+        if {"id", "home_team_id", "away_team_id", "date"}.issubset(games_with_id.columns):
+            logger.info("Building opponent defensive features …")
+            opp_feats = _build_opponent_defensive_features(
+                player_stats, games_with_id, [primary_stat], window=10
+            )
+            if not opp_feats.empty:
+                logger.info("Opponent defensive features: %d rows", len(opp_feats))
+
+    # ── 5. Append game-context features to player_feats ─────────────
+    _GAME_CONTEXT_COLS = [
+        "is_home", "days_rest",
+        "home_pace", "away_pace", "home_off_rating", "away_def_rating",
+        "home_elo", "away_elo", "elo_diff",
+        "home_l5_win_pct", "away_l5_win_pct",
+    ]
+    if not game_features.empty and "game_id" in game_features.columns:
+        ctx_cols = [c for c in _GAME_CONTEXT_COLS if c in game_features.columns]
+        if ctx_cols:
+            game_ctx = game_features[["game_id"] + ctx_cols].copy()
+            player_feats = player_feats.merge(game_ctx, on="game_id", how="left")
+
+    if not opp_feats.empty:
+        player_feats = player_feats.merge(opp_feats, on=["game_id", "team_id"], how="left")
+
+    # Cold-start filter: require ≥3 games of history
+    if "p_games_played" in player_feats.columns:
+        player_feats = player_feats[player_feats["p_games_played"] >= 3].reset_index(drop=True)
+
+    logger.info("Final player feature frame: %d rows × %d cols", len(player_feats), len(player_feats.columns))
+
+    # ── 6. Metadata col set (excluded from X) ───────────────────────
+    _META = {"game_id", "player_id", "team_id", "player_name", "date",
+             "home_team_id", "away_team_id", "season"}
+    numeric_feat_cols: list[str] | None = None  # cached after first prop
+
+    # ── 7. Per-prop: join target + fit ──────────────────────────────
     models: dict[str, Any] = {}
     feature_names: list[str] = []
     trained_specs: list[str] = []
@@ -972,12 +1093,47 @@ def train_player_props(sport: str, seasons: list[int]) -> dict[str, Any]:
         target_name, stat_col, threshold, model_type, description = spec
         logger.info("Training prop: %s (%s) …", target_name, description)
 
-        result = _build_prop_targets(player_stats, game_features, spec, sport)
-        if result is None:
-            logger.warning("  Skipping %s — could not build targets", target_name)
+        if stat_col not in player_stats.columns:
+            logger.debug("  Skipping %s — stat col %s missing", target_name, stat_col)
             continue
 
-        X, y = result
+        # Join actual values for this stat onto player_feats
+        act = player_stats[["game_id", "player_id", stat_col]].copy()
+        act[stat_col] = pd.to_numeric(act[stat_col], errors="coerce").fillna(0.0)
+        merged = player_feats.merge(act, on=["game_id", "player_id"], how="inner")
+
+        if len(merged) < 80:
+            logger.debug("  Skipping %s — too few rows (%d)", target_name, len(merged))
+            continue
+
+        # Build target y
+        if model_type == "cls":
+            if "batter_hit" in target_name and "_hit" in target_name:
+                y = (merged[stat_col] > 0).astype(int)
+            elif "double_double" in target_name:
+                y = (merged[stat_col] > 0.5).astype(int)
+            else:
+                y = (merged[stat_col] > threshold).astype(int)
+        else:
+            y = merged[stat_col].fillna(0.0)
+
+        # Feature matrix X (drop metadata + target)
+        drop_cols = _META | {stat_col}
+        if numeric_feat_cols is None:
+            numeric_feat_cols = [c for c in merged.columns
+                                 if c not in drop_cols
+                                 and pd.api.types.is_numeric_dtype(merged[c])]
+        X = merged[[c for c in numeric_feat_cols if c in merged.columns]].fillna(0.0)
+
+        if X.shape[1] == 0 or len(X) < 80:
+            continue
+
+        # Temporal sort
+        if "date" in merged.columns:
+            order = pd.to_datetime(merged["date"], errors="coerce").argsort().values
+            X = X.iloc[order].reset_index(drop=True)
+            y = y.iloc[order].reset_index(drop=True)
+
         n = len(X)
         split_idx = int(n * 0.80)
         if split_idx < 60 or (n - split_idx) < 15:
@@ -998,31 +1154,30 @@ def train_player_props(sport: str, seasons: list[int]) -> dict[str, Any]:
                 feature_names = list(X_tr.columns)
             trained_specs.append(target_name)
             if model_type == "cls":
-                rate = float(y_tr.mean())
                 logger.info(
-                    "  ✓ %s fitted  (n_train=%d  n_val=%d  base_rate=%.1f%%)",
-                    target_name, len(X_tr), len(X_va), 100 * rate,
+                    "  ✓ %s  (n_train=%d  n_val=%d  base_rate=%.1f%%)",
+                    target_name, len(X_tr), len(X_va), 100 * float(y_tr.mean()),
                 )
             else:
                 logger.info(
-                    "  ✓ %s fitted  (n_train=%d  n_val=%d  mean_target=%.2f)",
+                    "  ✓ %s  (n_train=%d  n_val=%d  mean=%.2f)",
                     target_name, len(X_tr), len(X_va), float(y_tr.mean()),
                 )
         else:
-            logger.warning("  ✗ %s — model training failed or skipped", target_name)
+            logger.warning("  ✗ %s — model fit failed or skipped", target_name)
 
     if not models:
         raise RuntimeError(f"No player prop models could be trained for {sport}")
 
-    logger.info("Player props training complete — %d models: %s", len(models), list(models.keys()))
+    logger.info("Player props complete — %d models: %s", len(models), list(models.keys()))
 
     return {
-        "models": models,
+        "models":        models,
         "feature_names": feature_names,
-        "sport": sport,
-        "seasons": seasons,
-        "prop_specs": trained_specs,
-        "trained_at": datetime.utcnow().isoformat(),
+        "sport":         sport,
+        "seasons":       seasons,
+        "prop_specs":    trained_specs,
+        "trained_at":    datetime.utcnow().isoformat(),
     }
 
 

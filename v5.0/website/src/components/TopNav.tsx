@@ -42,6 +42,9 @@ const NAV_GROUPS: readonly NavGroup[] = [
       { href: "/news", label: "News", icon: "✦" },
       { href: "/standings", label: "Standings", icon: "≣" },
       { href: "/model-health", label: "Model", icon: "◔", premiumOnly: true },
+      { href: "/market-intel", label: "Market Intel", icon: "◈", premiumOnly: true },
+      { href: "/fatigue", label: "Fatigue", icon: "⚡", premiumOnly: true },
+      { href: "/injuries", label: "Injuries", icon: "✚" },
     ],
   },
   {

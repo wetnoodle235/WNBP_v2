@@ -324,7 +324,6 @@ class AutoCuratedSync:
         The API server should use read-only mode, so the sync pipeline can
         acquire the write lock.  If the lock is still held (e.g. server hasn't
         restarted yet), fall back to writing a deferred refresh request.
-        After refreshing, signal the server to reconnect.
         """
         try:
             from services.duckdb_catalog import DuckDBCatalog, create_duckdb_connection

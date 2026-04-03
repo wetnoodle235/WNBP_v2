@@ -159,7 +159,9 @@ class PredictionResult:
     # ── Total Score Bands ─────────────────────────────────
     # {"low": p, "mid": p, "high": p}, cutoffs sport-specific
     total_band_probs: dict[str, float] | None = None
+    total_band_thresholds: dict[str, float] | None = None  # {"p33": ..., "p67": ..., "median": ...}
     total_over_median_prob: float | None = None  # P(total > historical median)
+    total_median_threshold: float | None = None  # historical median used at training time
 
     # ── Second Half ───────────────────────────────────────
     second_half_home_win_prob: float | None = None   # P(home wins 2nd half)
@@ -385,7 +387,9 @@ class PredictionResult:
     # ── eSports Series Markets ─────────────────────────
     home_2_0_win_prob: float | None = None   # P(home wins 2-0)
     away_2_0_win_prob: float | None = None   # P(away wins 2-0)
-    esports_decider_map_prob: float | None = None  # P(series goes to 3 maps)
+    esports_decider_map_prob: float | None = None  # P(series goes to final map)
+    esports_home_dominant_prob: float | None = None  # P(home wins 2-0 or 3-0)
+    esports_away_dominant_prob: float | None = None  # P(away wins 2-0 or 3-0)
 
     # ── Motorsport Extra Markets ───────────────────────
     motor_podium_prob: float | None = None   # P(driver finishes top 3)

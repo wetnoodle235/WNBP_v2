@@ -5,11 +5,19 @@ import { SectionBand, Pagination } from "@/components/ui";
 import { getDisplayName, getSportColor } from "@/lib/sports-config";
 import { formatGameTime, formatOdds, formatPropType, formatSpread, formatTotal } from "@/lib/formatters";
 import { resolveServerApiBase } from "@/lib/api-base";
+import { preferredTeamLogoUrls } from "@/lib/media";
 
 const API_BASE = typeof window === "undefined"
   ? resolveServerApiBase()
   : "/api/proxy";
-const REFRESH_INTERVAL_MS = 30_000;
+const REFRESH_INTERVAL_MS = 60_000;
+const MAX_BACKOFF_MS = 5 * 60_000;
+
+class RateLimitError extends Error {
+  constructor() {
+    super("RATE_LIMITED");
+  }
+}
 
 type LiveConnectionState = "connecting" | "connected" | "fallback";
 
@@ -76,6 +84,12 @@ interface LiveOddsItem {
   total_over?: number | null;
   total_under?: number | null;
   is_live?: boolean;
+}
+
+interface TeamItem {
+  id: string | number;
+  sport?: string;
+  logo_url?: string | null;
 }
 
 interface Props {
@@ -147,37 +161,50 @@ function isLive(status: string): boolean {
   return s.includes("in") || s.includes("live") || s.includes("progress");
 }
 
-function getTeamLogoUrl(sport: string, teamId: string | null | undefined): string | null {
-  if (!teamId) return null;
-  const sportMap: Record<string, string> = {
-    nba: "nba",
-    mlb: "mlb",
-    nfl: "nfl",
-    nhl: "nhl",
-    wnba: "wnba",
-    ncaab: "ncaa",
-    ncaaf: "ncaa",
-    ncaaw: "ncaa",
-    epl: "soccer",
-    laliga: "soccer",
-    bundesliga: "soccer",
-    seriea: "soccer",
-    ligue1: "soccer",
-    mls: "soccer",
-    ucl: "soccer",
-    nwsl: "soccer",
-    liga_mx: "soccer",
-  };
-  const espnSport = sportMap[sport];
-  if (!espnSport) return null;
-  return `https://a.espncdn.com/i/teamlogos/${espnSport}/500/${teamId}.png`;
+function buildSportsParam(sportsList: string[]): string {
+  return Array.from(new Set(sportsList.map((sport) => sport.trim().toLowerCase()).filter(Boolean))).join(",");
+}
+
+function pickRefreshSports(games: GameItem[], allSports: string[], activeSport: string | null): string[] {
+  if (activeSport) {
+    return [activeSport];
+  }
+
+  const liveSports = Array.from(new Set(games.filter((g) => isLive(g.status)).map((g) => g.sport))).slice(0, 8);
+  if (liveSports.length > 0) {
+    return liveSports;
+  }
+
+  return allSports.slice(0, 8);
 }
 
 async function fetchLiveGames(sportsList: string[], signal?: AbortSignal): Promise<GameItem[]> {
   const today = new Date().toISOString().slice(0, 10);
+  const sportsParam = buildSportsParam(sportsList);
+  const aggregateRes = await fetch(
+    `${API_BASE}/v1/aggregate/games?sports=${encodeURIComponent(sportsParam)}&date_filter=${today}&limit_per_sport=150&exclude_final=false`,
+    { cache: "no-store", signal },
+  );
+
+  if (aggregateRes.status === 429) {
+    throw new RateLimitError();
+  }
+
+  if (aggregateRes.ok) {
+    const json = await aggregateRes.json();
+    const fallbackSport = sportsList[0] ?? "unknown";
+    return (json?.data ?? []).map((g: GameItem) => ({
+      ...g,
+      sport: g.sport ?? fallbackSport,
+    }));
+  }
+
   const results = await Promise.allSettled(
     sportsList.map(async (sport) => {
       const res = await fetch(`${API_BASE}/v1/${sport}/games?date=${today}&limit=100`, { signal });
+      if (res.status === 429) {
+        throw new RateLimitError();
+      }
       if (!res.ok) return [];
       const json = await res.json();
       return (json?.data ?? []).map((g: GameItem) => ({
@@ -186,20 +213,58 @@ async function fetchLiveGames(sportsList: string[], signal?: AbortSignal): Promi
       }));
     }),
   );
-  return results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+
+  let rateLimited = false;
+  const merged = results.flatMap((result) => {
+    if (result.status === "rejected") {
+      if (result.reason instanceof RateLimitError) {
+        rateLimited = true;
+      }
+      return [];
+    }
+    return result.value;
+  });
+
+  if (rateLimited) {
+    throw new RateLimitError();
+  }
+
+  return merged;
 }
 
+// Cap live-prediction fan-out to 3 sports to limit request volume
+const MAX_PREDICTION_SPORTS = 3;
+
 async function fetchLivePredictionSnapshots(sportsList: string[], signal?: AbortSignal): Promise<Record<string, LivePredictionItem>> {
+  const targetList = sportsList.slice(0, MAX_PREDICTION_SPORTS);
+  if (targetList.length === 0) return {};
   const results = await Promise.allSettled(
-    sportsList.map(async (sport) => {
+    targetList.map(async (sport) => {
       const res = await fetch(`${API_BASE}/v1/${sport}/live-predictions`, { cache: "no-store", signal });
+      if (res.status === 429) {
+        throw new RateLimitError();
+      }
       if (!res.ok) return [] as LivePredictionItem[];
       const json = await res.json();
       return (json?.data?.games ?? []) as LivePredictionItem[];
     }),
   );
 
-  const entries = results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+  let rateLimited = false;
+  const entries = results.flatMap((result) => {
+    if (result.status === "rejected") {
+      if (result.reason instanceof RateLimitError) {
+        rateLimited = true;
+      }
+      return [];
+    }
+    return result.value;
+  });
+
+  if (rateLimited) {
+    throw new RateLimitError();
+  }
+
   const merged: Record<string, LivePredictionItem> = {};
   for (const prediction of entries) {
     merged[String(prediction.game_id)] = prediction;
@@ -207,22 +272,25 @@ async function fetchLivePredictionSnapshots(sportsList: string[], signal?: Abort
   return merged;
 }
 
+// Use the aggregate opportunities endpoint — one request instead of per-sport fan-out
 async function fetchPropOpportunities(sportsList: string[], activeSport: string | null, signal?: AbortSignal): Promise<PropOpportunityItem[]> {
-  const targetSports = activeSport ? [activeSport] : sportsList;
-  const results = await Promise.allSettled(
-    targetSports.map(async (sport) => {
-      const res = await fetch(`${API_BASE}/v1/predictions/${sport}/player-props/opportunities?limit=6&min_score=0.6`, {
-        cache: "no-store",
-        signal,
-      });
-      if (!res.ok) return [] as PropOpportunityItem[];
-      const json = await res.json();
-      return (json?.data ?? []) as PropOpportunityItem[];
-    }),
-  );
-
-  const merged = results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
-  return merged
+  const params = new URLSearchParams({ limit: "8", min_score: "0.6" });
+  if (activeSport) {
+    params.set("sports", activeSport);
+  } else if (sportsList.length > 0) {
+    // Limit to first 4 sports to keep the payload small
+    params.set("sports", sportsList.slice(0, 4).join(","));
+  }
+  const res = await fetch(`${API_BASE}/v1/predictions/opportunities?${params}`, {
+    cache: "no-store",
+    signal,
+  });
+  if (res.status === 429) {
+    throw new RateLimitError();
+  }
+  if (!res.ok) return [];
+  const json = await res.json();
+  return ((json?.data ?? []) as PropOpportunityItem[])
     .sort((a, b) => (b.recommendation_score ?? 0) - (a.recommendation_score ?? 0))
     .slice(0, 8);
 }
@@ -244,20 +312,54 @@ async function fetchLiveOddsSnapshots(
 ): Promise<Record<string, LiveOddsItem>> {
   const today = new Date().toISOString().slice(0, 10);
   const targetSports = activeSport ? [activeSport] : sportsList;
-
-  const results = await Promise.allSettled(
-    targetSports.map(async (sport) => {
-      const res = await fetch(`${API_BASE}/v1/${sport}/odds?date=${today}&limit=200`, {
-        cache: "no-store",
-        signal,
-      });
-      if (!res.ok) return [] as LiveOddsItem[];
-      const json = await res.json();
-      return (json?.data ?? []) as LiveOddsItem[];
-    }),
+  const aggregateRes = await fetch(
+    `${API_BASE}/v1/aggregate/odds?sports=${encodeURIComponent(buildSportsParam(targetSports))}&date_filter=${today}&limit_per_sport=200`,
+    {
+      cache: "no-store",
+      signal,
+    },
   );
 
-  const allOdds = results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+  if (aggregateRes.status === 429) {
+    throw new RateLimitError();
+  }
+
+  let allOdds: LiveOddsItem[] = [];
+  if (aggregateRes.ok) {
+    const json = await aggregateRes.json();
+    allOdds = (json?.data ?? []) as LiveOddsItem[];
+  } else {
+    const results = await Promise.allSettled(
+      targetSports.map(async (sport) => {
+        const res = await fetch(`${API_BASE}/v1/${sport}/odds?date=${today}&limit=200`, {
+          cache: "no-store",
+          signal,
+        });
+        if (res.status === 429) {
+          throw new RateLimitError();
+        }
+        if (!res.ok) return [] as LiveOddsItem[];
+        const json = await res.json();
+        return (json?.data ?? []) as LiveOddsItem[];
+      }),
+    );
+
+    let rateLimited = false;
+    allOdds = results.flatMap((result) => {
+      if (result.status === "rejected") {
+        if (result.reason instanceof RateLimitError) {
+          rateLimited = true;
+        }
+        return [];
+      }
+      return result.value;
+    });
+
+    if (rateLimited) {
+      throw new RateLimitError();
+    }
+  }
+
   const bestByGame: Record<string, LiveOddsItem> = {};
   for (const odds of allOdds) {
     const key = `${odds.sport}:${String(odds.game_id)}`;
@@ -269,11 +371,80 @@ async function fetchLiveOddsSnapshots(
   return bestByGame;
 }
 
+async function fetchTeamLogoMap(sportsList: string[], signal?: AbortSignal): Promise<Record<string, string>> {
+  const aggregateRes = await fetch(
+    `${API_BASE}/v1/aggregate/teams?sports=${encodeURIComponent(buildSportsParam(sportsList))}&limit_per_sport=500`,
+    { cache: "no-store", signal },
+  );
+
+  if (aggregateRes.status === 429) {
+    throw new RateLimitError();
+  }
+
+  let teamsBySport: Record<string, TeamItem[]> = {};
+  if (aggregateRes.ok) {
+    const json = await aggregateRes.json();
+    const rows = (json?.data ?? []) as TeamItem[];
+    for (const row of rows) {
+      const sport = String(row.sport ?? "").toLowerCase();
+      if (!sport) continue;
+      if (!teamsBySport[sport]) {
+        teamsBySport[sport] = [];
+      }
+      teamsBySport[sport].push(row);
+    }
+  } else {
+    const results = await Promise.allSettled(
+      sportsList.map(async (sport) => {
+        const res = await fetch(`${API_BASE}/v1/${sport}/teams?limit=500`, { signal });
+        if (res.status === 429) {
+          throw new RateLimitError();
+        }
+        if (!res.ok) return { sport, teams: [] as TeamItem[] };
+        const json = await res.json();
+        return { sport, teams: (json?.data ?? []) as TeamItem[] };
+      }),
+    );
+
+    let rateLimited = false;
+    for (const result of results) {
+      if (result.status === "rejected") {
+        if (result.reason instanceof RateLimitError) {
+          rateLimited = true;
+        }
+        continue;
+      }
+      teamsBySport[result.value.sport] = result.value.teams;
+    }
+
+    if (rateLimited) {
+      throw new RateLimitError();
+    }
+  }
+
+  const map: Record<string, string> = {};
+  for (const sport of sportsList) {
+    const teams = teamsBySport[sport] ?? [];
+    for (const team of teams) {
+      const logoUrl = preferredTeamLogoUrls({
+        sport,
+        teamId: team.id,
+        logoUrl: team.logo_url ?? null,
+      })[0];
+      if (logoUrl) {
+        map[`${sport}:${String(team.id)}`] = logoUrl;
+      }
+    }
+  }
+  return map;
+}
+
 export function LiveClient({ games: initialGames, sports }: Props) {
   const [allGames, setAllGames] = useState<GameItem[]>(initialGames);
   const [livePredictions, setLivePredictions] = useState<Record<string, LivePredictionItem>>({});
   const [liveOdds, setLiveOdds] = useState<Record<string, LiveOddsItem>>({});
   const [propOpportunities, setPropOpportunities] = useState<PropOpportunityItem[]>([]);
+  const [teamLogos, setTeamLogos] = useState<Record<string, string>>({});
   const [activeSport, setActiveSport] = useState<string | null>(null);
   const [showLiveOnly, setShowLiveOnly] = useState(false);
   const [page, setPage] = useState(1);
@@ -289,10 +460,30 @@ export function LiveClient({ games: initialGames, sports }: Props) {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamsRef = useRef<EventSource[]>([]);
+  const rateLimitBackoffRef = useRef(0);
+  const [rateLimitedUntil, setRateLimitedUntil] = useState<number | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
-  const refreshGames = useCallback(async () => {
+  const registerRateLimit = useCallback(() => {
+    const nextBackoff = Math.min(
+      rateLimitBackoffRef.current > 0 ? rateLimitBackoffRef.current * 2 : 60_000,
+      MAX_BACKOFF_MS,
+    );
+    rateLimitBackoffRef.current = nextBackoff;
+    setRateLimitedUntil(Date.now() + nextBackoff);
+  }, []);
+
+  const clearRateLimit = useCallback(() => {
+    rateLimitBackoffRef.current = 0;
+    setRateLimitedUntil(null);
+  }, []);
+
+  const refreshGames = useCallback(async (force = false) => {
+    if (!force && rateLimitedUntil && Date.now() < rateLimitedUntil) {
+      return;
+    }
+
     // Cancel any in-flight refresh
     abortRef.current?.abort();
     const ac = new AbortController();
@@ -300,13 +491,15 @@ export function LiveClient({ games: initialGames, sports }: Props) {
 
     setIsRefreshing(true);
     try {
+      const targetSports = pickRefreshSports(allGames, sports, activeSport);
       const [fresh, snapshots, oddsSnapshots, opportunities] = await Promise.all([
         fetchLiveGames(sports, ac.signal),
-        fetchLivePredictionSnapshots(sports, ac.signal),
-        fetchLiveOddsSnapshots(sports, activeSport, ac.signal),
-        fetchPropOpportunities(sports, activeSport, ac.signal),
+        fetchLivePredictionSnapshots(targetSports, ac.signal),
+        fetchLiveOddsSnapshots(targetSports, activeSport, ac.signal),
+        fetchPropOpportunities(targetSports, activeSport, ac.signal),
       ]);
       if (ac.signal.aborted) return;
+      clearRateLimit();
       setAllGames(fresh);
       if (Object.keys(snapshots).length > 0) {
         setLivePredictions((current) => ({
@@ -323,14 +516,17 @@ export function LiveClient({ games: initialGames, sports }: Props) {
       setPropOpportunities(opportunities);
       setLastUpdated(new Date());
       setSecondsAgo(0);
-    } catch {
+    } catch (error) {
+      if (error instanceof RateLimitError) {
+        registerRateLimit();
+      }
       /* silent fail — keep stale data */
     } finally {
       if (!ac.signal.aborted) {
         setIsRefreshing(false);
       }
     }
-  }, [sports, activeSport]);
+  }, [sports, activeSport, allGames, rateLimitedUntil, registerRateLimit, clearRateLimit]);
 
   const oddsByTeam = useMemo(() => {
     const map: Record<string, LiveOddsItem> = {};
@@ -398,7 +594,7 @@ export function LiveClient({ games: initialGames, sports }: Props) {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
     const onVisibility = () => {
-      if (document.hidden) { stop(); } else { refreshGames(); start(); }
+      if (document.hidden) { stop(); } else { refreshGames(true); start(); }
     };
     start();
     document.addEventListener("visibilitychange", onVisibility);
@@ -408,6 +604,24 @@ export function LiveClient({ games: initialGames, sports }: Props) {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [refreshGames]);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchTeamLogoMap(sports, ac.signal)
+      .then((logos) => {
+        if (!ac.signal.aborted) {
+          setTeamLogos(logos);
+          clearRateLimit();
+        }
+      })
+      .catch((error) => {
+        if (error instanceof RateLimitError) {
+          registerRateLimit();
+        }
+        /* keep fallback initials */
+      });
+    return () => ac.abort();
+  }, [sports, registerRateLimit, clearRateLimit]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -673,7 +887,7 @@ export function LiveClient({ games: initialGames, sports }: Props) {
             </label>
 
             <button
-              onClick={refreshGames}
+              onClick={() => refreshGames(true)}
               disabled={isRefreshing}
               aria-label="Refresh games"
               aria-busy={isRefreshing}
@@ -718,8 +932,16 @@ export function LiveClient({ games: initialGames, sports }: Props) {
                 ? `Live stream active${streamedSports.length ? ` for ${streamedSports.length} sport${streamedSports.length === 1 ? "" : "s"}` : ""}`
                 : connectionState === "connecting"
                   ? "Connecting live stream..."
-                  : "Polling every 30s"}
+                  : "Polling every 60s"}
             </span>
+            {rateLimitedUntil && Date.now() < rateLimitedUntil && (
+              <>
+                <span>•</span>
+                <span>
+                  Cooling down after rate limit ({Math.max(1, Math.ceil((rateLimitedUntil - Date.now()) / 1000))}s)
+                </span>
+              </>
+            )}
             <span>•</span>
             <span>{filtered.length} game{filtered.length !== 1 ? "s" : ""} today</span>
           </span>
@@ -755,8 +977,8 @@ export function LiveClient({ games: initialGames, sports }: Props) {
                 const sportColor = getSportColor(game.sport);
                 const broadcasts = splitBroadcasts(game.broadcast);
                 const directBroadcastUrl = normalizeWatchUrl(game.broadcast_url);
-                const homeLogoUrl = getTeamLogoUrl(game.sport, game.home_team_id);
-                const awayLogoUrl = getTeamLogoUrl(game.sport, game.away_team_id);
+                const homeLogoUrl = game.home_team_id ? (teamLogos[`${game.sport}:${game.home_team_id}`] ?? null) : null;
+                const awayLogoUrl = game.away_team_id ? (teamLogos[`${game.sport}:${game.away_team_id}`] ?? null) : null;
                 const prediction = livePredictions[String(game.id)];
                 const odds =
                   liveOdds[`${game.sport}:${String(game.id)}`]

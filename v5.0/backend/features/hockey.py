@@ -49,26 +49,6 @@ class HockeyExtractor(BaseFeatureExtractor):
         super().__init__(data_dir)
         self.sport = sport
         self._ps_abr_to_id_cache: dict[int, dict[str, str]] = {}
-        self._all_games_cache: pd.DataFrame | None = None
-
-    def _load_all_games(self) -> pd.DataFrame:
-        """Load and cache all seasons' game data for cross-season form calculations."""
-        if self._all_games_cache is not None:
-            return self._all_games_cache
-        sport_dir = self.data_dir / "normalized" / self.sport
-        frames = []
-        for p in sorted(sport_dir.glob("games_*.parquet")):
-            try:
-                df = pd.read_parquet(p)
-                frames.append(df)
-            except Exception:
-                pass
-        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        if not combined.empty and "date" in combined.columns:
-            combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
-            combined.sort_values("date", inplace=True, ignore_index=True)
-        self._all_games_cache = combined
-        return combined
 
     def _build_ps_abr_to_id(self, season: int) -> dict[str, str]:
         """Build abbreviation → ESPN team_id map from games data for PS lookup."""

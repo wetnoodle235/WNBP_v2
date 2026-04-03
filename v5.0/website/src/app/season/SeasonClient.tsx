@@ -397,9 +397,20 @@ function AwardPredictions({ awards }: { awards: Record<string, AwardCandidate[]>
 
 function RoundByRound({ data }: { data: RoundOdds[] }) {
   if (!data?.length) return null;
-  const allRounds = Array.from(
-    new Set(data.flatMap((t) => Object.keys(t.rounds))),
+  const safeRows = data.filter(
+    (team): team is RoundOdds =>
+      !!team &&
+      typeof team.name === "string" &&
+      !!team.name &&
+      !!team.rounds &&
+      typeof team.rounds === "object" &&
+      !Array.isArray(team.rounds),
   );
+  if (!safeRows.length) return null;
+  const allRounds = Array.from(
+    new Set(safeRows.flatMap((team) => Object.keys(team.rounds ?? {}))),
+  );
+  if (!allRounds.length) return null;
   return (
     <SectionBand title="🔄 Round-by-Round Odds" id="rounds">
       <div className="card">
@@ -415,11 +426,11 @@ function RoundByRound({ data }: { data: RoundOdds[] }) {
               </tr>
             </thead>
             <tbody>
-              {data.map((t) => (
+              {safeRows.map((t) => (
                 <tr key={t.name}>
                   <td style={{ fontWeight: 600 }}>{t.name}</td>
                   {allRounds.map((r) => {
-                    const val = t.rounds[r];
+                    const val = t.rounds?.[r];
                     return (
                       <td key={r} style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                         {val != null ? (
@@ -542,6 +553,12 @@ function DraftLottery({ data, sport }: { data: DraftLotteryTeam[]; sport: string
   if (!data?.length) return null;
   if (!["nba", "nhl"].includes(sport)) return null;
 
+  const normalized = data.map((team) => {
+    const raw = Number(team.probability);
+    const probability = Number.isFinite(raw) ? raw : 0;
+    return { ...team, probability };
+  });
+
   return (
     <SectionBand title="🎰 Draft Lottery Odds" id="draft">
       <div className="card">
@@ -556,7 +573,7 @@ function DraftLottery({ data, sport }: { data: DraftLotteryTeam[]; sport: string
               </tr>
             </thead>
             <tbody>
-              {data.map((t) => (
+              {normalized.map((t) => (
                 <tr key={t.name}>
                   <td style={{ fontWeight: 600 }}>{t.name}</td>
                   <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums" }}>

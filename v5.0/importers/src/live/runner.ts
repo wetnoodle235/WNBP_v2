@@ -2,12 +2,13 @@
 // ──────────────────────────────────────────────────────────
 // Live Data Collection Runner
 // ──────────────────────────────────────────────────────────
-// Standalone daemon that orchestrates scoreboard + news
-// pollers for one or more sports.
+// Standalone daemon that orchestrates scoreboard, news,
+// DraftKings odds, and multi-source news pollers.
 //
 // Usage:
 //   npx tsx src/live/runner.ts --sports=nba,nfl
 //   npx tsx src/live/runner.ts --sports=mlb --scoreboard-interval=60 --news-interval=600
+//   npx tsx src/live/runner.ts --sports=nfl --odds-interval=300 --no-odds --no-multi-news
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +17,8 @@ import { logger } from "../core/logger.js";
 import { ESPN_LIVE_SPORTS } from "../providers/espn/live.js";
 import { pollScoreboard, type Poller } from "./scoreboard.js";
 import { pollNews } from "./news.js";
+import { pollDraftKingsOdds, DK_LIVE_SPORTS } from "./odds_dk.js";
+import { pollMultiSourceNews, MULTI_NEWS_SPORTS } from "./news_multi.js";
 
 // ── __dirname polyfill ──────────────────────────────────────
 
@@ -26,6 +29,8 @@ const __dirname = path.dirname(__filename);
 
 const DEFAULT_SCOREBOARD_INTERVAL_S = 30;
 const DEFAULT_NEWS_INTERVAL_S = 300;
+const DEFAULT_ODDS_INTERVAL_S = 300;        // DraftKings odds every 5 min
+const DEFAULT_MULTI_NEWS_INTERVAL_S = 1800; // Reddit/Google News every 30 min
 const DEFAULT_DATA_DIR = path.resolve(__dirname, "..", "..", "..", "data");
 
 // ── CLI parser ──────────────────────────────────────────────
@@ -34,6 +39,10 @@ interface LiveArgs {
   sports: Sport[];
   scoreboardIntervalMs: number;
   newsIntervalMs: number;
+  oddsIntervalMs: number;
+  multiNewsIntervalMs: number;
+  enableOdds: boolean;
+  enableMultiNews: boolean;
   dataDir: string;
 }
 
@@ -41,6 +50,10 @@ function parseCliArgs(argv: string[]): LiveArgs {
   let sports: Sport[] = [];
   let scoreboardIntervalS = DEFAULT_SCOREBOARD_INTERVAL_S;
   let newsIntervalS = DEFAULT_NEWS_INTERVAL_S;
+  let oddsIntervalS = DEFAULT_ODDS_INTERVAL_S;
+  let multiNewsIntervalS = DEFAULT_MULTI_NEWS_INTERVAL_S;
+  let enableOdds = true;
+  let enableMultiNews = true;
   let dataDir = process.env["DATA_DIR"] ?? DEFAULT_DATA_DIR;
 
   for (const arg of argv) {
@@ -50,12 +63,20 @@ function parseCliArgs(argv: string[]): LiveArgs {
       scoreboardIntervalS = Number(arg.slice("--scoreboard-interval=".length));
     } else if (arg.startsWith("--news-interval=")) {
       newsIntervalS = Number(arg.slice("--news-interval=".length));
+    } else if (arg.startsWith("--odds-interval=")) {
+      oddsIntervalS = Number(arg.slice("--odds-interval=".length));
+    } else if (arg.startsWith("--multi-news-interval=")) {
+      multiNewsIntervalS = Number(arg.slice("--multi-news-interval=".length));
+    } else if (arg === "--no-odds") {
+      enableOdds = false;
+    } else if (arg === "--no-multi-news") {
+      enableMultiNews = false;
     } else if (arg.startsWith("--data-dir=")) {
       dataDir = arg.slice("--data-dir=".length);
     }
   }
 
-  // Validate sports
+  // Validate sports — scoreboard requires ESPN live sports, but odds/news support broader set
   const validSports = sports.filter((s) => s in ESPN_LIVE_SPORTS);
   if (validSports.length === 0) {
     const available = Object.keys(ESPN_LIVE_SPORTS).join(", ");
@@ -72,6 +93,10 @@ function parseCliArgs(argv: string[]): LiveArgs {
     sports: validSports,
     scoreboardIntervalMs: scoreboardIntervalS * 1_000,
     newsIntervalMs: newsIntervalS * 1_000,
+    oddsIntervalMs: oddsIntervalS * 1_000,
+    multiNewsIntervalMs: multiNewsIntervalS * 1_000,
+    enableOdds,
+    enableMultiNews,
     dataDir: path.resolve(dataDir),
   };
 }
@@ -84,7 +109,9 @@ function main(): void {
   logger.info(
     `Starting live daemon — sports: [${args.sports.join(", ")}], ` +
       `scoreboard: ${args.scoreboardIntervalMs / 1_000}s, ` +
-      `news: ${args.newsIntervalMs / 1_000}s, ` +
+      `espn-news: ${args.newsIntervalMs / 1_000}s, ` +
+      `dk-odds: ${args.enableOdds ? `${args.oddsIntervalMs / 1_000}s` : "disabled"}, ` +
+      `multi-news: ${args.enableMultiNews ? `${args.multiNewsIntervalMs / 1_000}s` : "disabled"}, ` +
       `data: ${args.dataDir}`,
     "live",
   );
@@ -92,9 +119,27 @@ function main(): void {
   const pollers: Poller[] = [];
 
   for (const sport of args.sports) {
+    // ESPN scoreboard + ESPN news (always enabled)
     pollers.push(pollScoreboard(sport, args.dataDir, args.scoreboardIntervalMs));
     pollers.push(pollNews(sport, args.dataDir, args.newsIntervalMs));
-    logger.info(`Pollers started for ${sport}`, "live");
+
+    // DraftKings live odds (disable with --no-odds)
+    if (args.enableOdds && sport in DK_LIVE_SPORTS) {
+      try {
+        pollers.push(pollDraftKingsOdds(sport, args.dataDir, args.oddsIntervalMs));
+        logger.info(`DraftKings odds poller started for ${sport}`, "live");
+      } catch (err) {
+        logger.warn(`Could not start DK odds for ${sport}: ${String(err)}`, "live");
+      }
+    }
+
+    // Reddit + Google News multi-source news (disable with --no-multi-news)
+    if (args.enableMultiNews && MULTI_NEWS_SPORTS.includes(sport)) {
+      pollers.push(pollMultiSourceNews(sport, args.dataDir, args.multiNewsIntervalMs));
+      logger.info(`Multi-source news poller started for ${sport}`, "live");
+    }
+
+    logger.info(`All pollers started for ${sport}`, "live");
   }
 
   // Graceful shutdown

@@ -1,7 +1,14 @@
 import { buildPageMetadata } from "@/lib/seo";
 import type { Metadata } from "next";
-import { getGames } from "@/lib/api";
-import { LiveClient } from "./LiveClient";
+import { getAggregateGames } from "@/lib/api";
+import dynamicComponent from "next/dynamic";
+
+// Dynamically import LiveClient to enable code splitting
+// This prevents the 47KB component from loading on other pages
+const LiveClient = dynamicComponent(() => import("./LiveClient").then(m => ({ default: m.LiveClient })), {
+  loading: () => <div style={{ padding: "2rem", textAlign: "center" }}>Loading live scores...</div>,
+  ssr: true,
+});
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -17,19 +24,11 @@ export const metadata: Metadata = buildPageMetadata({
 
 export default async function LiveScoresPage() {
   const today = new Date().toISOString().slice(0, 10);
-
-  const results = await Promise.allSettled(
-    LIVE_SPORTS.map((sport) => getGames(sport, { date: today })),
-  );
-
-  const allGames = results.flatMap((r, i) =>
-    r.status === "fulfilled"
-      ? r.value.map((game) => ({
-          ...game,
-          sport: game.sport ?? LIVE_SPORTS[i],
-        }))
-      : [],
-  );
+  const allGames = await getAggregateGames([...LIVE_SPORTS], {
+    date: today,
+    excludeFinal: false,
+    limitPerSport: 300,
+  });
 
   return <LiveClient games={allGames} sports={[...LIVE_SPORTS]} />;
 }

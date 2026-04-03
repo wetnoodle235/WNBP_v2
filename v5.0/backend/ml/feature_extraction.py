@@ -52,12 +52,25 @@ _META_COLS = {
 
 
 def _discover_seasons(data_dir: Path, sport: str) -> list[int]:
-    """Auto-discover available seasons from games parquet files."""
+    """Auto-discover available seasons from curated games partitions.
+
+    Falls back to legacy normalized flat files when curated partitions are not
+    present yet.
+    """
+    curated_games_dir = data_dir / "normalized_curated" / sport / "games"
+    seasons: set[int] = set()
+    if curated_games_dir.exists():
+        for season_dir in curated_games_dir.glob("season=*"):
+            token = season_dir.name.replace("season=", "")
+            if token.isdigit():
+                seasons.add(int(token))
+    if seasons:
+        return sorted(seasons)
+
     sport_dir = data_dir / "normalized" / sport
     if not sport_dir.exists():
         return []
 
-    seasons = set()
     for path in sport_dir.glob("games_*.parquet"):
         stem = path.stem  # e.g. "games_2024"
         parts = stem.split("_")
@@ -70,9 +83,14 @@ def _discover_seasons(data_dir: Path, sport: str) -> list[int]:
 
 
 def _data_inventory(data_dir: Path, sport: str) -> dict[str, list[int]]:
-    """Report which data types and seasons are available."""
+    """Report which data types and seasons are available.
+
+    Primary inventory source is curated layout. Legacy normalized is used only
+    as a fallback for any data type not found in curated.
+    """
+    curated_sport_dir = data_dir / "normalized_curated" / sport
     sport_dir = data_dir / "normalized" / sport
-    if not sport_dir.exists():
+    if not curated_sport_dir.exists() and not sport_dir.exists():
         return {}
 
     data_types = [
@@ -82,15 +100,26 @@ def _data_inventory(data_dir: Path, sport: str) -> dict[str, list[int]]:
     inventory: dict[str, list[int]] = {}
     for dtype in data_types:
         seasons = set()
-        for path in sport_dir.glob(f"{dtype}_*.parquet"):
-            parts = path.stem.split("_")
-            try:
-                seasons.add(int(parts[-1]))
-            except ValueError:
-                pass
-        # Also check for bare file (no season suffix)
-        if (sport_dir / f"{dtype}.parquet").exists():
-            seasons.add(0)  # 0 signals "unseasoned"
+        curated_dtype_dir = curated_sport_dir / dtype
+        if curated_dtype_dir.exists():
+            for season_dir in curated_dtype_dir.glob("season=*"):
+                token = season_dir.name.replace("season=", "")
+                if token.isdigit():
+                    seasons.add(int(token))
+                elif token == "all":
+                    seasons.add(0)
+
+        # Legacy fallback for data types not found in curated yet.
+        if not seasons and sport_dir.exists():
+            for path in sport_dir.glob(f"{dtype}_*.parquet"):
+                parts = path.stem.split("_")
+                try:
+                    seasons.add(int(parts[-1]))
+                except ValueError:
+                    pass
+            if (sport_dir / f"{dtype}.parquet").exists():
+                seasons.add(0)  # 0 signals "unseasoned"
+
         if seasons:
             inventory[dtype] = sorted(s for s in seasons if s > 0)
     return inventory

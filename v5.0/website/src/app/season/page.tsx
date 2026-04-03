@@ -1,6 +1,13 @@
 import { buildPageMetadata } from "@/lib/seo";
 import type { Metadata } from "next";
-import { SeasonClient } from "./SeasonClient";
+import dynamic from "next/dynamic";
+
+// Dynamically import SeasonClient to enable code splitting
+// This prevents the 52KB component from loading on other pages
+const SeasonClient = dynamic(() => import("./SeasonClient").then(m => ({ default: m.default })), {
+  loading: () => <div style={{ padding: "2rem", textAlign: "center" }}>Loading season simulator...</div>,
+  ssr: true,
+});
 
 export const metadata: Metadata = buildPageMetadata({
   title: "Season Simulator",

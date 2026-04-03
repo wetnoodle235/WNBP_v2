@@ -29,6 +29,120 @@ class SoccerExtractor(BaseFeatureExtractor):
         self.sport = sport
         self._all_games_cache: pd.DataFrame | None = None
         self._european_lookup: dict[str, list] | None = None  # team → sorted list of play dates
+        self._gs_enriched: bool = False  # whether game_stats shots have been merged
+
+    def _enrich_games_with_team_shots(self, games: pd.DataFrame) -> pd.DataFrame:
+        """Aggregate per-player game_stats into home/away shot columns on games df.
+
+        When the provider doesn't store team-level shots in the games table
+        (e.g. EPL uses ESPN which omits shot totals), we derive them by summing
+        player-level game_stats shots grouped by game_id × team_id.
+
+        The team_id in game_stats uses ESPN 3-letter abbreviations (e.g. 'LIV',
+        'FUL') while games.home_team / away_team use full names ('Liverpool',
+        'Fulham').  We build a name→abbreviation mapping by cross-referencing
+        player-level game_stats with the games table using only game_id.
+
+        Columns added: home_shots, away_shots, home_shots_on_target,
+        away_shots_on_target (no-op if already present and sufficiently filled).
+        """
+        if games.empty:
+            return games
+        # Skip if already well-populated (>50% non-null and non-zero)
+        if "home_shots" in games.columns:
+            fill_rate = (games["home_shots"].fillna(0) > 0).mean()
+            if fill_rate > 0.5:
+                return games
+
+        try:
+            gs = self._reader.load_all_seasons(self.sport, "game_stats")
+            if gs is None or gs.empty or "team_id" not in gs.columns:
+                return games
+
+            gs = gs.copy()
+            gs["game_id"] = gs["game_id"].astype(str)
+
+            # Aggregate shots per game_id × team_id (abbreviation)
+            agg = (
+                gs.groupby(["game_id", "team_id"], as_index=False)
+                .agg(
+                    _shots=("shots", "sum"),
+                    _sot=("shots_on_target", "sum"),
+                )
+            )
+
+            games = games.copy()
+            games["_gid"] = games["id"].astype(str)
+
+            # Build abbreviation → full team name mapping by examining shared game_ids
+            # For each game we know {abbr_A, abbr_B} from game_stats and
+            # (home_team_full, away_team_full) from games.
+            # Use fuzzy prefix/substring matching to assign abbr→full_name.
+            import difflib
+
+            abbr_pivot = (
+                agg[agg["game_id"].isin(games["_gid"])]
+                .merge(games[["_gid", "home_team", "away_team"]], left_on="game_id", right_on="_gid")
+            )
+
+            abbr_map: dict[str, str] = {}  # abbr → full_name
+            for _, row in abbr_pivot.iterrows():
+                abbr = str(row["team_id"]).upper()
+                if abbr in abbr_map:
+                    continue
+                candidates = [str(row["home_team"]), str(row["away_team"])]
+                # Pick the candidate whose normalized form best matches the abbr
+                best = max(
+                    candidates,
+                    key=lambda name: (
+                        # prefer names that start with abbr letters
+                        sum(
+                            1
+                            for a, n in zip(abbr, "".join(w[0] for w in name.upper().split()))
+                            if a == n
+                        )
+                        # tiebreak: difflib ratio against abbreviated name
+                        + difflib.SequenceMatcher(None, abbr, name.upper()[:len(abbr)]).ratio()
+                    ),
+                )
+                abbr_map[abbr] = best
+
+            # Reverse map: full_name → abbr (take first/best)
+            name_to_abbr: dict[str, str] = {}
+            for abbr, name in abbr_map.items():
+                if name not in name_to_abbr:
+                    name_to_abbr[name] = abbr
+
+            # Vectorized merge using mapped abbreviations
+            games["_h_abbr"] = games["home_team"].map(name_to_abbr)
+            games["_a_abbr"] = games["away_team"].map(name_to_abbr)
+
+            # Join home shots: game_id + home_abbr
+            home_agg = agg.rename(columns={"team_id": "_h_abbr", "_shots": "home_shots", "_sot": "home_shots_on_target"})
+            away_agg = agg.rename(columns={"team_id": "_a_abbr", "_shots": "away_shots", "_sot": "away_shots_on_target"})
+
+            games = games.merge(home_agg[["game_id", "_h_abbr", "home_shots", "home_shots_on_target"]],
+                                left_on=["_gid", "_h_abbr"], right_on=["game_id", "_h_abbr"], how="left")
+            if "game_id" in games.columns:
+                games.drop(columns=["game_id"], inplace=True, errors="ignore")
+
+            games = games.merge(away_agg[["game_id", "_a_abbr", "away_shots", "away_shots_on_target"]],
+                                left_on=["_gid", "_a_abbr"], right_on=["game_id", "_a_abbr"], how="left")
+            if "game_id" in games.columns:
+                games.drop(columns=["game_id"], inplace=True, errors="ignore")
+
+            games.drop(columns=["_gid", "_h_abbr", "_a_abbr"], inplace=True, errors="ignore")
+        except Exception:
+            pass
+        return games
+
+    def _load_all_games(self) -> pd.DataFrame:
+        if getattr(self, "_all_games_cache", None) is not None:
+            return self._all_games_cache  # type: ignore[return-value]
+        df = super()._load_all_games()
+        df = self._enrich_games_with_team_shots(df)
+        self._all_games_cache = df
+        return df
 
     # ── Helpers ────────────────────────────────────────────
 
@@ -365,11 +479,16 @@ class SoccerExtractor(BaseFeatureExtractor):
         standings: pd.DataFrame,
     ) -> dict[str, float]:
         """League table position and computed soccer points."""
+        # Use midtable neutral defaults instead of zeros for missing data
+        # (zeros cause model confusion between "no data" and "worst team")
+        _MIDTABLE_POS = 10.0
+        _MIDTABLE_PTS_PG = 1.3  # typical average (38 pts over 29 games)
+        _MIDTABLE_GOALS_PG = 1.3
         feats: dict[str, float] = {
-            "home_league_pos": 0.0, "away_league_pos": 0.0,
+            "home_league_pos": _MIDTABLE_POS, "away_league_pos": _MIDTABLE_POS,
             "home_league_pts": 0.0, "away_league_pts": 0.0,
-            "home_league_goals_pg": 0.0, "away_league_goals_pg": 0.0,
-            "home_league_goals_against_pg": 0.0, "away_league_goals_against_pg": 0.0,
+            "home_league_goals_pg": _MIDTABLE_GOALS_PG, "away_league_goals_pg": _MIDTABLE_GOALS_PG,
+            "home_league_goals_against_pg": _MIDTABLE_GOALS_PG, "away_league_goals_against_pg": _MIDTABLE_GOALS_PG,
             "home_league_goal_diff": 0.0, "away_league_goal_diff": 0.0,
             "league_pos_diff": 0.0,
         }
@@ -410,7 +529,7 @@ class SoccerExtractor(BaseFeatureExtractor):
             elif "overall_rank" in cols:
                 pos = _num(r.get("overall_rank"))
             else:
-                pos = 0.0  # will be corrected below if 0
+                pos = _MIDTABLE_POS  # use midtable default when rank unknown
             feats[f"{side}_league_pos"] = pos
             feats[f"{side}_league_pts"] = soccer_pts
             feats[f"{side}_league_pts_pg"] = soccer_pts / gp if gp > 0 else 0.0
@@ -501,9 +620,6 @@ class SoccerExtractor(BaseFeatureExtractor):
             "red_cards_pg": 0.0,
             "attacking_depth": 0.0,
             "top_scorer_form": 0.0,
-            "shots_pg": 0.0,
-            "shots_on_target_pg": 0.0,
-            "saves_pg": 0.0,
             "assists_pg": 0.0,
         }
         # Primary: use game-level yellow/red card columns (much more reliable than player stats)
@@ -590,9 +706,6 @@ class SoccerExtractor(BaseFeatureExtractor):
                 "red_cards_pg": float(red_total) / n_games,
                 "attacking_depth": float(scorers),
                 "top_scorer_form": top_scorer_rate,
-                "shots_pg": shots_pg,
-                "shots_on_target_pg": sot_pg,
-                "saves_pg": saves_pg,
                 "assists_pg": assists_pg,
             }
         except Exception:
@@ -755,7 +868,8 @@ class SoccerExtractor(BaseFeatureExtractor):
         season_games: pd.DataFrame,
     ) -> dict[str, float]:
         """Matchday number, season phase, and attendance proxy."""
-        matchday = float(pd.to_numeric(game.get("matchday", 0), errors="coerce") or 0)
+        _md_raw = pd.to_numeric(game.get("matchday", None), errors="coerce")
+        matchday = float(_md_raw) if pd.notna(_md_raw) and float(_md_raw) > 0 else 0.0
         attendance = float(pd.to_numeric(game.get("attendance", 0), errors="coerce") or 0)
 
         # Season phase: how far through the season (0=start, 1=end)
@@ -764,6 +878,26 @@ class SoccerExtractor(BaseFeatureExtractor):
             md_max = pd.to_numeric(season_games["matchday"], errors="coerce").max()
             if pd.notna(md_max) and md_max > 0:
                 max_md = float(md_max)
+
+        # Fallback: if matchday missing/NaN/zero, estimate from date ordering within season
+        if matchday == 0 and not season_games.empty and "date" in season_games.columns:
+            game_date = str(game.get("date", ""))
+            if game_date:
+                sorted_dates = (
+                    season_games["date"].astype(str)
+                    .drop_duplicates()
+                    .sort_values()
+                    .reset_index(drop=True)
+                )
+                # Find ordinal position of this game's date
+                idx = sorted_dates.searchsorted(game_date)
+                estimated_md = float(idx) + 1.0
+                # Scale to typical season length (38 matchdays for most leagues)
+                total_dates = float(len(sorted_dates))
+                matchday = estimated_md if estimated_md <= max_md else max_md
+                # Also refine max_md from date count if needed
+                if max_md <= 0.0:
+                    max_md = max(total_dates, 1.0)
 
         season_progress = matchday / max_md if max_md > 0 else 0.0
         is_late_season = float(season_progress >= 0.7)

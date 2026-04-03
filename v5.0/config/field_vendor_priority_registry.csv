@@ -1,0 +1,109 @@
+sport,data_type,label_pattern,provider_priority,confidence,owner,last_reviewed,notes
+ncaaf,teams,*,espn>cfbdata,high,data-platform,2026-04-02,Default switched to ESPN-first to reduce CFBData quota pressure
+ncaaf,teams,logo,espn>cfbdata,high,data-platform,2026-04-02,ESPN logo CDN quality is usually better
+ncaaf,teams,color,cfbdata>espn,medium,data-platform,2026-04-02,CFBData tends to provide primary/alternate color pair
+ncaaf,teams,venue_.*,cfbdata>espn,medium,data-platform,2026-04-02,Venue profile usually richer in CFBData
+ncaaf,games,*,espn>cfbdata,high,data-platform,2026-04-02,Default switched to ESPN-first to reduce CFBData quota pressure
+ncaaf,games,broadcast,espn>cfbdata,high,data-platform,2026-04-02,ESPN has stronger TV metadata
+ncaaf,games_teams,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,games,temperature,weather>espn>cfbdata,high,data-platform,2026-04-02,Weather provider is canonical for weather labels
+ncaaf,games,wind_speed,weather>espn>cfbdata,high,data-platform,2026-04-02,Weather provider is canonical for weather labels
+ncaaf,games,venue,espn>cfbdata,medium,data-platform,2026-04-02,Prefer ESPN venue naming on core game records
+ncaaf,play_by_play,description,espn>cfbdata,medium,data-platform,2026-04-02,Prefer ESPN text when both providers supply play text
+ncaaf,play_by_play,event_type,espn>cfbdata,medium,data-platform,2026-04-02,Prefer ESPN event typing when overlapping
+ncaaf,play_by_play,clock,espn>cfbdata,medium,data-platform,2026-04-02,Prefer ESPN clock formatting on merged play rows
+ncaaf,odds,line,odds>oddsapi>cfbdata,high,data-platform,2026-04-02,Line price should follow dedicated odds feeds when overlapping with CFBData lines
+ncaaf,team_stats,*,espn>cfbdata,high,data-platform,2026-04-02,Default switched to ESPN-first for baseline stats while keeping CFBData label overrides
+ncaaf,team_stats,epa_.*,cfbdata>espn,high,data-platform,2026-04-02,CFBData provides richer advanced metrics
+ncaaf,team_stats,ppa_.*,cfbdata>espn,high,data-platform,2026-04-02,CFBData provides richer advanced metrics
+ncaaf,odds,*,odds>cfbdata>oddsapi,medium,data-platform,2026-04-02,Default odds merge
+ncaaf,odds,line,odds>oddsapi>cfbdata,medium,data-platform,2026-04-02,Prefer book-native line feeds
+ncaaf,odds,moneyline,odds>oddsapi>cfbdata,medium,data-platform,2026-04-02,Prefer book-native moneyline feeds
+ncaaf,odds,spread,odds>oddsapi>cfbdata,medium,data-platform,2026-04-02,Prefer book-native spread feeds
+ncaaf,player_stats,*,espn>cfbdata,high,data-platform,2026-04-02,Default switched to ESPN-first to reduce CFBData quota pressure
+ncaaf,player_stats,team,espn>cfbdata,low,data-platform,2026-04-02,Team naming may align better with ESPN roster IDs
+ncaaf,teams_fbs,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,conferences,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,venues,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,games_media,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,stats_game_advanced,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,stats_game_havoc,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,ppa_games,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,wp_pregame,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,records,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,teams_ats,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,standings,*,espn>cfbdata,high,data-platform,2026-04-02,Default switched to ESPN-first to reduce CFBData quota pressure
+ncaaf,ratings_sp,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,ratings_sp_conferences,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,ratings_elo,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,ratings_fpi,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,ratings_srs,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,talent,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,recruiting_teams,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,recruiting_groups,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,recruiting,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,players,*,espn>cfbdata,high,data-platform,2026-04-02,Default switched to ESPN-first to reduce CFBData quota pressure
+ncaaf,player_portal,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,player_returning,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,player_usage,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,ppa_players_season,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,stats,*,espn>cfbdata,high,data-platform,2026-04-02,Default switched to ESPN-first to reduce CFBData quota pressure
+ncaaf,ppa_teams,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,rankings,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,plays_stats,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,play_by_play,*,cfbdata>espn,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,plays_types,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,plays_stats_types,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,stats_categories,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,metrics_fg_ep,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,odds_history,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,player_props,*,odds>oddsapi,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,market_signals,*,odds>cfbdata>oddsapi,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,injuries,*,espn,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,news,*,espn,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,coaches,*,espn>cfbdata,high,data-platform,2026-04-02,Default switched to ESPN-first to reduce CFBData quota pressure
+ncaaf,draft_picks,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,draft,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,draft_positions,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,draft_teams,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,drives,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,calendar,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,game_box_advanced,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,games_players,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,info,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,lines,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,metrics_wp,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,plays,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,ppa_players_games,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,ppa_predicted,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,roster,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,scoreboard,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,stats_advanced,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,stats_player_season,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+ncaaf,stats_season,*,cfbdata,low,data-platform,2026-04-02,Auto-generated baseline from PROVIDER_PRIORITY
+nba,games,*,espn>nbastats,high,data-platform,2026-04-02,Core NBA schedule defaults to ESPN-first
+nba,games,status,espn>nbastats,high,data-platform,2026-04-02,Prefer ESPN game status lifecycle labels
+nba,games,date,espn>nbastats,high,data-platform,2026-04-02,Prefer ESPN canonical game-date formatting
+nba,teams,*,espn>nbastats,high,data-platform,2026-04-02,Core NBA team identity defaults to ESPN-first
+nba,teams,logo,espn>nbastats,high,data-platform,2026-04-02,ESPN logo metadata is preferred
+nba,players,*,nbastats>espn,high,data-platform,2026-04-02,NBA player identities are richer in nbastats
+nba,standings,*,nbastats>espn,high,data-platform,2026-04-02,Standings depth is stronger in nbastats feeds
+nba,player_stats,*,nbastats>espn,high,data-platform,2026-04-02,Player stat coverage is strongest in nbastats
+nba,team_stats,*,nbastats>espn,high,data-platform,2026-04-03,NBA team stats now blend nbastats first with ESPN fallback
+nba,venues,*,espn>nbastats,low,data-platform,2026-04-03,Auto-generated baseline from PROVIDER_PRIORITY
+nba,play_by_play,*,nbastats>espn,high,data-platform,2026-04-03,NBA play events now default to nbastats with ESPN fallback
+nba,play_by_play,description,nbastats>espn,medium,data-platform,2026-04-03,Prefer nbastats event descriptions for basketball action detail
+nba,play_by_play,event_type,nbastats>espn,medium,data-platform,2026-04-03,Prefer nbastats action typing labels
+nba,play_by_play,clock,nbastats>espn,medium,data-platform,2026-04-03,Prefer nbastats clock values on merged NBA plays
+nba,drives,*,espn,low,data-platform,2026-04-03,Auto-generated baseline from PROVIDER_PRIORITY
+nba,coaches,*,espn,medium,data-platform,2026-04-03,ESPN is the current canonical NBA coach metadata source
+nba,odds,*,odds>espn>oddsapi,high,data-platform,2026-04-02,Dedicated odds feed should win for line fields
+nba,odds,line,odds>oddsapi>espn,high,data-platform,2026-04-02,Prefer book-native lines for pricing fields
+nba,odds,moneyline,odds>oddsapi>espn,high,data-platform,2026-04-02,Prefer book-native moneyline values
+nba,odds,spread,odds>oddsapi>espn,high,data-platform,2026-04-02,Prefer book-native spread values
+nba,odds_history,*,odds>espn>oddsapi,medium,data-platform,2026-04-02,Historical lines default to odds-first
+nba,player_props,*,odds>oddsapi>prizepicks,medium,data-platform,2026-04-02,Props default to odds feed first
+nba,market_signals,*,odds>espn>oddsapi,medium,data-platform,2026-04-02,Derived market signal baseline order
+nba,injuries,*,espn,high,data-platform,2026-04-02,ESPN is canonical for NBA injuries
+nba,news,*,espn,high,data-platform,2026-04-02,ESPN is canonical for NBA news
+nba,transactions,*,espn,medium,data-platform,2026-04-02,ESPN baseline for transaction feed

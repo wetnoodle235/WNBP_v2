@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { SPORTS, isSportKey, type SportKey } from "@/lib/sports";
 import { buildPageMetadata } from "@/lib/seo";
-import { getGames, getStandings, getPredictions, getOdds, getNews, getInjuries } from "@/lib/api";
+import { getGames, getStandings, getPredictions, getOdds, getNews, getInjuries, getMarketSignals, getScheduleFatigue, getTeams } from "@/lib/api";
 import {
   SectionBand,
   StoryCard,
@@ -253,14 +253,10 @@ async function PredictionsSection({ sport }: { sport: SportKey }) {
   );
 }
 
-async function InjuriesSection({ sport }: { sport: SportKey }) {
-  const injuries = await getInjuries(sport);
-  const filtered = injuries
-    .filter((inj) => {
-      const lo = (inj.status ?? "").toLowerCase();
-      return lo.includes("out") || lo.includes("question");
-    })
-    .slice(0, 8);
+type InjuryRow = Awaited<ReturnType<typeof getInjuries>>[number];
+
+function InjuriesSection({ injuries }: { injuries: InjuryRow[] }) {
+  const filtered = injuries.slice(0, 8);
 
   if (filtered.length === 0) return null;
 
@@ -427,7 +423,17 @@ export default async function SportPage({ params }: PageProps) {
         </Suspense>
       </SectionBand>
 
-      {/* ── F) Related News ── */}
+      {/* ── F) Market Signals ── */}
+      <Suspense fallback={null}>
+        <MarketSignalsSectionWrapper sport={sport} />
+      </Suspense>
+
+      {/* ── G) Schedule Fatigue ── */}
+      <Suspense fallback={null}>
+        <FatigueSectionWrapper sport={sport} />
+      </Suspense>
+
+      {/* ── H) Related News ── */}
       <SectionBand
         id={`${sport}-news`}
         title="Related News"
@@ -475,7 +481,116 @@ async function InjuriesSectionWrapper({ sport }: { sport: SportKey }) {
 
   return (
     <SectionBand id={`${sport}-injuries`} title="Key Injuries Today">
-      <InjuriesSection sport={sport} />
+      <InjuriesSection injuries={filtered} />
+    </SectionBand>
+  );
+}
+
+async function MarketSignalsSectionWrapper({ sport }: { sport: SportKey }) {
+  const signals = await getMarketSignals(sport, { limit: "6" }).catch(() => []);
+  if (signals.length === 0) return null;
+
+  const REGIME_COLORS: Record<string, string> = {
+    volatile: "#ef4444",
+    moving: "#f59e0b",
+    stable: "#22c55e",
+  };
+
+  return (
+    <SectionBand
+      id={`${sport}-market-signals`}
+      title="Market Signals"
+      action={<Link href="/market-intel">All signals →</Link>}
+    >
+      <div style={{ overflowX: "auto" }}>
+        <table className="data-table responsive-table" style={{ borderCollapse: "collapse", width: "100%" }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: "left", padding: "6px 10px", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 500 }}>Date</th>
+              <th style={{ textAlign: "left", padding: "6px 10px", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 500 }}>Matchup</th>
+              <th style={{ textAlign: "left", padding: "6px 10px", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 500 }}>Regime</th>
+              <th style={{ textAlign: "left", padding: "6px 10px", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 500 }}>Bookmaker</th>
+            </tr>
+          </thead>
+          <tbody>
+            {signals.slice(0, 6).map((s, i) => {
+              const regime = (s.market_regime ?? "").toLowerCase();
+              const color = REGIME_COLORS[regime] ?? "var(--color-text-muted)";
+              const matchup = s.home_team && s.away_team ? `${s.away_team} @ ${s.home_team}` : s.game_id;
+              return (
+                <tr key={i}>
+                  <td style={{ padding: "7px 10px", fontSize: "0.82rem", color: "var(--color-text-muted)" }}>{s.date ? s.date.slice(0, 10) : "—"}</td>
+                  <td style={{ padding: "7px 10px", fontSize: "0.82rem" }}>
+                    <Link href={`/games/${sport}/${s.game_id}`} style={{ color: "inherit", textDecoration: "none" }}>{matchup}</Link>
+                  </td>
+                  <td style={{ padding: "7px 10px" }}>
+                    <span style={{ display: "inline-block", padding: "2px 7px", borderRadius: 4, fontSize: "0.72rem", fontWeight: 700, textTransform: "capitalize", background: `${color}22`, color }}>{s.market_regime ?? "—"}</span>
+                  </td>
+                  <td style={{ padding: "7px 10px", fontSize: "0.82rem", color: "var(--color-text-muted)" }}>{s.bookmaker ?? "—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </SectionBand>
+  );
+}
+
+async function FatigueSectionWrapper({ sport }: { sport: SportKey }) {
+  const rows = await getScheduleFatigue(sport, { limit: "6" }).catch(() => []);
+  if (rows.length === 0) return null;
+
+  const teams = await getTeams(sport).catch(() => []);
+  const teamLookup = Object.fromEntries(teams.map((team) => [team.id, team]));
+
+  const sorted = [...rows].sort((a, b) => (b.fatigue_score ?? 0) - (a.fatigue_score ?? 0)).slice(0, 6);
+
+  const LEVEL_COLORS: Record<string, string> = {
+    high: "#ef4444",
+    medium: "#f59e0b",
+    low: "#22c55e",
+  };
+
+  return (
+    <SectionBand
+      id={`${sport}-fatigue`}
+      title="Schedule Fatigue"
+      action={<Link href="/fatigue">Fatigue board →</Link>}
+    >
+      <div style={{ overflowX: "auto" }}>
+        <table className="data-table responsive-table" style={{ borderCollapse: "collapse", width: "100%" }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: "left", padding: "6px 10px", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 500 }}>Team</th>
+              <th style={{ textAlign: "left", padding: "6px 10px", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 500 }}>Level</th>
+              <th style={{ textAlign: "left", padding: "6px 10px", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 500 }}>Score</th>
+              <th style={{ textAlign: "left", padding: "6px 10px", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 500 }}>Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((f, i) => {
+              const level = (f.fatigue_level ?? "").toLowerCase();
+              const color = LEVEL_COLORS[level] ?? "var(--color-text-muted)";
+              const team = f.team_id ? teamLookup[f.team_id] : null;
+              return (
+                <tr key={i}>
+                  <td style={{ padding: "7px 10px", fontSize: "0.82rem", fontWeight: 600 }}>
+                    {f.team_id ? (
+                      <Link href={`/teams/${sport}/${f.team_id}`} style={{ color: "var(--color-brand, #60a5fa)", textDecoration: "none" }}>{team?.abbreviation ?? team?.name ?? f.team_id}</Link>
+                    ) : "—"}
+                  </td>
+                  <td style={{ padding: "7px 10px" }}>
+                    <span style={{ display: "inline-block", padding: "2px 7px", borderRadius: 4, fontSize: "0.72rem", fontWeight: 700, textTransform: "capitalize", background: `${color}22`, color }}>{f.fatigue_level ?? "—"}</span>
+                  </td>
+                  <td style={{ padding: "7px 10px", fontSize: "0.82rem", color: "var(--color-text-muted)", fontVariantNumeric: "tabular-nums" }}>{f.fatigue_score != null ? f.fatigue_score.toFixed(2) : "—"}</td>
+                  <td style={{ padding: "7px 10px", fontSize: "0.82rem", color: "var(--color-text-muted)" }}>{f.date ? f.date.slice(0, 10) : "—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </SectionBand>
   );
 }

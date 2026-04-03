@@ -77,6 +77,9 @@ const FOOTER_NAV = [
       { href: "/season", label: "Season Sim" },
       { href: "/opportunities", label: "Prop Opportunities" },
       { href: "/leaderboard", label: "Model Leaderboard" },
+      { href: "/market-intel", label: "Market Intelligence" },
+      { href: "/fatigue", label: "Fatigue Board" },
+      { href: "/injuries", label: "Injury Report" },
     ],
   },
   {

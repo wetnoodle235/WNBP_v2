@@ -71,6 +71,19 @@ const COMPETITION_CODES: Record<string, string> = {
 // The importer will silently skip 404s for seasons without a tournament.
 const TOURNAMENT_SPORTS = new Set(["worldcup", "euros"]);
 
+// 403 errors from football-data.org indicate the competition requires a paid
+// subscription tier.  We detect these and skip the sport without failing the
+// overall import (so exit code stays 0 and the pipeline doesn't retry).
+function isSubscriptionError(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return lower.includes("http 403") && (
+    lower.includes("subscription") ||
+    lower.includes("permissions") ||
+    lower.includes("restricted") ||
+    lower.includes("errorcode\"")
+  );
+}
+
 const ALL_ENDPOINTS = [
   "matches",
   "standings",
@@ -416,8 +429,16 @@ const footballdata: Provider = {
       NAME,
     );
 
+    // Track which sports are blocked by subscription restrictions (403) so
+    // we skip remaining endpoints+seasons for those sports without failing.
+    const subscriptionBlocked = new Set<string>();
+
     for (const sport of sports) {
+      if (subscriptionBlocked.has(sport)) continue;
+
       for (const season of opts.seasons) {
+        if (subscriptionBlocked.has(sport)) break;
+
         // Tournament sports (WC, EC) only happen in specific years — skip
         // non-tournament years rather than making API calls that return 404.
         if (TOURNAMENT_SPORTS.has(sport)) {
@@ -445,9 +466,29 @@ const footballdata: Provider = {
             };
             const result = await fn(ctx);
             totalFiles += result.filesWritten;
+            // Check if any endpoint error indicates a subscription restriction
+            // (403 Forbidden).  In that case, skip remaining endpoints+seasons
+            // for this sport without adding to allErrors so exit code stays 0.
+            const subError = result.errors.find(isSubscriptionError);
+            if (subError) {
+              subscriptionBlocked.add(sport);
+              logger.warn(
+                `${sport}: subscription tier does not allow this competition — skipping (upgrade plan to enable)`,
+                NAME,
+              );
+              break;
+            }
             allErrors.push(...result.errors);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
+            if (isSubscriptionError(msg)) {
+              subscriptionBlocked.add(sport);
+              logger.warn(
+                `${sport}: subscription tier does not allow this competition — skipping (upgrade plan to enable)`,
+                NAME,
+              );
+              break;
+            }
             logger.error(`${sport}/${season}/${ep}: ${msg}`, NAME);
             allErrors.push(`${sport}/${season}/${ep}: ${msg}`);
           }

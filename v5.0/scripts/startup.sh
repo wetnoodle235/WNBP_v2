@@ -20,10 +20,12 @@ WEBSITE_DIR="$ROOT/website"
 
 PIDFILE_BACKEND="/tmp/sportstock-backend.pid"
 PIDFILE_TUNNEL="/tmp/sportstock-tunnel.pid"
+PIDFILE_TUNNEL_WATCHDOG="/tmp/sportstock-tunnel-watchdog.pid"
 PIDFILE_WEBSITE="/tmp/sportstock-website.pid"
 
 LOG_BACKEND="/tmp/sportstock-backend.log"
 LOG_TUNNEL="/tmp/sportstock-tunnel.log"
+LOG_TUNNEL_WATCHDOG="/tmp/sportstock-tunnel-watchdog.log"
 LOG_WEBSITE="/tmp/sportstock-website.log"
 
 TUNNEL_URL_FILE="/tmp/sportstock-tunnel-url.txt"
@@ -44,7 +46,7 @@ err()  { echo -e "${RED}[startup]${NC} $*" >&2; }
 cleanup() {
     log "Shutting down all services…"
     local pids=()
-    for pidfile in "$PIDFILE_WEBSITE" "$PIDFILE_TUNNEL" "$PIDFILE_BACKEND"; do
+    for pidfile in "$PIDFILE_WEBSITE" "$PIDFILE_TUNNEL_WATCHDOG" "$PIDFILE_TUNNEL" "$PIDFILE_BACKEND"; do
         if [[ -f "$pidfile" ]]; then
             local pid
             pid=$(<"$pidfile")
@@ -177,6 +179,16 @@ start_tunnel() {
     log "  Tunnel URL: ${CYAN}${url}${NC} ✓"
 }
 
+start_tunnel_watchdog() {
+    kill_existing "tunnel watchdog" "$PIDFILE_TUNNEL_WATCHDOG"
+
+    log "Starting tunnel watchdog…"
+    "$SCRIPT_DIR/tunnel-watchdog.sh" >> "$LOG_TUNNEL_WATCHDOG" 2>&1 &
+    local pid=$!
+    echo "$pid" > "$PIDFILE_TUNNEL_WATCHDOG"
+    log "  Tunnel watchdog PID: $pid  (log: $LOG_TUNNEL_WATCHDOG)"
+}
+
 # ── 3. Update website environment ───────────────────────────────
 update_website_env() {
     local url
@@ -235,11 +247,13 @@ main() {
     # Truncate old logs
     : > "$LOG_BACKEND"
     : > "$LOG_TUNNEL"
+    : > "$LOG_TUNNEL_WATCHDOG"
     : > "$LOG_WEBSITE"
 
     preflight
     start_backend
     start_tunnel
+    start_tunnel_watchdog
     update_website_env
     start_website
 
@@ -256,6 +270,7 @@ main() {
     echo -e "  Logs:"
     echo -e "    Backend:  $LOG_BACKEND"
     echo -e "    Tunnel:   $LOG_TUNNEL"
+    echo -e "    Watchdog: $LOG_TUNNEL_WATCHDOG"
     echo -e "    Website:  $LOG_WEBSITE"
     echo ""
     echo -e "  Press ${YELLOW}Ctrl+C${NC} to stop all services"

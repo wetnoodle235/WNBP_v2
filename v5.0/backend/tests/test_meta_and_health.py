@@ -86,6 +86,13 @@ class TestDetailedHealth:
         meta = client.get("/v1/health").json()["meta"]
         assert "cached_at" in meta
 
+    def test_media_mirror_stats_present(self, client):
+        d = client.get("/v1/health").json()["data"]
+        media = d["media_mirror"]
+        assert "catalog_ready" in media
+        assert "stale_thresholds" in media
+        assert "by_staleness" in media
+
 
 # ── Sports catalogue ──────────────────────────────────────────────────
 
@@ -228,3 +235,34 @@ class TestMetaProviders:
     def test_sorted(self, client):
         providers = client.get("/v1/meta/providers").json()["data"]
         assert providers == sorted(providers)
+
+
+class TestMediaStatus:
+    """Test GET /v1/media/status endpoint."""
+
+    def test_returns_200(self, client):
+        assert client.get("/v1/media/status").status_code == 200
+
+    def test_envelope(self, client):
+        body = client.get("/v1/media/status").json()
+        assert body["success"] is True
+        assert isinstance(body["data"], dict)
+        assert "cached_at" in body["meta"]
+
+    def test_staleness_fields_present(self, client):
+        data = client.get("/v1/media/status").json()["data"]
+        assert "stale_thresholds" in data
+        assert "warning_hours" in data["stale_thresholds"]
+        assert "error_hours" in data["stale_thresholds"]
+        assert data["stale_thresholds"]["error_hours"] >= data["stale_thresholds"]["warning_hours"]
+        assert "by_staleness" in data
+        assert set(data["by_staleness"].keys()) == {"fresh", "warning", "critical", "unknown"}
+
+
+class TestInternalDocsVisibility:
+    def test_media_status_hidden_when_internal_docs_disabled(self, monkeypatch):
+        monkeypatch.setenv("V5_INCLUDE_INTERNAL_DOCS", "false")
+        app.openapi_schema = None
+        schema = app.openapi()
+        assert "/v1/media/status" not in schema.get("paths", {})
+        app.openapi_schema = None

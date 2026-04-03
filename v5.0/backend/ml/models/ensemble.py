@@ -152,7 +152,17 @@ class EnsembleVoter:
 
     # ── Initialisation ───────────────────────────────────
 
-    def __init__(self) -> None:
+    def __init__(self, lightweight: bool = False) -> None:
+        """Initialise the ensemble.
+
+        Parameters
+        ----------
+        lightweight:
+            When True, only fast models are included (logistic + LightGBM/XGBoost
+            gradient boosting).  Use for high-throughput training where many models
+            are fit in a loop (e.g. player props — 35+ props × N sports).
+        """
+        self.lightweight = lightweight
         self.classifiers: list[tuple[str, Any]] = []
         self.regressors: list[tuple[str, Any]] = []
         self.classifier_weights: dict[str, float] = {}
@@ -181,8 +191,57 @@ class EnsembleVoter:
     # ── Private helpers ──────────────────────────────────
 
     def _load_models(self) -> None:
-        """Populate classifier/regressor lists, adding optional boosters."""
+        """Populate classifier/regressor lists, adding optional boosters.
+
+        In ``lightweight`` mode only logistic regression + LightGBM (or XGBoost
+        as fallback) are included so that high-throughput loops (player props)
+        complete in seconds per prop rather than minutes.
+        """
         from copy import deepcopy
+
+        if self.lightweight:
+            # Fast ensemble: logistic + one gradient booster only
+            light_cls = [("logistic", LogisticRegression(max_iter=2000, C=0.5, solver="lbfgs"))]
+            light_reg = [("ridge", Ridge(alpha=2.0))]
+            self.classifiers = [(n, deepcopy(m)) for n, m in light_cls]
+            self.regressors  = [(n, deepcopy(m)) for n, m in light_reg]
+            if _LIGHTGBM_AVAILABLE:
+                self.classifiers.append((
+                    "lightgbm",
+                    LGBMClassifier(n_estimators=200, max_depth=5, learning_rate=0.05,
+                                   num_leaves=31, min_child_samples=10,
+                                   reg_alpha=0.1, reg_lambda=1.0,
+                                   subsample=0.8, colsample_bytree=0.8,
+                                   random_state=42, verbose=-1, n_jobs=4),
+                ))
+                self.regressors.append((
+                    "lightgbm",
+                    LGBMRegressor(n_estimators=200, max_depth=5, learning_rate=0.05,
+                                  num_leaves=31, min_child_samples=10,
+                                  reg_alpha=0.1, reg_lambda=1.0,
+                                  subsample=0.8, colsample_bytree=0.8,
+                                  random_state=42, verbose=-1, n_jobs=4),
+                ))
+            elif _XGBOOST_AVAILABLE:
+                self.classifiers.append((
+                    "xgboost",
+                    XGBClassifier(n_estimators=200, max_depth=5, learning_rate=0.05,
+                                  use_label_encoder=False, eval_metric="logloss",
+                                  reg_alpha=0.1, reg_lambda=1.0,
+                                  subsample=0.8, colsample_bytree=0.8,
+                                  random_state=42, verbosity=0, n_jobs=4),
+                ))
+                self.regressors.append((
+                    "xgboost",
+                    XGBRegressor(n_estimators=200, max_depth=5, learning_rate=0.05,
+                                 reg_alpha=0.1, reg_lambda=1.0,
+                                 subsample=0.8, colsample_bytree=0.8,
+                                 random_state=42, verbosity=0, n_jobs=4),
+                ))
+            n_cls = len(self.classifiers)
+            n_reg = len(self.regressors)
+            logger.debug("Lightweight ensemble: %d classifiers, %d regressors", n_cls, n_reg)
+            return
 
         self.classifiers = [(n, deepcopy(m)) for n, m in self.BASE_CLASSIFIERS]
         self.regressors = [(n, deepcopy(m)) for n, m in self.BASE_REGRESSORS]

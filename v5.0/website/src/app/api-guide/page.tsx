@@ -61,6 +61,79 @@ const GUIDE_ENDPOINTS: GuideEndpoint[] = [
 }`,
   },
   {
+    title: "Sports Catalog",
+    method: "GET",
+    path: "/v1/sports",
+    fullUrl: `${API_BASE}/v1/sports`,
+    description: "Discovers sports currently available in the backend catalog.",
+    bestFor: "Startup discovery, capability checks, and dynamic sport pickers.",
+    parameters: [],
+    exampleResponse: `{
+  "success": true,
+  "data": ["nba", "nfl", "mlb", "nhl", "epl", "laliga", "bundesliga", "atp", "wta", "f1", "ufc"],
+  "meta": {
+    "count": 33,
+    "cached_at": "2026-03-31T23:00:00Z"
+  }
+}`,
+  },
+  {
+    title: "Sports Capability Map",
+    method: "GET",
+    path: "/v1/meta/sports",
+    fullUrl: `${API_BASE}/v1/meta/sports`,
+    description: "Returns per-sport endpoint availability metadata.",
+    bestFor: "Routing logic, endpoint preflight checks, and API fallback behavior.",
+    parameters: [],
+    exampleResponse: `{
+  "success": true,
+  "data": {
+    "nba": {
+      "endpoints": ["games", "standings", "player_stats", "team_stats", "odds", "injuries", "news"],
+      "has_games": true,
+      "has_player_stats": true,
+      "has_odds": true
+    },
+    "f1": {
+      "endpoints": ["events", "drivers", "constructors", "standings"],
+      "has_games": false,
+      "has_player_stats": false,
+      "has_odds": false
+    }
+  },
+  "meta": {
+    "count": 33,
+    "cached_at": "2026-03-31T23:00:00Z"
+  }
+}`,
+  },
+  {
+    title: "Detailed Health",
+    method: "GET",
+    path: "/v1/health",
+    fullUrl: `${API_BASE}/v1/health`,
+    description: "Detailed health with uptime, cache stats, and per-sport data freshness.",
+    bestFor: "Service monitoring, deployment checks, and data recency validation.",
+    parameters: [],
+    exampleResponse: `{
+  "success": true,
+  "data": {
+    "status": "ok",
+    "uptime_seconds": 86432.5,
+    "cache": { "hits": 15420, "misses": 312, "size": 48 },
+    "data_freshness": {
+      "nba": "2026-03-31T21:15:00Z",
+      "nfl": "2026-03-31T18:00:00Z"
+    },
+    "configured_sports": 33,
+    "normalized_dir_exists": true
+  },
+  "meta": {
+    "cached_at": "2026-03-31T23:00:00Z"
+  }
+}`,
+  },
+  {
     title: "Games",
     method: "GET",
     path: "/v1/{sport}/games",
@@ -686,6 +759,7 @@ const GUIDE_ENDPOINTS: GuideEndpoint[] = [
 
 const AI_WORKFLOW_STEPS = [
   "Provide the sellable schema URL to the agent before any prompt that asks it to call the API.",
+  "Call /v1/sports and /v1/meta/sports first so the agent selects routes that are actually available per sport.",
   "Have the agent choose one of the canonical endpoints on this page and include required path parameters first, then optional query filters.",
   "Use the full request address in generated examples so clients do not guess hostnames or route names.",
   "Prefer tight filters and compact limits for faster responses and better AI application latency.",
@@ -728,6 +802,30 @@ export default async function ApiGuidePage() {
             <span>Schema URL</span>
             <strong>{SELLABLE_OPENAPI_URL}</strong>
           </div>
+        </div>
+      </section>
+
+      <section className={styles.aiSection}>
+        <div className={styles.aiCopy}>
+          <p className={styles.sectionEyebrow}>DuckDB Reality Check</p>
+          <h2>Coverage is broad and endpoint-specific</h2>
+          <p>
+            The current normalized warehouse contains hundreds of tables across 30+ detected
+            sport prefixes. NBA, NFL, MLB, and NHL have the deepest multi-endpoint coverage,
+            while additional leagues are available with varying depth by endpoint type.
+          </p>
+          <ul>
+            <li>Use <strong>/v1/sports</strong> for the live sport list.</li>
+            <li>Use <strong>/v1/meta/sports</strong> to check endpoint availability per sport.</li>
+            <li>Use <strong>/v1/health</strong> to verify freshness and operational status.</li>
+          </ul>
+        </div>
+        <div className={styles.aiCard}>
+          <h3>Recommended Discovery Sequence</h3>
+          <pre>{`1) GET ${API_BASE}/v1/sports
+2) GET ${API_BASE}/v1/meta/sports
+3) Select sport + endpoint pair
+4) Query canonical /v1/{sport}/... route`}</pre>
         </div>
       </section>
 

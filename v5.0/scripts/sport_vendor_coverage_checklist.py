@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import date
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ import pyarrow.parquet as pq
 
 PROVIDER_COL_HINTS = ("provider", "vendor", "source")
 YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
+MIN_SEASON_YEAR = 1990
+MAX_SEASON_YEAR = date.today().year + 2
 SEASON_TYPE_VALUES = {
     "regular",
     "preseason",
@@ -154,6 +157,8 @@ def _extract_years_from_text(text: str) -> set[int]:
         if not YEAR_RE.match(token):
             continue
         year = int(token)
+        if year < MIN_SEASON_YEAR or year > MAX_SEASON_YEAR:
+            continue
         years.add(year)
     return years
 

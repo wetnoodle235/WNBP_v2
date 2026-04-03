@@ -606,6 +606,59 @@ class BettingEngine:
                         candidates.append(cand)
                         break
 
+            # Decider map: series goes to final map (bo3 map3 / bo5 map5)
+            dec_prob = pred.get("esports_decider_map_prob")
+            if dec_prob is not None and dec_prob > 0.15:
+                for odds_row in game_odds:
+                    bk = odds_row.get("bookmaker", "")
+                    if bk.lower() in self.config.excluded_vendors:
+                        continue
+                    dec_odds = odds_row.get("decider_map_odds") or odds_row.get("map3_odds")
+                    if dec_odds is None:
+                        continue
+                    dec_o = float(dec_odds) if dec_odds > 1.0 else None
+                    if dec_o is None:
+                        continue
+                    cand = self._evaluate_candidate(
+                        sport=sport, game_id=game_id, bet_type="esports_decider_map",
+                        selection="decider_map", line=None, model_prob=dec_prob,
+                        decimal_odds=dec_o,
+                        american_odds=int((dec_o - 1) * 100) if dec_o >= 2.0 else int(-100 / (dec_o - 1)),
+                        bookmaker=bk, home_team=home_team, away_team=away_team,
+                    )
+                    if cand:
+                        candidates.append(cand)
+                        break
+
+            # Home/Away dominant win (clean sweep 2-0 or 3-0)
+            for dom_key, dom_side in [
+                ("esports_home_dominant_prob", home_team),
+                ("esports_away_dominant_prob", away_team),
+            ]:
+                dom_prob = pred.get(dom_key)
+                if dom_prob is not None and dom_prob > 0.15:
+                    for odds_row in game_odds:
+                        bk = odds_row.get("bookmaker", "")
+                        if bk.lower() in self.config.excluded_vendors:
+                            continue
+                        side = "home" if "home" in dom_key else "away"
+                        d_odds = odds_row.get(f"{side}_clean_sweep_odds") or odds_row.get(f"{side}_2_0_odds")
+                        if d_odds is None:
+                            continue
+                        d_o = float(d_odds) if d_odds > 1.0 else None
+                        if d_o is None:
+                            continue
+                        cand = self._evaluate_candidate(
+                            sport=sport, game_id=game_id, bet_type="esports_dominant_win",
+                            selection=f"{dom_side}_clean_sweep", line=None, model_prob=dom_prob,
+                            decimal_odds=d_o,
+                            american_odds=int((d_o - 1) * 100) if d_o >= 2.0 else int(-100 / (d_o - 1)),
+                            bookmaker=bk, home_team=home_team, away_team=away_team,
+                        )
+                        if cand:
+                            candidates.append(cand)
+                            break
+
             # ── BTTS (both teams to score) ────────────────────────────────
             btts_p = pred.get("btts_prob")
             if btts_p is not None:

@@ -18,10 +18,13 @@ from auth.middleware import (
     require_api_key,
 )
 from auth.models import APIKeyInfo
-from config import SPORT_DEFINITIONS, get_available_seasons, get_current_season, is_season_active
+from config import SPORT_DEFINITIONS, get_available_seasons, get_current_season, get_settings, is_season_active
 from services.data_service import DataService, get_data_service
+from services.media_mirror import get_media_mirror_service
 
 router = APIRouter(prefix="/v1/{sport}")
+_settings = get_settings()
+_media = get_media_mirror_service()
 
 
 # ── Helpers ───────────────────────────────────────────────
@@ -95,6 +98,34 @@ def _paginated_response(
     if extra_meta:
         meta.update(extra_meta)
     return {"success": True, "data": page, "meta": meta}
+
+
+def _apply_team_logo_mirror(sport: str, team: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(team, dict):
+        return team
+    team_id = str(team.get("id", ""))
+    source_url = team.get("logo_url")
+    team["logo_url"] = _media.team_logo_url(
+        sport=sport,
+        team_id=team_id,
+        source_url=source_url,
+        auto_sync=_settings.media_auto_sync,
+    )
+    return team
+
+
+def _apply_player_headshot_mirror(sport: str, player: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(player, dict):
+        return player
+    player_id = str(player.get("id", ""))
+    source_url = player.get("headshot_url")
+    player["headshot_url"] = _media.player_headshot_url(
+        sport=sport,
+        player_id=player_id,
+        source_url=source_url,
+        auto_sync=_settings.media_auto_sync,
+    )
+    return player
 
 
 # ── Overview ──────────────────────────────────────────────
@@ -419,6 +450,7 @@ async def list_teams(
     await rate_limit_check(api_key)
     effective_season = _resolve_season(sport, season)
     teams = ds.get_teams(sport, season=effective_season)
+    teams = [_apply_team_logo_mirror(sport, t) for t in teams]
     return _paginated_response(teams, sport, limit=limit, offset=offset, season=effective_season, api_key=api_key, response=response)
 
 
@@ -482,7 +514,9 @@ async def get_team(
     if not match:
         raise HTTPException(status_code=404, detail=f"Team '{team_id}' not found")
     team_data = match.copy()
+    team_data = _apply_team_logo_mirror(sport, team_data)
     players = ds.get_players(sport, season=effective_season, team_id=team_id)
+    players = [_apply_player_headshot_mirror(sport, p) for p in players]
     team_data["roster"] = players[:50] if players else []
     return {"success": True, "data": team_data, "meta": {"sport": sport, "season": effective_season}}
 
@@ -644,6 +678,7 @@ async def list_players(
     await rate_limit_check(api_key)
     effective_season = _resolve_season(sport, season)
     players = ds.get_players(sport, season=effective_season, team_id=team_id, search=search)
+    players = [_apply_player_headshot_mirror(sport, p) for p in players]
     return _paginated_response(players, sport, limit=limit, offset=offset, season=effective_season, api_key=api_key, response=response)
 
 
@@ -698,7 +733,8 @@ async def get_player(sport: ValidSport, player_id: str, ds: DS, api_key: ApiKey,
     match = [p for p in players if str(p.get("id")) == player_id]
     if not match:
         raise HTTPException(status_code=404, detail=f"Player '{player_id}' not found")
-    return {"success": True, "data": match[0], "meta": {"sport": sport, "season": _resolve_season(sport, None)}}
+    player_data = _apply_player_headshot_mirror(sport, match[0])
+    return {"success": True, "data": player_data, "meta": {"sport": sport, "season": _resolve_season(sport, None)}}
 
 
 # ── Player Stats ──────────────────────────────────────────
@@ -1227,6 +1263,448 @@ async def list_match_events(
     return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
 
 
+@router.get("/play-by-play", include_in_schema=False, deprecated=True)
+@router.get(
+    "/play_by_play",
+    summary="Unified play-by-play feed",
+    description=(
+        "Unified per-play feed across available providers (CFBData plays and ESPN event summaries)."
+    ),
+    tags=["Advanced"],
+)
+async def list_play_by_play(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    game_id: Optional[str] = Query(None, description="Filter by game ID"),
+    event_type: Optional[str] = Query(None, description="Filter by event type"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "match-events")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "play_by_play", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if game_id and "game_id" in df.columns:
+            df = df[df["game_id"].astype(str) == game_id]
+        if event_type and "event_type" in df.columns:
+            df = df[df["event_type"].astype(str).str.lower() == event_type.lower()]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/coaches",
+    summary="Coaches records",
+    description="Normalized coaches records for sports/providers that expose coach metadata.",
+    tags=["Advanced"],
+)
+async def list_coaches(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    team: Optional[str] = Query(None, description="Filter by team name/id"),
+    coach_name: Optional[str] = Query(None, description="Filter by coach name (substring)"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "games")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "coaches", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if team:
+            tl = team.lower()
+            if "team_name" in df.columns:
+                df = df[df["team_name"].astype(str).str.lower().str.contains(tl, na=False)]
+            elif "team_id" in df.columns:
+                df = df[df["team_id"].astype(str).str.lower().str.contains(tl, na=False)]
+        if coach_name and "coach_name" in df.columns:
+            df = df[df["coach_name"].astype(str).str.contains(coach_name, case=False, na=False)]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/draft",
+    summary="Draft records",
+    description="Normalized draft picks/rankings where provider draft datasets exist.",
+    tags=["Advanced"],
+)
+async def list_draft(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    draft_year: Optional[str] = Query(None, description="Filter by draft year"),
+    team: Optional[str] = Query(None, description="Filter by team name/id"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "games")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "draft", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if draft_year and "draft_year" in df.columns:
+            df = df[df["draft_year"].astype(str) == str(draft_year)]
+        if team:
+            tl = team.lower()
+            if "team_name" in df.columns:
+                df = df[df["team_name"].astype(str).str.lower().str.contains(tl, na=False)]
+            elif "team_id" in df.columns:
+                df = df[df["team_id"].astype(str).str.lower().str.contains(tl, na=False)]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/draft/picks",
+    summary="Draft picks records",
+    description="Normalized draft picks with cross-league IDs when available.",
+    tags=["Advanced"],
+)
+async def list_draft_picks(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    draft_year: Optional[str] = Query(None, description="Filter by draft year"),
+    team: Optional[str] = Query(None, description="Filter by team name/id"),
+    player: Optional[str] = Query(None, description="Filter by player name"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "games")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "draft_picks", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if draft_year and "draft_year" in df.columns:
+            df = df[df["draft_year"].astype(str) == str(draft_year)]
+        if team:
+            tl = team.lower()
+            if "team_name" in df.columns:
+                df = df[df["team_name"].astype(str).str.lower().str.contains(tl, na=False)]
+            elif "team_id" in df.columns:
+                df = df[df["team_id"].astype(str).str.lower().str.contains(tl, na=False)]
+        if player and "player_name" in df.columns:
+            df = df[df["player_name"].astype(str).str.contains(player, case=False, na=False)]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/draft/positions",
+    summary="Draft positions records",
+    description="Normalized draft position metadata.",
+    tags=["Advanced"],
+)
+async def list_draft_positions(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    draft_year: Optional[str] = Query(None, description="Filter by draft year"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "games")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "draft_positions", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if draft_year and "draft_year" in df.columns:
+            df = df[df["draft_year"].astype(str) == str(draft_year)]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/draft/teams",
+    summary="Draft teams records",
+    description="Normalized draft team metadata.",
+    tags=["Advanced"],
+)
+async def list_draft_teams(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    draft_year: Optional[str] = Query(None, description="Filter by draft year"),
+    team: Optional[str] = Query(None, description="Filter by team name/id"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "games")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "draft_teams", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if draft_year and "draft_year" in df.columns:
+            df = df[df["draft_year"].astype(str) == str(draft_year)]
+        if team:
+            tl = team.lower()
+            if "team_name" in df.columns:
+                df = df[df["team_name"].astype(str).str.lower().str.contains(tl, na=False)]
+            elif "team_id" in df.columns:
+                df = df[df["team_id"].astype(str).str.lower().str.contains(tl, na=False)]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/drives",
+    summary="Drive-level records",
+    description="Normalized drive-level datasets for sports/providers that expose drives.",
+    tags=["Advanced"],
+)
+async def list_drives(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    game_id: Optional[str] = Query(None, description="Filter by game identifier"),
+    team: Optional[str] = Query(None, description="Filter by offense or defense team"),
+    scoring_only: bool = Query(False, description="Only scoring drives"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "games")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "drives", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if game_id and "game_id" in df.columns:
+            df = df[df["game_id"].astype(str) == str(game_id)]
+        if team:
+            tl = team.lower()
+            keep = None
+            for col in ("offense_team_name", "defense_team_name", "offense_team_id", "defense_team_id"):
+                if col in df.columns:
+                    col_mask = df[col].astype(str).str.lower().str.contains(tl, na=False)
+                    keep = col_mask if keep is None else (keep | col_mask)
+            if keep is not None:
+                df = df[keep]
+            else:
+                df = df.iloc[0:0]
+        if scoring_only and "scoring" in df.columns:
+            df = df[df["scoring"].astype(bool)]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/player_categories/portal",
+    include_in_schema=False,
+    deprecated=True,
+)
+@router.get(
+    "/players/categories/portal",
+    summary="Player portal records",
+    description="Normalized player transfer-portal style records.",
+    tags=["Advanced"],
+)
+async def list_player_portal(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    team: Optional[str] = Query(None, description="Filter by origin or destination team"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "games")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "player_portal", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if team:
+            tl = team.lower()
+            for col in ("origin_team", "destination_team", "team_name", "team_id"):
+                if col in df.columns:
+                    df = df[df[col].astype(str).str.lower().str.contains(tl, na=False)]
+                    break
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/player_categories/returning",
+    include_in_schema=False,
+    deprecated=True,
+)
+@router.get(
+    "/players/categories/returning",
+    summary="Returning production records",
+    description="Normalized returning-production style team/player category records.",
+    tags=["Advanced"],
+)
+async def list_player_returning(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    team: Optional[str] = Query(None, description="Filter by team"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "games")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "player_returning", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if team:
+            tl = team.lower()
+            for col in ("team_name", "team_id"):
+                if col in df.columns:
+                    df = df[df[col].astype(str).str.lower().str.contains(tl, na=False)]
+                    break
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/player_categories/usage",
+    include_in_schema=False,
+    deprecated=True,
+)
+@router.get(
+    "/players/categories/usage",
+    summary="Player usage category records",
+    description="Normalized player usage category records from available providers.",
+    tags=["Advanced"],
+)
+async def list_player_usage(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    player_id: Optional[str] = Query(None, description="Filter by player ID"),
+    team: Optional[str] = Query(None, description="Filter by team"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    _require_internal_access(api_key)
+    await check_tier_access(api_key, sport, "games")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "player_usage", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if player_id and "player_id" in df.columns:
+            df = df[df["player_id"].astype(str) == player_id]
+        if team:
+            tl = team.lower()
+            for col in ("team_name", "team_id"):
+                if col in df.columns:
+                    df = df[df[col].astype(str).str.lower().str.contains(tl, na=False)]
+                    break
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
 # ── Ratings ───────────────────────────────────────────────
 
 @router.get(
@@ -1377,6 +1855,184 @@ async def list_schedule_fatigue(
             df = df[df["team_id"].astype(str) == team_id]
         if fatigue_level and "fatigue_level" in df.columns:
             df = df[df["fatigue_level"].astype(str).str.lower() == fatigue_level.lower()]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/odds-history",
+    include_in_schema=False,
+    deprecated=True,
+)
+@router.get(
+    "/odds_history",
+    summary="Historical odds snapshots",
+    description="Historical bookmaker odds snapshots for trend and movement analysis.",
+    tags=["Odds"],
+)
+async def list_odds_history(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    game_id: Optional[str] = Query(None, description="Filter by game ID"),
+    bookmaker: Optional[str] = Query(None, description="Filter by bookmaker"),
+    date: Optional[str] = Query(None, description="Filter by date (YYYY-MM-DD)"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    await check_tier_access(api_key, sport, "odds")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "odds_history", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if game_id and "game_id" in df.columns:
+            df = df[df["game_id"].astype(str) == game_id]
+        if bookmaker and "bookmaker" in df.columns:
+            df = df[df["bookmaker"].astype(str).str.lower() == bookmaker.lower()]
+        if date:
+            if "date" in df.columns:
+                df = df[df["date"].astype(str).str.startswith(date)]
+            elif "timestamp" in df.columns:
+                df = df[df["timestamp"].astype(str).str.startswith(date)]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/player-props-history",
+    include_in_schema=False,
+    deprecated=True,
+)
+@router.get(
+    "/player_props_history",
+    summary="Historical player-props snapshots",
+    description="Historical player prop snapshots for line movement and model analysis.",
+    tags=["Odds"],
+)
+async def list_player_props_history(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    game_id: Optional[str] = Query(None, description="Filter by game ID"),
+    player_id: Optional[str] = Query(None, description="Filter by player ID"),
+    market: Optional[str] = Query(None, description="Filter by market"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    await check_tier_access(api_key, sport, "odds")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "player_props_history", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if game_id and "game_id" in df.columns:
+            df = df[df["game_id"].astype(str) == game_id]
+        if player_id and "player_id" in df.columns:
+            df = df[df["player_id"].astype(str) == player_id]
+        if market and "market" in df.columns:
+            df = df[df["market"].astype(str).str.lower() == market.lower()]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/market-history",
+    include_in_schema=False,
+    deprecated=True,
+)
+@router.get(
+    "/market_history",
+    summary="Unified market history",
+    description="Unified market-level history across odds, props, and market signals.",
+    tags=["Advanced"],
+)
+async def list_market_history(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    market_scope: Optional[str] = Query(None, description="Filter by market scope"),
+    game_id: Optional[str] = Query(None, description="Filter by game ID"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    await check_tier_access(api_key, sport, "market-signals")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "market_history", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if market_scope and "market_scope" in df.columns:
+            df = df[df["market_scope"].astype(str).str.lower() == market_scope.lower()]
+        if game_id and "game_id" in df.columns:
+            df = df[df["game_id"].astype(str) == game_id]
+        data = svc._df_to_records(df)
+    except Exception:
+        data = []
+
+    return _paginated_response(data, sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+
+
+@router.get(
+    "/all-stats",
+    include_in_schema=False,
+    deprecated=True,
+)
+@router.get(
+    "/all_stats",
+    summary="Unified stats feed",
+    description="Unified stats feed across general/team/advanced stats categories.",
+    tags=["stats"],
+)
+async def list_all_stats(
+    sport: ValidSport,
+    ds: DS,
+    api_key: ApiKey,
+    response: Response,
+    season: Optional[str] = Query(None, description="Season year"),
+    stats_category: Optional[str] = Query(None, description="Filter by stats category"),
+    limit: int = Query(50, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    await check_tier_access(api_key, sport, "team-stats")
+    await rate_limit_check(api_key)
+    effective_season = _resolve_season(sport, season)
+
+    try:
+        from services.data_service import get_data_service as _gds
+        svc = _gds()
+        df = svc._load_kind(sport, "all_stats", season=effective_season)
+        if df.empty:
+            return _paginated_response([], sport, limit=limit, offset=offset, season=season, api_key=api_key, response=response)
+        if stats_category and "stats_category" in df.columns:
+            df = df[df["stats_category"].astype(str).str.lower() == stats_category.lower()]
         data = svc._df_to_records(df)
     except Exception:
         data = []

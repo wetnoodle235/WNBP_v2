@@ -3,7 +3,9 @@
   "version": "5.0.0",
   "type": "module",
   "private": true,
-  "engines": { "node": ">=20.0.0" },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "import": "tsx src/cli.ts",
     "import:espn": "tsx src/cli.ts --provider=espn",
@@ -14,7 +16,6 @@
     "import:nbastats": "tsx src/cli.ts --provider=nbastats",
     "import:nbastats:2020-2026": "tsx src/cli.ts --provider=nbastats --sports=nba --seasons=2020,2021,2022,2023,2024,2025,2026 --endpoints=league-leaders,player-stats,team-stats,player-game-logs,team-game-logs,shot-charts,scoreboard,game-details,players,teams",
     "import:nbastats:2020-2026:dry": "tsx src/cli.ts --provider=nbastats --sports=nba --seasons=2020,2021,2022,2023,2024,2025,2026 --endpoints=league-leaders,player-stats,team-stats,player-game-logs,team-game-logs,shot-charts,scoreboard,game-details,players,teams --dry-run",
-
     "import:cfbdata": "tsx src/cli.ts --provider=cfbdata",
     "import:cfbdata:2020-2026": "tsx src/cli.ts --provider=cfbdata --sports=ncaaf --seasons=2020,2021,2022,2023,2024,2025,2026",
     "import:cfbdata:2020-2026:dry": "tsx src/cli.ts --provider=cfbdata --sports=ncaaf --seasons=2020,2021,2022,2023,2024,2025,2026 --dry-run",
@@ -39,14 +40,16 @@
     "lint": "eslint src/"
   },
   "dependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "adm-zip": "^0.5.17",
+    "csv-parse": "^5.5.0",
     "dotenv": "^16.4.0",
-    "node-html-parser": "^6.1.0",
-    "csv-parse": "^5.5.0"
+    "node-html-parser": "^6.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0",
-    "eslint": "^9.0.0"
+    "typescript": "^5.6.0"
   }
 }

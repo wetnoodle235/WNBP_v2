@@ -3,6 +3,7 @@
 import { useState, useMemo, useCallback } from "react";
 import { SectionBand, Pagination } from "@/components/ui";
 import { getDisplayName, getSportColor } from "@/lib/sports-config";
+import { preferredTeamLogoUrls } from "@/lib/media";
 import { useDebounce } from "@/lib/hooks";
 
 interface TeamItem {
@@ -23,32 +24,6 @@ interface Props {
 }
 
 const PER_PAGE = 24;
-
-function getTeamLogoUrl(sport: string, abbreviation: string | null | undefined): string | null {
-  if (!abbreviation) return null;
-  const sportMap: Record<string, string> = {
-    nba: "nba",
-    mlb: "mlb",
-    nfl: "nfl",
-    nhl: "nhl",
-    wnba: "wnba",
-    ncaab: "ncaa",
-    ncaaf: "ncaa",
-    ncaaw: "ncaa",
-    epl: "soccer",
-    laliga: "soccer",
-    bundesliga: "soccer",
-    seriea: "soccer",
-    ligue1: "soccer",
-    mls: "soccer",
-    ucl: "soccer",
-    nwsl: "soccer",
-    liga_mx: "soccer",
-  };
-  const espnSport = sportMap[sport];
-  if (!espnSport) return null;
-  return `https://a.espncdn.com/i/teamlogos/${espnSport}/500/${abbreviation.toLowerCase()}.png`;
-}
 
 export function TeamsClient({ teams, sports }: Props) {
   const [activeSport, setActiveSport] = useState<string | null>(null);
@@ -205,7 +180,11 @@ export function TeamsClient({ teams, sports }: Props) {
             >
               {pageSlice.map((team) => {
                 const sportColor = getSportColor(team.sport);
-                const logoUrl = team.logo_url ?? getTeamLogoUrl(team.sport, team.abbreviation);
+                const logoUrl = preferredTeamLogoUrls({
+                  sport: team.sport,
+                  teamId: team.id,
+                  logoUrl: team.logo_url,
+                })[0];
                 const teamKey = `${team.sport}-${team.id}`;
                 const showLogo = logoUrl && !logoErrors.has(teamKey);
                 return (

@@ -1,4 +1,5 @@
 import { cookies, headers } from "next/headers";
+import { resolveServerApiBase } from "@/lib/api-base";
 
 const PREMIUM_TIERS = new Set(["trial", "monthly", "yearly", "premium", "dev", "starter", "pro", "enterprise"]);
 const ENTERPRISE_DOC_TIERS = new Set(["enterprise", "dev"]);
@@ -41,16 +42,6 @@ export function hasPremiumTier(tier: string): boolean {
 
 export function hasEnterpriseDocsAccess(tier: string): boolean {
   return ENTERPRISE_DOC_TIERS.has(tier.trim().toLowerCase());
-}
-
-function resolveServerApiBase(): string {
-  return (
-    process.env.PLATFORM_BACKEND_URL
-      ?? process.env.BACKEND_URL
-      ?? process.env.API_URL
-    ?? process.env.NEXT_PUBLIC_API_URL
-    ?? "http://127.0.0.1:8000"
-  ).replace(/\/$/, "");
 }
 
 /** Detect if SSR is handling a loopback/localhost request (dev bypass). */

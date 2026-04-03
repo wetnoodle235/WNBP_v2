@@ -119,8 +119,8 @@ class CuratedDataReader:
                                     extra_where=extra_where, columns=columns)
             if df is not None and not df.empty:
                 return df
-            # Fall through to legacy if curated returned nothing
-        return self._load_legacy(sport, category, season=season, columns=columns)
+        logger.debug("No curated data for %s/%s season=%s", sport, category, season)
+        return pd.DataFrame()
 
     def load_all_seasons(
         self,
@@ -147,14 +147,8 @@ class CuratedDataReader:
         return sorted(seasons)
 
     def has_category(self, sport: str, category: str) -> bool:
-        """True if curated OR legacy data exists for sport+category."""
-        if (self.curated_dir / sport / category).exists():
-            return True
-        legacy = self.legacy_dir / sport
-        if not legacy.exists():
-            return False
-        stem = self._LEGACY_ALIAS.get(category, category)
-        return bool(list(legacy.glob(f"{stem}_*.parquet")) or (legacy / f"{stem}.parquet").exists())
+        """True if curated data exists for sport+category."""
+        return (self.curated_dir / sport / category).exists()
 
     # ── Internal: curated DuckDB reads ───────────────────
 
@@ -251,57 +245,12 @@ class CuratedDataReader:
         season: int | str | None,
         columns: list[str] | None,
     ) -> pd.DataFrame:
-        """Read from legacy data/normalized/{sport}/{category}_{season}.parquet."""
-        sport_dir = self.legacy_dir / sport
-        if not sport_dir.exists():
-            return pd.DataFrame()
-
-        stem = self._LEGACY_ALIAS.get(category, category)
-
-        if season is not None and str(season) != "all":
-            path = sport_dir / f"{stem}_{season}.parquet"
-            if not path.exists():
-                bare = sport_dir / f"{stem}.parquet"
-                path = bare if bare.exists() else None
-            if path is None:
-                logger.debug("Legacy parquet not found: %s/%s season %s", sport, category, season)
-                return pd.DataFrame()
-            try:
-                df = pd.read_parquet(path, columns=columns)
-                return df
-            except Exception as exc:
-                logger.warning("Legacy read failed %s: %s", path, exc)
-                return pd.DataFrame()
-
-        # All seasons
-        import glob as glob_mod  # noqa: PLC0415
-        files = sorted(glob_mod.glob(str(sport_dir / f"{stem}_*.parquet")))
-        bare = sport_dir / f"{stem}.parquet"
-        if bare.exists() and str(bare) not in files:
-            files.append(str(bare))
-        if not files:
-            return pd.DataFrame()
-        frames = []
-        for f in files:
-            try:
-                frames.append(pd.read_parquet(f, columns=columns))
-            except Exception:
-                pass
-        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        """Legacy data/normalized fallback — deprecated, always returns empty."""
+        return pd.DataFrame()
 
     def _legacy_seasons(self, sport: str, category: str) -> list[int]:
-        """Discover seasons from legacy parquet filenames."""
-        import re  # noqa: PLC0415
-        sport_dir = self.legacy_dir / sport
-        if not sport_dir.exists():
-            return []
-        stem = self._LEGACY_ALIAS.get(category, category)
-        seasons: list[int] = []
-        for p in sport_dir.glob(f"{stem}_*.parquet"):
-            m = re.search(r"_(\d{4})\.parquet$", p.name)
-            if m:
-                seasons.append(int(m.group(1)))
-        return sorted(seasons)
+        """Legacy fallback — deprecated, always returns empty list."""
+        return []
 
     def close(self) -> None:
         """Release DuckDB connection."""
