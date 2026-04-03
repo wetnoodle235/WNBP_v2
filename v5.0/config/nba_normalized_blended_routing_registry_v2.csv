@@ -1,0 +1,49 @@
+sport,source_data_type,entity,sub_type,partition_keys,canonical_entity_key,status,owner,notes
+nba,reference,teams,,none,team_id,implemented,data-platform,ESPN teams + NBA Stats teams merged
+nba,reference,venues,,none,venue_id,implemented,data-platform,ESPN arenas + NBA Stats arena data
+nba,player_identity,players,,season,player_id,implemented,data-platform,"ESPN athletes + rosters + NBA Stats all_players merged; status discriminator"
+nba,game_schedule,games,,season,game_id,implemented,data-platform,"ESPN events + NBA Stats summaries + OddsAPI scores merged; season_type discriminator"
+nba,player_game_stats,player_stats,base,season,game_id|player_id,implemented,data-platform,Per-game player stats (scope=game stat_type=base) from NBA Stats
+nba,player_game_stats,player_stats,advanced,season,game_id|player_id,implemented,data-platform,Per-game player advanced stats (scope=game stat_type=advanced) from NBA Stats
+nba,player_game_stats,player_stats,defense,season,game_id|player_id,implemented,data-platform,Per-game player defense stats (scope=game stat_type=defense) from NBA Stats
+nba,player_game_stats,player_stats,misc,season,game_id|player_id,implemented,data-platform,Per-game player misc stats (scope=game stat_type=misc) from NBA Stats
+nba,player_game_stats,player_stats,scoring,season,game_id|player_id,implemented,data-platform,Per-game player scoring stats (scope=game stat_type=scoring) from NBA Stats
+nba,player_game_stats,player_stats,usage,season,game_id|player_id,implemented,data-platform,Per-game player usage stats (scope=game stat_type=usage) from NBA Stats
+nba,player_season,player_stats,season_base,season,player_id,implemented,data-platform,Season-level player stats (scope=season stat_type=base)
+nba,player_season,player_stats,season_advanced,season,player_id,implemented,data-platform,Season-level player advanced stats (scope=season stat_type=advanced)
+nba,team_game_stats,team_stats,base,season,game_id|team_id,implemented,data-platform,Per-game team stats (scope=game stat_type=base) from NBA Stats
+nba,team_game_stats,team_stats,advanced,season,game_id|team_id,implemented,data-platform,Per-game team advanced stats (scope=game stat_type=advanced) from NBA Stats
+nba,team_game_stats,team_stats,defense,season,game_id|team_id,implemented,data-platform,Per-game team defense stats (scope=game stat_type=defense) from NBA Stats
+nba,team_game_stats,team_stats,misc,season,game_id|team_id,implemented,data-platform,Per-game team misc stats (scope=game stat_type=misc) from NBA Stats
+nba,team_game_stats,team_stats,scoring,season,game_id|team_id,implemented,data-platform,Per-game team scoring stats (scope=game stat_type=scoring) from NBA Stats
+nba,team_game_stats,team_stats,usage,season,game_id|team_id,implemented,data-platform,Per-game team usage stats (scope=game stat_type=usage) from NBA Stats
+nba,team_season,team_stats,season_base,season,team_id,implemented,data-platform,Season-level team stats (scope=season stat_type=base)
+nba,team_record,standings,,season,team_id,implemented,data-platform,ESPN standings + NBA Stats standings merged
+nba,market,odds,spread,season,game_id|vendor,implemented,data-platform,Pre-game spread lines (line_type=spread) from Odds + OddsAPI
+nba,market,odds,moneyline,season,game_id|vendor,implemented,data-platform,Pre-game moneyline (line_type=moneyline) from Odds + OddsAPI
+nba,market,odds,total,season,game_id|vendor,implemented,data-platform,Pre-game totals (line_type=total) from Odds + OddsAPI
+nba,market,player_props,points,season,game_id|player_id,implemented,data-platform,Player props points (prop_type=points) from Odds + OddsAPI
+nba,market,player_props,rebounds,season,game_id|player_id,implemented,data-platform,Player props rebounds (prop_type=rebounds) from Odds + OddsAPI
+nba,market,player_props,assists,season,game_id|player_id,implemented,data-platform,Player props assists (prop_type=assists) from Odds + OddsAPI
+nba,market,player_props,threes,season,game_id|player_id,implemented,data-platform,Player props threes (prop_type=threes) from Odds + OddsAPI
+nba,market,player_props,steals,season,game_id|player_id,implemented,data-platform,Player props steals (prop_type=steals) from Odds + OddsAPI
+nba,market,player_props,blocks,season,game_id|player_id,implemented,data-platform,Player props blocks (prop_type=blocks) from Odds + OddsAPI
+nba,market,player_props,pts_reb_ast,season,game_id|player_id,implemented,data-platform,Player props PRA combo (prop_type=pts_reb_ast) from Odds + OddsAPI
+nba,advanced_metrics,advanced,tracking,season,player_id,implemented,data-platform,Tracking stats (metric_type=tracking) from NBA Stats
+nba,advanced_metrics,advanced,hustle,season,player_id,implemented,data-platform,Hustle stats (metric_type=hustle) from NBA Stats
+nba,advanced_metrics,advanced,shooting,season,player_id,implemented,data-platform,Shooting zone stats (metric_type=shooting) from NBA Stats
+nba,advanced_metrics,advanced,playtype,season,player_id,implemented,data-platform,Play type stats (metric_type=playtype) from NBA Stats
+nba,advanced_metrics,advanced,shotdashboard,season,player_id,implemented,data-platform,Shot dashboard stats (metric_type=shotdashboard) from NBA Stats
+nba,advanced_metrics,advanced,clutch,season,player_id,implemented,data-platform,Clutch stats (metric_type=clutch) from NBA Stats
+nba,play_by_play,plays,,season,game_id|order,implemented,data-platform,"NBA Stats play-by-play; play_type discriminator (shot/rebound/turnover/foul/etc.)"
+nba,game_box,box_scores,,season,game_id|player_id,implemented,data-platform,NBA Stats boxscores with per-player lines
+nba,roster_depth,lineups,,season,game_id|player_id,implemented,data-platform,ESPN depth charts + BDL lineups
+nba,player_contract,contracts,annual,season,player_id,implemented,data-platform,Annual contract details (contract_scope=annual)
+nba,player_contract,contracts,aggregate,season,player_id,implemented,data-platform,Aggregate contract totals (contract_scope=aggregate)
+nba,injury_report,injuries,,season,player_id,implemented,data-platform,ESPN injuries + snapshots
+nba,league_leaders,leaders,pts,season,player_id,implemented,data-platform,Points leaders (stat_type=pts)
+nba,league_leaders,leaders,reb,season,player_id,implemented,data-platform,Rebounds leaders (stat_type=reb)
+nba,league_leaders,leaders,ast,season,player_id,implemented,data-platform,Assists leaders (stat_type=ast)
+nba,league_leaders,leaders,stl,season,player_id,implemented,data-platform,Steals leaders (stat_type=stl)
+nba,league_leaders,leaders,blk,season,player_id,implemented,data-platform,Blocks leaders (stat_type=blk)
+nba,league_leaders,leaders,eff,season,player_id,implemented,data-platform,Efficiency leaders (stat_type=eff)

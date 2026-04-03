@@ -321,39 +321,35 @@ class AutoCuratedSync:
     def _refresh_duckdb(self, sports: list[str]) -> None:
         """Refresh DuckDB views for the given sports.
 
-        DuckDB is single-writer — if the API server holds the lock, we write a
-        refresh request file that the server picks up on its next health check.
+        The API server should use read-only mode, so the sync pipeline can
+        acquire the write lock.  If the lock is still held (e.g. server hasn't
+        restarted yet), fall back to writing a deferred refresh request.
+        After refreshing, signal the server to reconnect.
         """
         try:
-            import importlib
-            duckdb = importlib.import_module("duckdb")
+            from services.duckdb_catalog import DuckDBCatalog, create_duckdb_connection
 
-            # Try direct write first
+            conn = create_duckdb_connection(self._duckdb_path)
             try:
-                from services.duckdb_catalog import DuckDBCatalog, create_duckdb_connection
-                conn = create_duckdb_connection(self._duckdb_path)
-                try:
-                    catalog = DuckDBCatalog(conn)
-                    t0 = time.monotonic()
-                    catalog.refresh_all(sports)
-                    elapsed = round(time.monotonic() - t0, 2)
-                    logger.info(
-                        "DuckDB refreshed for %d sports in %.1fs: %s",
-                        len(sports), elapsed, sports,
-                    )
-                    return
-                finally:
-                    conn.close()
-            except Exception as lock_err:
-                if "lock" in str(lock_err).lower() or "Conflicting" in str(lock_err):
-                    logger.info(
-                        "DuckDB locked by API server — writing deferred refresh request"
-                    )
-                    self._write_deferred_refresh(sports)
-                else:
-                    raise
-        except Exception:
-            logger.exception("DuckDB refresh failed")
+                catalog = DuckDBCatalog(conn)
+                t0 = time.monotonic()
+                catalog.refresh_all(sports)
+                elapsed = round(time.monotonic() - t0, 2)
+                logger.info(
+                    "DuckDB views refreshed for %d sports in %.1fs: %s",
+                    len(sports), elapsed, sports,
+                )
+            finally:
+                conn.close()
+
+            # Signal the API server to reconnect and pick up the new views.
+            self._write_deferred_refresh(sports)
+        except Exception as exc:
+            if "lock" in str(exc).lower() or "Conflicting" in str(exc):
+                logger.info("DuckDB write lock held — writing deferred refresh")
+                self._write_deferred_refresh(sports)
+            else:
+                logger.exception("DuckDB refresh failed")
 
     def _write_deferred_refresh(self, sports: list[str]) -> None:
         """Write a file that the running API server can pick up to refresh views."""

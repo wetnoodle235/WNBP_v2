@@ -1,0 +1,88 @@
+sport,entity,label_pattern,provider_priority,confidence,owner,last_reviewed,notes
+nba,teams,*,espn>nbastats,medium,data-platform,2025-07-15,ESPN is primary team source with richer metadata
+nba,teams,color,espn>nbastats,high,data-platform,2025-07-15,ESPN has accurate team colours
+nba,teams,alternate_color,espn>nbastats,high,data-platform,2025-07-15,ESPN has accurate alternate colours
+nba,teams,logo_url,espn>nbastats,high,data-platform,2025-07-15,ESPN logos are higher resolution
+nba,teams,abbreviation,espn>nbastats,high,data-platform,2025-07-15,ESPN abbreviations are industry standard
+nba,teams,conference,espn>nbastats,high,data-platform,2025-07-15,ESPN conference assignments are authoritative
+nba,teams,division,espn>nbastats,high,data-platform,2025-07-15,ESPN division assignments are authoritative
+nba,players,*,espn>nbastats,medium,data-platform,2025-07-15,ESPN is primary player source
+nba,players,draft_*,nbastats>espn,high,data-platform,2025-07-15,NBA Stats has richer draft data
+nba,players,country,nbastats>espn,medium,data-platform,2025-07-15,NBA Stats has more complete international player data
+nba,players,college,espn>nbastats,medium,data-platform,2025-07-15,ESPN has more complete college attribution
+nba,players,headshot_url,espn>nbastats,high,data-platform,2025-07-15,ESPN headshots are higher resolution
+nba,players,height,espn>nbastats,high,data-platform,2025-07-15,ESPN height data is well-formatted
+nba,players,weight,espn>nbastats,high,data-platform,2025-07-15,ESPN weight data is well-formatted
+nba,players,status,espn>nbastats,high,data-platform,2025-07-15,ESPN has real-time roster status updates
+nba,players,debut_year,nbastats>espn,high,data-platform,2025-07-15,NBA Stats is authoritative for debut year
+nba,games,*,espn>nbastats,medium,data-platform,2025-07-15,ESPN is primary game source
+nba,games,status,espn>nbastats>oddsapi,high,data-platform,2025-07-15,ESPN has real-time game status
+nba,games,attendance,espn>nbastats,medium,data-platform,2025-07-15,ESPN reports attendance data
+nba,games,arena_*,espn>nbastats,high,data-platform,2025-07-15,ESPN has accurate arena metadata
+nba,games,tv_network,espn,high,data-platform,2025-07-15,ESPN is sole broadcast data source
+nba,games,duration_minutes,nbastats>espn,medium,data-platform,2025-07-15,NBA Stats tracks precise game duration
+nba,games,home_score_q*,nbastats>espn,high,data-platform,2025-07-15,NBA Stats has authoritative quarter scores
+nba,games,visitor_score_q*,nbastats>espn,high,data-platform,2025-07-15,NBA Stats has authoritative quarter scores
+nba,player_stats,*,nbastats>espn,high,data-platform,2025-07-15,NBA Stats is authoritative for all player stats
+nba,player_stats,min,nbastats>espn,high,data-platform,2025-07-15,NBA Stats has precise minute tracking
+nba,player_stats,fg*,nbastats>espn,high,data-platform,2025-07-15,NBA Stats is authoritative for shooting stats
+nba,player_stats,ft*,nbastats>espn,high,data-platform,2025-07-15,NBA Stats is authoritative for free throw stats
+nba,player_stats,offensive_rating,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive advanced metric
+nba,player_stats,defensive_rating,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive advanced metric
+nba,player_stats,net_rating,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive advanced metric
+nba,player_stats,usage_pct,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive usage metric
+nba,player_stats,pie,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive PIE metric
+nba,player_stats,true_shooting_pct,nbastats,high,data-platform,2025-07-15,NBA Stats is authoritative for TS%
+nba,team_stats,*,nbastats>espn,high,data-platform,2025-07-15,NBA Stats is authoritative for all team stats
+nba,team_stats,pace,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive pace metric
+nba,team_stats,offensive_rating,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive team offensive rating
+nba,team_stats,defensive_rating,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive team defensive rating
+nba,team_stats,pts_off_turnover,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive misc stat
+nba,team_stats,pts_paint,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive misc stat
+nba,team_stats,pts_fastbreak,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive misc stat
+nba,standings,*,espn>nbastats,medium,data-platform,2025-07-15,ESPN is primary standings source
+nba,standings,conference_rank,espn>nbastats,high,data-platform,2025-07-15,ESPN tracks conference rankings
+nba,standings,division_rank,espn>nbastats,high,data-platform,2025-07-15,ESPN tracks division rankings
+nba,standings,streak,espn>nbastats,high,data-platform,2025-07-15,ESPN has real-time streak info
+nba,standings,last_10,espn>nbastats,high,data-platform,2025-07-15,ESPN tracks last 10 record
+nba,standings,clinch_indicator,espn>nbastats,high,data-platform,2025-07-15,ESPN has real-time clinch status
+nba,odds,*,odds>oddsapi,medium,data-platform,2025-07-15,Dedicated odds providers are most accurate
+nba,odds,spread_*,odds>oddsapi,high,data-platform,2025-07-15,Odds API is primary for spreads
+nba,odds,moneyline_*,odds>oddsapi,high,data-platform,2025-07-15,Odds API is primary for moneylines
+nba,odds,total_*,odds>oddsapi,high,data-platform,2025-07-15,Odds API is primary for totals
+nba,player_props,*,odds>oddsapi,medium,data-platform,2025-07-15,Dedicated odds providers are most accurate for props
+nba,player_props,line_value,odds>oddsapi,high,data-platform,2025-07-15,Odds API for prop lines
+nba,player_props,over_odds,odds>oddsapi,high,data-platform,2025-07-15,Odds API for over odds
+nba,player_props,under_odds,odds>oddsapi,high,data-platform,2025-07-15,Odds API for under odds
+nba,advanced,*,nbastats,high,data-platform,2025-07-15,NBA Stats is sole source for all advanced metrics
+nba,advanced,speed,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive tracking metric
+nba,advanced,distance,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive tracking metric
+nba,advanced,touches,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive tracking metric
+nba,advanced,deflections,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive hustle metric
+nba,advanced,contested_shots_*,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive hustle metric
+nba,advanced,fg_pct_*,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive shooting zone data
+nba,advanced,playtype_*,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive play type data
+nba,advanced,clutch_*,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive clutch data
+nba,plays,*,nbastats,high,data-platform,2025-07-15,NBA Stats is sole source for play-by-play data
+nba,plays,coordinate_*,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive shot coordinates
+nba,plays,shot_*,nbastats,high,data-platform,2025-07-15,NBA Stats exclusive shot detail data
+nba,box_scores,*,nbastats>espn,high,data-platform,2025-07-15,NBA Stats is primary for box score data
+nba,box_scores,starter,nbastats>espn,high,data-platform,2025-07-15,NBA Stats has accurate starter designation
+nba,box_scores,dnp_reason,nbastats>espn,high,data-platform,2025-07-15,NBA Stats has accurate DNP reasons
+nba,lineups,*,espn,medium,data-platform,2025-07-15,ESPN is primary source for depth charts
+nba,lineups,starter,espn,high,data-platform,2025-07-15,ESPN has accurate starter info
+nba,lineups,depth_order,espn,high,data-platform,2025-07-15,ESPN has depth chart order
+nba,contracts,*,espn,high,data-platform,2025-07-15,ESPN is primary source for contract data
+nba,contracts,base_salary,espn,high,data-platform,2025-07-15,ESPN has accurate salary data
+nba,contracts,cap_hit,espn,high,data-platform,2025-07-15,ESPN tracks salary cap data
+nba,contracts,signed_using,espn,high,data-platform,2025-07-15,ESPN tracks signing exception type
+nba,injuries,*,espn,high,data-platform,2025-07-15,ESPN is primary source for injury reports
+nba,injuries,status,espn,high,data-platform,2025-07-15,ESPN has real-time injury status
+nba,injuries,return_date,espn,high,data-platform,2025-07-15,ESPN tracks expected return dates
+nba,leaders,*,nbastats,high,data-platform,2025-07-15,NBA Stats is sole source for league leaders
+nba,leaders,value,nbastats,high,data-platform,2025-07-15,NBA Stats has authoritative stat values
+nba,leaders,rank,nbastats,high,data-platform,2025-07-15,NBA Stats has authoritative rankings
+nba,venues,*,espn>nbastats,medium,data-platform,2025-07-15,ESPN has richer venue metadata
+nba,venues,capacity,espn>nbastats,medium,data-platform,2025-07-15,ESPN tracks arena capacity
+nba,venues,latitude,espn>nbastats,medium,data-platform,2025-07-15,Geolocation from ESPN
+nba,venues,longitude,espn>nbastats,medium,data-platform,2025-07-15,Geolocation from ESPN

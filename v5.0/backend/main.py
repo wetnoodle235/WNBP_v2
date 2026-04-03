@@ -422,10 +422,10 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(_cleanup_rate_limiter())
 
     # ── DuckDB deferred refresh loop ─────────────────────────────────
-    # When the auto_curated_sync pipeline runs externally and can't acquire
-    # the DuckDB write lock (because this server holds it), it writes a
-    # `.duckdb_refresh_pending.json` file.  This loop picks it up and
-    # refreshes the affected sport views inside the server's connection.
+    # When the auto_curated_sync pipeline writes new curated parquets and
+    # refreshes DuckDB views (in its own write connection), it drops a
+    # pending file.  This loop picks it up and reconnects the API server's
+    # read-only DuckDB connection so new views become visible immediately.
     duckdb_refresh_task: asyncio.Task | None = None
 
     async def _duckdb_deferred_refresh_loop() -> None:
@@ -446,16 +446,15 @@ async def lifespan(app: FastAPI):
                     payload = _json.loads(pending_file.read_text(encoding="utf-8"))
                     sports_to_refresh = payload.get("sports", [])
                     if sports_to_refresh:
-                        logger.info("DuckDB deferred refresh: processing %s", sports_to_refresh)
+                        logger.info("DuckDB deferred refresh: reconnecting for %s", sports_to_refresh)
 
                         def _do_refresh():
-                            from services.duckdb_catalog import DuckDBCatalog, create_duckdb_connection
-                            conn = create_duckdb_connection(settings.duckdb_path)
-                            try:
-                                catalog = DuckDBCatalog(conn)
-                                catalog.refresh_all(sports_to_refresh)
-                            finally:
-                                conn.close()
+                            # The sync pipeline already wrote views in its own
+                            # write connection.  We just reconnect the API
+                            # server's read-only connection to see them.
+                            ds = get_data_service()
+                            if hasattr(ds, "reconnect"):
+                                ds.reconnect()
 
                         await asyncio.to_thread(_do_refresh)
                         pending_file.unlink(missing_ok=True)

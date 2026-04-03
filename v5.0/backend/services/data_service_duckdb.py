@@ -38,22 +38,46 @@ class DataServiceDuckDB(DataService):
         try:
             duckdb = importlib.import_module("duckdb")
             db_path = str(self._settings.duckdb_path) if self._settings.duckdb_path else ":memory:"
-            self._conn = duckdb.connect(database=db_path)
-            self._duckdb_ready = True
-            logger.info("DuckDB reader enabled (db=%s)", db_path)
 
-            if self._settings.duckdb_use_curated:
-                duckdb_catalog_mod = importlib.import_module("services.duckdb_catalog")
-                catalog = duckdb_catalog_mod.DuckDBCatalog(self._conn)
-                if self._enabled_sports:
-                    catalog.refresh_all(sorted(self._enabled_sports))
-                else:
-                    sport_dirs = [d.name for d in self._settings.normalized_curated_dir.glob("*") if d.is_dir()]
-                    catalog.refresh_all(sorted(sport_dirs))
-                logger.info("DuckDB curated catalog loaded")
+            # Bootstrap: create/refresh views in write mode, then switch to
+            # read-only so the sync pipeline can acquire the write lock freely.
+            if self._settings.duckdb_use_curated and db_path != ":memory:":
+                try:
+                    write_conn = duckdb.connect(database=db_path)
+                    duckdb_catalog_mod = importlib.import_module("services.duckdb_catalog")
+                    catalog = duckdb_catalog_mod.DuckDBCatalog(write_conn)
+                    if self._enabled_sports:
+                        catalog.refresh_all(sorted(self._enabled_sports))
+                    else:
+                        sport_dirs = [d.name for d in self._settings.normalized_curated_dir.glob("*") if d.is_dir()]
+                        catalog.refresh_all(sorted(sport_dirs))
+                    write_conn.close()
+                    logger.info("DuckDB curated catalog bootstrapped (write mode)")
+                except Exception as bootstrap_exc:
+                    logger.warning("DuckDB catalog bootstrap failed: %s", bootstrap_exc)
+
+            # Open in read-only mode — no write lock held, allows concurrent
+            # reads from API + ML while the sync pipeline writes freely.
+            self._conn = duckdb.connect(database=db_path, read_only=(db_path != ":memory:"))
+            self._duckdb_ready = True
+            logger.info("DuckDB reader enabled (db=%s, read_only=%s)", db_path, db_path != ":memory:")
         except Exception as exc:
             logger.warning("DuckDB unavailable, falling back to parquet reader: %s", exc)
             self._duckdb_ready = False
+
+    def reconnect(self) -> None:
+        """Reconnect in read-only mode to pick up new views from the sync pipeline."""
+        if self._conn is None:
+            return
+        try:
+            duckdb = importlib.import_module("duckdb")
+            db_path = str(self._settings.duckdb_path) if self._settings.duckdb_path else ":memory:"
+            old = self._conn
+            self._conn = duckdb.connect(database=db_path, read_only=(db_path != ":memory:"))
+            old.close()
+            logger.info("DuckDB reconnected (read_only) — new views visible")
+        except Exception as exc:
+            logger.warning("DuckDB reconnect failed: %s", exc)
 
     def clear_cache(self) -> None:
         super().clear_cache()

@@ -344,6 +344,13 @@ class DuckDBCatalog:
         return value.replace("'", "''")
 
 
-def create_duckdb_connection(db_path: Path):
+def create_duckdb_connection(db_path: Path, *, read_only: bool = False):
+    """Create a DuckDB connection.
+
+    Args:
+        db_path: Path to the DuckDB file.
+        read_only: If True, open in read-only mode (no write lock held).
+                   Multiple read-only connections can coexist with one writer.
+    """
     duckdb = importlib.import_module("duckdb")
-    return duckdb.connect(database=str(db_path))
+    return duckdb.connect(database=str(db_path), read_only=read_only)
