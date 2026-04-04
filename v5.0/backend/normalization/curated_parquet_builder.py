@@ -94,6 +94,29 @@ def _load_sport_entity_allowlist() -> dict[str, set[str]]:
         allowlist["lol"] = LOL_ENTITY_ALLOWLIST
     except Exception:
         pass
+    try:
+        from normalization.dota_schemas import DOTA_ENTITY_ALLOWLIST
+        allowlist["dota2"] = DOTA_ENTITY_ALLOWLIST
+    except Exception:
+        pass
+    try:
+        from normalization.golf_schemas import GOLF_ENTITY_ALLOWLIST
+        for _gl in ("golf", "lpga"):
+            allowlist[_gl] = GOLF_ENTITY_ALLOWLIST
+    except Exception:
+        pass
+    try:
+        from normalization.tennis_schemas import TENNIS_ENTITY_ALLOWLIST
+        for _tl in ("atp", "wta"):
+            allowlist[_tl] = TENNIS_ENTITY_ALLOWLIST
+    except Exception:
+        pass
+    try:
+        from normalization.racing_schemas import RACING_ENTITY_ALLOWLIST
+        for _rl in ("f1", "nascar", "indycar"):
+            allowlist[_rl] = RACING_ENTITY_ALLOWLIST
+    except Exception:
+        pass
     return allowlist
 
 
@@ -164,6 +187,29 @@ def _load_type_to_entity_maps() -> dict[str, dict[str, str | None]]:
         maps["lol"] = LOL_TYPE_TO_ENTITY
     except Exception:
         pass
+    try:
+        from normalization.dota_schemas import DOTA_TYPE_TO_ENTITY
+        maps["dota2"] = DOTA_TYPE_TO_ENTITY
+    except Exception:
+        pass
+    try:
+        from normalization.golf_schemas import GOLF_TYPE_TO_ENTITY
+        for _gl in ("golf", "lpga"):
+            maps[_gl] = GOLF_TYPE_TO_ENTITY
+    except Exception:
+        pass
+    try:
+        from normalization.tennis_schemas import TENNIS_TYPE_TO_ENTITY
+        for _tl in ("atp", "wta"):
+            maps[_tl] = TENNIS_TYPE_TO_ENTITY
+    except Exception:
+        pass
+    try:
+        from normalization.racing_schemas import RACING_TYPE_TO_ENTITY
+        for _rl in ("f1", "nascar", "indycar"):
+            maps[_rl] = RACING_TYPE_TO_ENTITY
+    except Exception:
+        pass
     return maps
 
 # Core categories requested for the new normalized design.
@@ -207,6 +253,14 @@ SPORT_CATEGORY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "ufc": ("fighter_stats", "standings", "odds", "news"),
     "csgo": ("player_stats", "team_stats", "standings", "rankings"),
     "lol": ("player_stats", "team_stats", "standings", "rankings"),
+    "dota2": ("player_stats", "team_stats", "standings", "rankings"),
+    "golf": ("player_stats", "standings", "odds", "news"),
+    "lpga": ("player_stats", "standings", "odds", "news"),
+    "atp": ("player_stats", "standings", "odds", "rankings", "news"),
+    "wta": ("player_stats", "standings", "odds", "rankings", "news"),
+    "f1": ("driver_stats", "standings", "odds", "news"),
+    "nascar": ("driver_stats", "standings", "odds", "news"),
+    "indycar": ("driver_stats", "standings", "odds", "news"),
 }
 
 # Candidate source kinds from v1 normalized files.
