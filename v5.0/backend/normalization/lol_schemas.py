@@ -2,8 +2,8 @@
 # V5.0 Backend — LoL Normalized-Curated PyArrow Schemas (Consolidated)
 # ──────────────────────────────────────────────────────────────────────
 #
-# 14-entity consolidated design.  Raw data from BDL LoL API providers
-# are merged into 14 wide schemas.
+# 13-entity consolidated design.  Raw data from BDL LoL API providers
+# are merged into 13 wide schemas.
 #
 # Entity overview
 # ───────────────
@@ -18,9 +18,8 @@
 #  9. match_maps         — partition: tournament_id=
 # 10. player_stats       — partition: tournament_id=
 # 11. team_stats         — partition: tournament_id=
-# 12. champion_stats     — partition: tournament_id=
-# 13. rankings           — partition: year=
-# 14. tournament_roster  — partition: tournament_id=
+# 12. rankings           — partition: year=
+# 13. tournament_roster  — partition: tournament_id=
 #
 # Every schema carries a mandatory ``source`` field for vendor provenance.
 # ──────────────────────────────────────────────────────────────────────
@@ -292,41 +291,7 @@ LOL_TEAM_STATS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 12. champion_stats — partition: tournament_id=
-# ═══════════════════════════════════════════════════════════════════════
-
-LOL_CHAMPION_STATS_SCHEMA = pa.schema([
-    _f("stat_id",              pa.int32(),   "Unique stat record identifier",       nullable=False),
-    # Champion (flattened nested)
-    _f("champion_id",          pa.int32(),   "Champion identifier"),
-    _f("champion_name",        pa.string(),  "Champion name"),
-    # Counts
-    _f("games_count",          pa.int32(),   "Total games in sample"),
-    _f("picks_count",          pa.int32(),   "Times picked"),
-    _f("picks_rate",           pa.float64(), "Pick rate (0-1)"),
-    _f("wins_count",           pa.int32(),   "Games won"),
-    _f("loses_count",          pa.int32(),   "Games lost"),
-    _f("win_rate",             pa.float64(), "Win rate (0-1)"),
-    _f("ban_rate",             pa.float64(), "Ban rate (0-1)"),
-    # Averages
-    _f("avg_kills",            pa.float64(), "Average kills per game"),
-    _f("avg_deaths",           pa.float64(), "Average deaths per game"),
-    _f("avg_assists",          pa.float64(), "Average assists per game"),
-    _f("kda",                  pa.float64(), "KDA ratio"),
-    _f("kp",                   pa.float64(), "Kill participation (0-1)"),
-    _f("avg_damage",           pa.float64(), "Average damage per game"),
-    _f("avg_gold_earned",      pa.float64(), "Average gold earned per game"),
-    _f("avg_gold_per_min",     pa.float64(), "Average gold per minute"),
-    _f("avg_creep_score",      pa.float64(), "Average creep score per game"),
-    # Partition key
-    _f("tournament_id",        pa.int32(),   "Tournament context for partitioning"),
-    # Provenance
-    _f("source",               pa.string(),  "Data vendor provenance",             nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 13. rankings — partition: year=
+# 12. rankings — partition: year=
 # ═══════════════════════════════════════════════════════════════════════
 
 LOL_RANKINGS_SCHEMA = pa.schema([
@@ -375,7 +340,6 @@ LOL_SCHEMAS: dict[str, pa.Schema] = {
     "match_maps":         LOL_MATCH_MAPS_SCHEMA,
     "player_stats":       LOL_PLAYER_STATS_SCHEMA,
     "team_stats":         LOL_TEAM_STATS_SCHEMA,
-    "champion_stats":     LOL_CHAMPION_STATS_SCHEMA,
     "rankings":           LOL_RANKINGS_SCHEMA,
     "tournament_roster":  LOL_TOURNAMENT_ROSTER_SCHEMA,
 }
@@ -393,7 +357,6 @@ LOL_PARTITION_KEYS: dict[str, list[str]] = {
     "match_maps":         ["tournament_id"],
     "player_stats":       ["tournament_id"],
     "team_stats":         ["tournament_id"],
-    "champion_stats":     ["tournament_id"],
     "tournament_roster":  ["tournament_id"],
     # Year-partitioned
     "tournaments":        ["year"],
@@ -412,7 +375,6 @@ LOL_ENTITY_PATHS: dict[str, str] = {
     "match_maps":         "match_maps",
     "player_stats":       "player_stats",
     "team_stats":         "team_stats",
-    "champion_stats":     "champion_stats",
     "rankings":           "rankings",
     "tournament_roster":  "tournament_roster",
 }
@@ -465,7 +427,6 @@ LOL_ENTITY_ALLOWLIST: set[str] = {
     "match_maps",
     "player_stats",
     "team_stats",
-    "champion_stats",
     "rankings",
     "tournament_roster",
 }

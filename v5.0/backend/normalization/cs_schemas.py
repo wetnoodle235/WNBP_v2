@@ -2,8 +2,8 @@
 # V5.0 Backend — CS2 Normalized-Curated PyArrow Schemas (Consolidated)
 # ──────────────────────────────────────────────────────────────────────
 #
-# 12-entity consolidated design.  Raw data from BDL CS2 API providers
-# are merged into 12 wide schemas.
+# 9-entity consolidated design.  Raw data from BDL CS2 API providers
+# are merged into 9 wide schemas.
 #
 # Entity overview
 # ───────────────
@@ -15,10 +15,7 @@
 #  6. match_maps         — partition: tournament_id=
 #  7. rankings           — partition: year=
 #  8. player_match_stats — partition: tournament_id=
-#  9. player_map_stats   — partition: tournament_id=
-# 10. team_round_stats   — partition: tournament_id=
-# 11. player_accuracy    — partition: tournament_id=
-# 12. team_map_pool      — partition: tournament_id=
+#  9. team_map_pool      — partition: tournament_id=
 #
 # CS2 uses tournament-based partitioning rather than season/week.
 #
@@ -234,97 +231,7 @@ CS_PLAYER_MATCH_STATS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 9. player_map_stats — partition: tournament_id=
-# ═══════════════════════════════════════════════════════════════════════
-
-CS_PLAYER_MAP_STATS_SCHEMA = pa.schema([
-    # Player (flattened)
-    _f("player_id",          pa.int32(),  "Player identifier",           nullable=False),
-    _f("player_nickname",    pa.string(), "Player in-game alias"),
-    _f("match_map_id",       pa.int32(),  "Match-map identifier",        nullable=False),
-    # Core stats
-    _f("kills",              pa.int32(),  "Total kills"),
-    _f("deaths",             pa.int32(),  "Total deaths"),
-    _f("assists",            pa.int32(),  "Total assists"),
-    _f("adr",                pa.float64(),"Average damage per round"),
-    _f("kast",               pa.float64(),"KAST percentage"),
-    _f("rating",             pa.float64(),"HLTV-style rating"),
-    _f("headshot_percentage",pa.float64(),"Headshot kill percentage"),
-    _f("first_kills",        pa.int32(),  "Opening kills"),
-    _f("first_deaths",       pa.int32(),  "Opening deaths"),
-    _f("clutches_won",       pa.int32(),  "Clutch rounds won"),
-    # Partition key
-    _f("tournament_id",      pa.int32(),  "Tournament identifier for partitioning"),
-    # Provenance
-    _f("source",             pa.string(), "Data vendor provenance",      nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 10. team_round_stats — partition: tournament_id=
-#     (per-round team-level stats from Match Map Stats)
-# ═══════════════════════════════════════════════════════════════════════
-
-CS_TEAM_ROUND_STATS_SCHEMA = pa.schema([
-    _f("match_map_id",       pa.int32(),  "Match-map identifier",        nullable=False),
-    _f("map_name",           pa.string(), "Map name"),
-    _f("round_number",       pa.int32(),  "Round number within map",     nullable=False),
-    _f("winner_side",        pa.string(), "Side that won the round (CT/T)"),
-    _f("loser_side",         pa.string(), "Side that lost the round"),
-    _f("end_reason",         pa.string(), "How the round ended (bomb, elimination, time, defuse)"),
-    _f("round_duration",     pa.float64(),"Round duration in seconds"),
-    # Per-team stats for this round
-    _f("team_id",            pa.int32(),  "Team identifier",             nullable=False),
-    _f("team_name",          pa.string(), "Team name"),
-    _f("team_side",          pa.string(), "Side played by this team (CT/T)"),
-    _f("won",                pa.bool_(),  "Whether this team won the round"),
-    _f("is_pistol_round",    pa.bool_(),  "Whether this is a pistol round"),
-    _f("kills",              pa.int32(),  "Team kills in round"),
-    _f("deaths",             pa.int32(),  "Team deaths in round"),
-    _f("assists",            pa.int32(),  "Team assists in round"),
-    _f("headshots",          pa.int32(),  "Team headshot kills in round"),
-    _f("first_kills",        pa.int32(),  "First kills in round"),
-    _f("first_deaths",       pa.int32(),  "First deaths in round"),
-    _f("trade_kills",        pa.int32(),  "Trade kills in round"),
-    _f("trade_deaths",       pa.int32(),  "Trade deaths in round"),
-    _f("damage",             pa.int32(),  "Total damage dealt in round"),
-    _f("utility_value",      pa.float64(),"Utility damage / value in round"),
-    _f("equipment_value",    pa.int32(),  "Equipment value at round start"),
-    _f("money_spent",        pa.int32(),  "Money spent at round start"),
-    _f("money_saved",        pa.int32(),  "Money saved at round end"),
-    _f("loss_bonus_streak",  pa.int32(),  "Consecutive loss bonus level"),
-    _f("win_streak",         pa.int32(),  "Consecutive wins"),
-    _f("clutches",           pa.int32(),  "Clutches won in round"),
-    _f("clutch_attempts",    pa.int32(),  "Clutch attempts in round"),
-    # Partition key
-    _f("tournament_id",      pa.int32(),  "Tournament identifier for partitioning"),
-    # Provenance
-    _f("source",             pa.string(), "Data vendor provenance",      nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 11. player_accuracy — partition: tournament_id=
-# ═══════════════════════════════════════════════════════════════════════
-
-CS_PLAYER_ACCURACY_SCHEMA = pa.schema([
-    _f("player_id",      pa.int32(),  "Player identifier",               nullable=False),
-    _f("match_map_id",   pa.int32(),  "Match-map identifier",            nullable=False),
-    _f("weapon_type",    pa.string(), "Weapon category or name"),
-    _f("shots_fired",    pa.int32(),  "Total shots fired"),
-    _f("shots_hit",      pa.int32(),  "Total shots hit"),
-    _f("accuracy_pct",   pa.float64(),"Overall accuracy percentage"),
-    _f("headshots",      pa.int32(),  "Headshot count"),
-    _f("headshot_pct",   pa.float64(),"Headshot accuracy percentage"),
-    # Partition key
-    _f("tournament_id",  pa.int32(),  "Tournament identifier for partitioning"),
-    # Provenance
-    _f("source",         pa.string(), "Data vendor provenance",          nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 12. team_map_pool — partition: tournament_id=
+# 9. team_map_pool — partition: tournament_id=
 # ═══════════════════════════════════════════════════════════════════════
 
 CS_TEAM_MAP_POOL_SCHEMA = pa.schema([
@@ -355,9 +262,6 @@ CS_SCHEMAS: dict[str, pa.Schema] = {
     "match_maps":         CS_MATCH_MAPS_SCHEMA,
     "rankings":           CS_RANKINGS_SCHEMA,
     "player_match_stats": CS_PLAYER_MATCH_STATS_SCHEMA,
-    "player_map_stats":   CS_PLAYER_MAP_STATS_SCHEMA,
-    "team_round_stats":   CS_TEAM_ROUND_STATS_SCHEMA,
-    "player_accuracy":    CS_PLAYER_ACCURACY_SCHEMA,
     "team_map_pool":      CS_TEAM_MAP_POOL_SCHEMA,
 }
 
@@ -372,9 +276,6 @@ CS_PARTITION_KEYS: dict[str, list[str]] = {
     "match_maps":         ["tournament_id"],
     "rankings":           ["year"],
     "player_match_stats": ["tournament_id"],
-    "player_map_stats":   ["tournament_id"],
-    "team_round_stats":   ["tournament_id"],
-    "player_accuracy":    ["tournament_id"],
     "team_map_pool":      ["tournament_id"],
 }
 
@@ -387,9 +288,6 @@ CS_ENTITY_PATHS: dict[str, str] = {
     "match_maps":         "match_maps",
     "rankings":           "rankings",
     "player_match_stats": "player_match_stats",
-    "player_map_stats":   "player_map_stats",
-    "team_round_stats":   "team_round_stats",
-    "player_accuracy":    "player_accuracy",
     "team_map_pool":      "team_map_pool",
 }
 
@@ -434,9 +332,6 @@ CS_ENTITY_ALLOWLIST: set[str] = {
     "match_maps",
     "rankings",
     "player_match_stats",
-    "player_map_stats",
-    "team_round_stats",
-    "player_accuracy",
     "team_map_pool",
 }
 

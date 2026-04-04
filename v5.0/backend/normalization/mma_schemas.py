@@ -2,8 +2,8 @@
 # V5.0 Backend — MMA Normalized-Curated PyArrow Schemas (Consolidated)
 # ──────────────────────────────────────────────────────────────────────
 #
-# 10-entity consolidated design.  Raw data from BDL MMA API and
-# odds providers are merged into 10 wide schemas that use
+# 9-entity consolidated design.  Raw data from BDL MMA API and
+# odds providers are merged into 9 wide schemas that use
 # discriminator columns where needed to distinguish record subtypes
 # within a single table.
 #
@@ -18,7 +18,6 @@
 #  7. rankings        — partition: season=
 #  8. fight_stats     — partition: season=
 #  9. odds            — partition: season=
-# 10. player_props    — partition: season=
 #
 # MMA does NOT use week-based partitioning — events are date-based.
 # Season is the calendar year of the event (e.g. 2024).
@@ -300,29 +299,6 @@ MMA_ODDS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 10. player_props — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-MMA_PLAYER_PROPS_SCHEMA = pa.schema([
-    # Keys
-    _f("fight_id",       pa.int32(),  "Fight identifier",                               nullable=False),
-    _f("fighter_id",     pa.int32(),  "Fighter identifier",                             nullable=False),
-    _f("fighter_name",   pa.string(), "Fighter display name"),
-    _f("season",         pa.int32(),  "Season / calendar year",                         nullable=False),
-    _f("date",           pa.string(), "Event date (YYYY-MM-DD)"),
-    _f("event_name",     pa.string(), "Event name"),
-    # Prop details
-    _f("prop_type",      pa.string(), "Prop market type (e.g. sig_strikes, takedowns, method)"),
-    _f("line",           pa.float64(),"Prop line value"),
-    _f("over_odds",      pa.int32(),  "Over odds (American)"),
-    _f("under_odds",     pa.int32(),  "Under odds (American)"),
-    _f("sportsbook",     pa.string(), "Sportsbook name"),
-    # Provenance
-    _f("source",         pa.string(), "Data vendor provenance",                         nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # Registry — schema, partition key, and path look-ups
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -336,7 +312,6 @@ MMA_SCHEMAS: dict[str, pa.Schema] = {
     "rankings":       MMA_RANKINGS_SCHEMA,
     "fight_stats":    MMA_FIGHT_STATS_SCHEMA,
     "odds":           MMA_ODDS_SCHEMA,
-    "player_props":   MMA_PLAYER_PROPS_SCHEMA,
 }
 
 MMA_PARTITION_KEYS: dict[str, list[str]] = {
@@ -351,7 +326,6 @@ MMA_PARTITION_KEYS: dict[str, list[str]] = {
     "rankings":       ["season"],
     "fight_stats":    ["season"],
     "odds":           ["season"],
-    "player_props":   ["season"],
 }
 
 MMA_ENTITY_PATHS: dict[str, str] = {
@@ -364,7 +338,6 @@ MMA_ENTITY_PATHS: dict[str, str] = {
     "rankings":       "rankings",
     "fight_stats":    "fight_stats",
     "odds":           "odds",
-    "player_props":   "player_props",
 }
 
 
@@ -379,7 +352,6 @@ MMA_TYPE_TO_ENTITY: dict[str, str | None] = {
     "scores":           "fights",
     "standings":        "rankings",
     "odds":             "odds",
-    "player_props":     "player_props",
     "player_stats":     "fight_stats",
     "roster":           None,
     "lineups":          None,
@@ -405,7 +377,6 @@ MMA_ENTITY_ALLOWLIST: set[str] = {
     "rankings",
     "fight_stats",
     "odds",
-    "player_props",
 }
 
 MMA_STATIC_ENTITIES: set[str] = {"leagues", "weight_classes", "venues"}

@@ -2,8 +2,8 @@
 # V5.0 Backend — Soccer Normalized-Curated PyArrow Schemas (Consolidated)
 # ──────────────────────────────────────────────────────────────────────
 #
-# 14-entity consolidated design.  Raw data from BDL EPL API and other
-# soccer data providers are merged into 14 wide schemas that use
+# 13-entity consolidated design.  Raw data from BDL EPL API and other
+# soccer data providers are merged into 13 wide schemas that use
 # discriminator columns (``stat_type``, ``event_type``, ``prop_type``)
 # to distinguish record subtypes within a single table.
 #
@@ -22,7 +22,6 @@
 # 11.  team_stats       — partition: season=
 # 12.  venues           — static reference, no partitioning
 # 13.  coaches          — partition: season=
-# 14.  transfers        — partition: season=
 #
 # Shared across all soccer leagues: epl, laliga, bundesliga, seriea,
 # ligue1, mls, ucl, europa, ligamx, nwsl, eredivisie, primeiraliga,
@@ -415,31 +414,6 @@ SOCCER_COACHES_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 14. transfers — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-SOCCER_TRANSFERS_SCHEMA = pa.schema([
-    # Player reference
-    _f("player_id",      pa.int32(),   "Player identifier",                       nullable=False),
-    _f("player_name",    pa.string(),  "Player display name"),
-    # Team references
-    _f("from_team_id",   pa.int32(),   "Origin team identifier"),
-    _f("from_team_name", pa.string(),  "Origin team name"),
-    _f("to_team_id",     pa.int32(),   "Destination team identifier"),
-    _f("to_team_name",   pa.string(),  "Destination team name"),
-    # Transfer details
-    _f("transfer_date",  pa.string(),  "Transfer date (YYYY-MM-DD)"),
-    _f("transfer_fee",   pa.string(),  "Transfer fee (free-text, e.g. €35M, Free)"),
-    _f("transfer_type",  pa.string(),  "Transfer type (permanent, loan, free, swap)"),
-    _f("league",         pa.string(),  "League slug"),
-    # Partition key
-    _f("season",         pa.int32(),   "Season start year (e.g. 2024 for 2024-25)", nullable=False),
-    # Provenance
-    _f("source",         pa.string(),  "Data vendor provenance",                  nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # Registry — schema, partition key, and path look-ups
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -457,7 +431,6 @@ SOCCER_SCHEMAS: dict[str, pa.Schema] = {
     "team_stats":    SOCCER_TEAM_STATS_SCHEMA,
     "venues":        SOCCER_VENUES_SCHEMA,
     "coaches":       SOCCER_COACHES_SCHEMA,
-    "transfers":     SOCCER_TRANSFERS_SCHEMA,
 }
 
 SOCCER_PARTITION_KEYS: dict[str, list[str]] = {
@@ -476,7 +449,6 @@ SOCCER_PARTITION_KEYS: dict[str, list[str]] = {
     "player_stats":  ["season"],
     "team_stats":    ["season"],
     "coaches":       ["season"],
-    "transfers":     ["season"],
 }
 
 SOCCER_ENTITY_PATHS: dict[str, str] = {
@@ -493,7 +465,6 @@ SOCCER_ENTITY_PATHS: dict[str, str] = {
     "team_stats":    "team_stats",
     "venues":        "venues",
     "coaches":       "coaches",
-    "transfers":     "transfers",
 }
 
 
@@ -515,7 +486,6 @@ SOCCER_TYPE_TO_ENTITY: dict[str, str | None] = {
     "lineups":          "lineups",
     "venues":           "venues",
     "coaches":          "coaches",
-    "transfers":        "transfers",
     # Aliases / absorbed types
     "roster":           "rosters",
     "schedule":         "games",
@@ -548,7 +518,6 @@ SOCCER_ENTITY_ALLOWLIST: set[str] = {
     "team_stats",
     "venues",
     "coaches",
-    "transfers",
 }
 
 SOCCER_STATIC_ENTITIES: set[str] = {"teams", "venues"}

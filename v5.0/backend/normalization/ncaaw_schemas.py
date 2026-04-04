@@ -2,8 +2,8 @@
 # V5.0 Backend — NCAAW Normalized-Curated PyArrow Schemas (Consolidated)
 # ──────────────────────────────────────────────────────────────────────
 #
-# 16-entity consolidated design.  Raw data from ESPN, NCAA Stats,
-# Odds, and OddsAPI providers are merged into 16 wide schemas that
+# 12-entity consolidated design.  Raw data from ESPN, NCAA Stats,
+# Odds, and OddsAPI providers are merged into 12 wide schemas that
 # use discriminator columns (``scope``, ``poll``, ``line_type``,
 # ``prop_type``, ``event_type``) to distinguish record subtypes
 # within a single table.
@@ -18,14 +18,10 @@
 #  6. team_stats       — partition: season=   (game + season scope)
 #  7. standings        — partition: season=
 #  8. rankings         — partition: season=
-#  9. odds             — partition: season=
-# 10. player_props     — partition: season=
-# 11. plays            — partition: season=
-# 12. injuries         — partition: season=
-# 13. bracket          — partition: season=
-# 14. leaders          — partition: season=
-# 15. venues           — static reference, no partitioning
-# 16. advanced         — partition: season=
+#  9. plays            — partition: season=
+# 10. leaders          — partition: season=
+# 11. venues           — static reference, no partitioning
+# 12. advanced         — partition: season=
 #
 # NCAAW uses date-based games (no week partitioning).
 # Season is always the start year integer (e.g. 2024 for "2024-25").
@@ -302,61 +298,7 @@ schema_rankings = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 9. odds — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-schema_odds = pa.schema([
-    _f("game_id",          pa.string(),  "Unique game identifier",                    nullable=False),
-    _f("season",           pa.int32(),   "Season start year",                         nullable=False),
-    _f("date",             pa.string(),  "Game date (ISO-8601)"),
-    _f("sportsbook",       pa.string(),  "Sportsbook name (e.g. DraftKings, FanDuel)"),
-    # Teams
-    _f("home_team",        pa.string(),  "Home team name"),
-    _f("away_team",        pa.string(),  "Away team name"),
-    # Spread
-    _f("spread_home",      pa.float64(), "Home team spread"),
-    _f("spread_away",      pa.float64(), "Away team spread"),
-    _f("spread_home_odds", pa.int32(),   "Home spread American odds"),
-    _f("spread_away_odds", pa.int32(),   "Away spread American odds"),
-    # Moneyline
-    _f("moneyline_home",   pa.int32(),   "Home moneyline"),
-    _f("moneyline_away",   pa.int32(),   "Away moneyline"),
-    # Totals
-    _f("total_over",       pa.float64(), "Over/under line (over)"),
-    _f("total_under",      pa.float64(), "Over/under line (under)"),
-    _f("total_over_odds",  pa.int32(),   "Over American odds"),
-    _f("total_under_odds", pa.int32(),   "Under American odds"),
-    # Discriminator / metadata
-    _f("line_type",        pa.string(),  "Line type — pregame/live/opening/closing"),
-    _f("timestamp",        pa.string(),  "Timestamp of odds snapshot"),
-    # Provenance
-    _f("source",           pa.string(),  "Data vendor provenance",                    nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 10. player_props — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-schema_player_props = pa.schema([
-    _f("game_id",       pa.string(), "Unique game identifier",                       nullable=False),
-    _f("player_id",     pa.string(), "Unique player identifier",                     nullable=False),
-    _f("player_name",   pa.string(), "Player display name"),
-    _f("season",        pa.int32(),  "Season start year",                            nullable=False),
-    _f("date",          pa.string(), "Game date (ISO-8601)"),
-    _f("team",          pa.string(), "Team name"),
-    _f("prop_type",     pa.string(), "Prop type (e.g. points, rebounds, assists)"),
-    _f("line",          pa.float64(),"Prop line value"),
-    _f("over_odds",     pa.int32(),  "Over American odds"),
-    _f("under_odds",    pa.int32(),  "Under American odds"),
-    _f("sportsbook",    pa.string(), "Sportsbook name"),
-    # Provenance
-    _f("source",        pa.string(), "Data vendor provenance",                       nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 11. plays — partition: season=
+# 9. plays — partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
 schema_plays = pa.schema([
@@ -379,49 +321,7 @@ schema_plays = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 12. injuries — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-schema_injuries = pa.schema([
-    _f("player_id",     pa.string(), "Unique player identifier",                     nullable=False),
-    _f("player_name",   pa.string(), "Player display name"),
-    _f("team_id",       pa.string(), "Team identifier"),
-    _f("team_name",     pa.string(), "Team name"),
-    _f("season",        pa.int32(),  "Season start year",                            nullable=False),
-    _f("date",          pa.string(), "Report date (ISO-8601)"),
-    _f("status",        pa.string(), "Injury status (e.g. out, day-to-day, questionable)"),
-    _f("injury_type",   pa.string(), "Injury type (e.g. knee, ankle, concussion)"),
-    _f("detail",        pa.string(), "Additional injury detail or notes"),
-    # Provenance
-    _f("source",        pa.string(), "Data vendor provenance",                       nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 13. bracket — partition: season= (NCAA Tournament)
-# ═══════════════════════════════════════════════════════════════════════
-
-schema_bracket = pa.schema([
-    _f("season",         pa.int32(),  "Season start year",                           nullable=False),
-    _f("round",          pa.string(), "Tournament round (e.g. Round of 64, Sweet 16, Final Four)"),
-    _f("region",         pa.string(), "Tournament region (e.g. Albany, Portland, Seattle, Greenville)"),
-    _f("seed_home",      pa.int32(),  "Home/higher-seeded team seed"),
-    _f("seed_away",      pa.int32(),  "Away/lower-seeded team seed"),
-    _f("home_team_id",   pa.string(), "Home team identifier"),
-    _f("home_team",      pa.string(), "Home team name"),
-    _f("away_team_id",   pa.string(), "Away team identifier"),
-    _f("away_team",      pa.string(), "Away team name"),
-    _f("home_score",     pa.int32(),  "Home team final score"),
-    _f("away_score",     pa.int32(),  "Away team final score"),
-    _f("date",           pa.string(), "Game date (ISO-8601)"),
-    _f("venue",          pa.string(), "Arena / venue name"),
-    # Provenance
-    _f("source",         pa.string(), "Data vendor provenance",                      nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 14. leaders — partition: season=
+# 10. leaders — partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
 schema_leaders = pa.schema([
@@ -501,11 +401,7 @@ NCAAW_SCHEMAS: dict[str, pa.Schema] = {
     "team_stats":    schema_team_stats,
     "standings":     schema_standings,
     "rankings":      schema_rankings,
-    "odds":          schema_odds,
-    "player_props":  schema_player_props,
     "plays":         schema_plays,
-    "injuries":      schema_injuries,
-    "bracket":       schema_bracket,
     "leaders":       schema_leaders,
     "venues":        schema_venues,
     "advanced":      schema_advanced,
@@ -525,9 +421,6 @@ NCAAW_TYPE_TO_ENTITY: dict[str, str | None] = {
     "team_stats":       "team_stats",
     "standings":        "standings",
     "rankings":         "rankings",
-    "odds":             "odds",
-    "player_props":     "player_props",
-    "injuries":         "injuries",
     # Aliases / absorbed types
     "odds_history":     "odds",
     "play_by_play":     "plays",
@@ -567,11 +460,7 @@ NCAAW_ENTITY_ALLOWLIST: set[str] = {
     "team_stats",
     "standings",
     "rankings",
-    "odds",
-    "player_props",
     "plays",
-    "injuries",
-    "bracket",
     "leaders",
     "venues",
     "advanced",
