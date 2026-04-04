@@ -2,9 +2,9 @@
 # V5.0 Backend — MLB Normalized-Curated PyArrow Schemas (Consolidated)
 # ──────────────────────────────────────────────────────────────────────
 #
-# 18-entity consolidated design.  Raw data from ESPN, MLB Stats,
+# 17-entity consolidated design.  Raw data from ESPN, MLB Stats,
 # Statcast, Lahman, Retrosheet, Odds, OddsAPI, and other providers
-# are merged into 18 wide schemas that use discriminator columns
+# are merged into 17 wide schemas that use discriminator columns
 # (``scope``, ``stat_type``, ``line_type``, ``play_type``,
 # ``prop_type``) to distinguish record subtypes within a single table.
 #
@@ -20,14 +20,13 @@
 #  8. odds             — partition: season=
 #  9. player_props     — partition: season=
 # 10. plays            — partition: season=
-# 11. pitches          — partition: season=
-# 12. lineups          — partition: season=
-# 13. injuries         — partition: season=
-# 14. advanced         — partition: season=
-# 15. transactions     — partition: season=
-# 16. weather          — partition: season=
-# 17. leaders          — partition: season=
-# 18. coaches          — partition: season=
+# 11. lineups          — partition: season=
+# 12. injuries         — partition: season=
+# 13. advanced         — partition: season=
+# 14. transactions     — partition: season=
+# 15. weather          — partition: season=
+# 16. leaders          — partition: season=
+# 17. coaches          — partition: season=
 #
 # MLB uses calendar-year seasons (e.g. 2024).
 #
@@ -513,60 +512,7 @@ MLB_PLAYS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 11. pitches — Statcast pitch-level data (velocity, spin, movement)
-#     Partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-MLB_PITCHES_SCHEMA = pa.schema([
-    _f("game_id",         pa.int64(),  "Parent game identifier",             nullable=False),
-    _f("at_bat_number",   pa.int64(),  "At-bat sequence number"),
-    _f("pitch_number",    pa.int64(),  "Pitch number within the at-bat"),
-    _f("season",          pa.int64(),  "Season year",                        nullable=False),
-    # Participants
-    _f("pitcher_id",      pa.int64(),  "Pitcher identifier"),
-    _f("pitcher_name",    pa.string(), "Pitcher display name"),
-    _f("batter_id",       pa.int64(),  "Batter identifier"),
-    _f("batter_name",     pa.string(), "Batter display name"),
-    _f("batter_side",     pa.string(), "Batter handedness — L/R"),
-    _f("pitcher_hand",    pa.string(), "Pitcher handedness — L/R"),
-    # Pitch classification
-    _f("pitch_type",      pa.string(), "Pitch type code (e.g. FF, SL, CU, CH, SI, FC, KC)"),
-    _f("pitch_name",      pa.string(), "Full pitch type name (e.g. 4-Seam Fastball, Slider)"),
-    _f("call",            pa.string(), "Pitch call — ball/called_strike/swinging_strike/foul/in_play/hit_by_pitch"),
-    _f("is_strike",       pa.bool_(),  "Whether this pitch was a strike"),
-    _f("is_swing",        pa.bool_(),  "Whether the batter swung"),
-    _f("is_whiff",        pa.bool_(),  "Whether the batter swung and missed"),
-    _f("is_in_play",      pa.bool_(),  "Whether the ball was put in play"),
-    # Velocity and movement
-    _f("velocity",        pa.float64(), "Pitch velocity (mph)"),
-    _f("spin_rate",       pa.float64(), "Spin rate (rpm)"),
-    _f("spin_axis",       pa.float64(), "Spin axis (degrees)"),
-    _f("pfx_x",           pa.float64(), "Horizontal movement (inches)"),
-    _f("pfx_z",           pa.float64(), "Vertical movement (inches)"),
-    _f("extension",       pa.float64(), "Pitcher extension (feet)"),
-    # Location
-    _f("plate_x",         pa.float64(), "Horizontal plate location (feet from center)"),
-    _f("plate_z",         pa.float64(), "Vertical plate location (feet from ground)"),
-    _f("zone",            pa.int64(),   "Strike zone region (1-14)"),
-    _f("sz_top",          pa.float64(), "Top of batter strike zone (feet)"),
-    _f("sz_bot",          pa.float64(), "Bottom of batter strike zone (feet)"),
-    # Launch data (if in play)
-    _f("launch_speed",    pa.float64(), "Exit velocity (mph)"),
-    _f("launch_angle",    pa.float64(), "Launch angle (degrees)"),
-    _f("hit_distance",    pa.float64(), "Hit distance (feet)"),
-    _f("hit_coord_x",     pa.float64(), "Spray chart X coordinate"),
-    _f("hit_coord_y",     pa.float64(), "Spray chart Y coordinate"),
-    # Counts
-    _f("balls",           pa.int64(),  "Ball count before this pitch"),
-    _f("strikes",         pa.int64(),  "Strike count before this pitch"),
-    _f("outs",            pa.int64(),  "Outs before this pitch"),
-    # Provenance
-    _f("source",          pa.string(), "Data vendor provenance",             nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 12. lineups — starting lineups and batting order
+# 11. lineups — starting lineups and batting order
 #     Partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -589,7 +535,7 @@ MLB_LINEUPS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 13. injuries — IL stints and injury reports
+# 12. injuries — IL stints and injury reports
 #     Partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -615,7 +561,7 @@ MLB_INJURIES_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 14. advanced — Statcast batted-ball, xStats, zone data
+# 13. advanced — Statcast batted-ball, xStats, zone data
 #     Partition: season=
 #     Discriminator: stat_type (batting/pitching/fielding/statcast)
 # ═══════════════════════════════════════════════════════════════════════
@@ -691,7 +637,7 @@ MLB_ADVANCED_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 15. transactions — trades, DFA, signings, waivers
+# 14. transactions — trades, DFA, signings, waivers
 #     Partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -715,7 +661,7 @@ MLB_TRANSACTIONS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 16. weather — game-day weather conditions
+# 15. weather — game-day weather conditions
 #     Partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -746,7 +692,7 @@ MLB_WEATHER_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 17. leaders — league leaders by statistical category
+# 16. leaders — league leaders by statistical category
 #     Partition: season=
 #     Discriminator: stat_type
 # ═══════════════════════════════════════════════════════════════════════
@@ -773,7 +719,7 @@ MLB_LEADERS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 18. coaches — managers and coaching staffs
+# 17. coaches — managers and coaching staffs
 #     Partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -811,7 +757,6 @@ MLB_SCHEMAS: dict[str, pa.Schema] = {
     "odds":          MLB_ODDS_SCHEMA,
     "player_props":  MLB_PLAYER_PROPS_SCHEMA,
     "plays":         MLB_PLAYS_SCHEMA,
-    "pitches":       MLB_PITCHES_SCHEMA,
     "lineups":       MLB_LINEUPS_SCHEMA,
     "injuries":      MLB_INJURIES_SCHEMA,
     "advanced":      MLB_ADVANCED_SCHEMA,
@@ -834,7 +779,6 @@ MLB_PARTITION_KEYS: dict[str, list[str]] = {
     "odds":          ["season"],
     "player_props":  ["season"],
     "plays":         ["season"],
-    "pitches":       ["season"],
     "lineups":       ["season"],
     "injuries":      ["season"],
     "advanced":      ["season"],
@@ -855,7 +799,6 @@ MLB_ENTITY_PATHS: dict[str, str] = {
     "odds":          "odds",
     "player_props":  "player_props",
     "plays":         "plays",
-    "pitches":       "pitches",
     "lineups":       "lineups",
     "injuries":      "injuries",
     "advanced":      "advanced",

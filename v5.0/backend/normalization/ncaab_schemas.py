@@ -375,26 +375,7 @@ schema_plays = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 12. injuries — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-schema_injuries = pa.schema([
-    _f("player_id",     pa.string(), "Unique player identifier",                     nullable=False),
-    _f("player_name",   pa.string(), "Player display name"),
-    _f("team_id",       pa.string(), "Team identifier"),
-    _f("team_name",     pa.string(), "Team name"),
-    _f("season",        pa.int32(),  "Season start year",                            nullable=False),
-    _f("date",          pa.string(), "Report date (ISO-8601)"),
-    _f("status",        pa.string(), "Injury status (e.g. out, day-to-day, questionable)"),
-    _f("injury_type",   pa.string(), "Injury type (e.g. knee, ankle, concussion)"),
-    _f("detail",        pa.string(), "Additional injury detail or notes"),
-    # Provenance
-    _f("source",        pa.string(), "Data vendor provenance",                       nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 13. bracket — partition: season= (March Madness / NCAA Tournament)
+# 12. bracket — partition: season= (March Madness / NCAA Tournament)
 # ═══════════════════════════════════════════════════════════════════════
 
 schema_bracket = pa.schema([
@@ -500,7 +481,6 @@ NCAAB_SCHEMAS: dict[str, pa.Schema] = {
     "odds":          schema_odds,
     "player_props":  schema_player_props,
     "plays":         schema_plays,
-    "injuries":      schema_injuries,
     "bracket":       schema_bracket,
     "leaders":       schema_leaders,
     "venues":        schema_venues,
@@ -523,7 +503,7 @@ NCAAB_TYPE_TO_ENTITY: dict[str, str | None] = {
     "rankings":         "rankings",
     "odds":             "odds",
     "player_props":     "player_props",
-    "injuries":         "injuries",
+    "injuries":         None,
     # Aliases / absorbed types
     "odds_history":     "odds",
     "play_by_play":     "plays",
@@ -566,7 +546,6 @@ NCAAB_ENTITY_ALLOWLIST: set[str] = {
     "odds",
     "player_props",
     "plays",
-    "injuries",
     "bracket",
     "leaders",
     "venues",

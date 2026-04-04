@@ -459,31 +459,7 @@ NHL_CONFERENCES_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 15. draft — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-NHL_DRAFT_SCHEMA = pa.schema([
-    # Identity
-    _f("draft_id",      pa.string(), "Unique draft pick identifier",                 nullable=False),
-    _f("season",        pa.int32(),  "Draft year / season",                          nullable=False),
-    _f("round",         pa.int32(),  "Draft round"),
-    _f("pick",          pa.int32(),  "Pick number within round"),
-    _f("overall",       pa.int32(),  "Overall pick number"),
-    # Player info
-    _f("player_id",     pa.string(), "Player identifier"),
-    _f("player_name",   pa.string(), "Player display name"),
-    _f("team_id",       pa.string(), "Drafting team identifier"),
-    _f("team_name",     pa.string(), "Drafting team display name"),
-    _f("position",      pa.string(), "Player position"),
-    _f("nationality",   pa.string(), "Player nationality"),
-    # Provenance
-    _f("source",        pa.string(), "Data vendor provenance",                       nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 16. coaches — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
+# 15. coaches — partition: season=
 
 NHL_COACHES_SCHEMA = pa.schema([
     _f("coach_id",   pa.string(), "Unique coach identifier",                         nullable=False),
@@ -516,7 +492,6 @@ NHL_SCHEMAS: dict[str, pa.Schema] = {
     "leaders":       NHL_LEADERS_SCHEMA,
     "venues":        NHL_VENUES_SCHEMA,
     "conferences":   NHL_CONFERENCES_SCHEMA,
-    "draft":         NHL_DRAFT_SCHEMA,
     "coaches":       NHL_COACHES_SCHEMA,
 }
 
@@ -537,7 +512,6 @@ NHL_PARTITION_KEYS: dict[str, list[str]] = {
     "player_stats":  ["season"],
     "team_stats":    ["season"],
     "leaders":       ["season"],
-    "draft":         ["season"],
     "coaches":       ["season"],
 }
 
@@ -556,7 +530,6 @@ NHL_ENTITY_PATHS: dict[str, str] = {
     "leaders":       "leaders",
     "venues":        "venues",
     "conferences":   "conferences",
-    "draft":         "draft",
     "coaches":       "coaches",
 }
 
@@ -584,7 +557,7 @@ NHL_TYPE_TO_ENTITY: dict[str, str | None] = {
     "info":             "players",
     "scoreboard":       "games",
     "calendar":         "games",
-    "draft":            "draft",
+    "draft":            None,
     "coaches":          "coaches",
     # Non-entity normalizer artefacts — skip
     "news":             None,
@@ -610,7 +583,6 @@ NHL_ENTITY_ALLOWLIST: set[str] = {
     "leaders",
     "venues",
     "conferences",
-    "draft",
     "coaches",
 }
 

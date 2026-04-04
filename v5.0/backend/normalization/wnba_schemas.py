@@ -245,56 +245,7 @@ WNBA_STANDINGS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 7. odds — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-WNBA_ODDS_SCHEMA = pa.schema([
-    _f("game_id",           pa.string(),  "Game identifier",                 nullable=False),
-    _f("season",            pa.int32(),   "Season year"),
-    _f("date",              pa.string(),  "Game date (YYYY-MM-DD)"),
-    _f("sportsbook",        pa.string(),  "Sportsbook name"),
-    _f("home_team",         pa.string(),  "Home team name"),
-    _f("away_team",         pa.string(),  "Away team name"),
-    _f("spread_home",       pa.float64(), "Home spread line"),
-    _f("spread_away",       pa.float64(), "Away spread line"),
-    _f("spread_home_odds",  pa.int32(),   "Home spread odds (American)"),
-    _f("spread_away_odds",  pa.int32(),   "Away spread odds (American)"),
-    _f("moneyline_home",    pa.int32(),   "Home moneyline (American)"),
-    _f("moneyline_away",    pa.int32(),   "Away moneyline (American)"),
-    _f("total_over",        pa.float64(), "Over/under total line (over)"),
-    _f("total_under",       pa.float64(), "Over/under total line (under)"),
-    _f("total_over_odds",   pa.int32(),   "Over odds (American)"),
-    _f("total_under_odds",  pa.int32(),   "Under odds (American)"),
-    _f("line_type",         pa.string(),  "Line type (open/current/closing)"),
-    _f("timestamp",         pa.string(),  "Timestamp of odds snapshot (ISO 8601)"),
-    # Provenance
-    _f("source",            pa.string(),  "Data vendor provenance",          nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 8. player_props — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-WNBA_PLAYER_PROPS_SCHEMA = pa.schema([
-    _f("game_id",       pa.string(), "Game identifier",                     nullable=False),
-    _f("player_id",     pa.string(), "Player identifier"),
-    _f("player_name",   pa.string(), "Player display name"),
-    _f("season",        pa.int32(),  "Season year"),
-    _f("date",          pa.string(), "Game date (YYYY-MM-DD)"),
-    _f("team",          pa.string(), "Player team name"),
-    _f("prop_type",     pa.string(), "Prop type (e.g. points, rebounds, assists)"),
-    _f("line",          pa.float64(),"Prop line value"),
-    _f("over_odds",     pa.int32(),  "Over odds (American)"),
-    _f("under_odds",    pa.int32(),  "Under odds (American)"),
-    _f("sportsbook",    pa.string(), "Sportsbook name"),
-    # Provenance
-    _f("source",        pa.string(), "Data vendor provenance",              nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 9. plays — partition: season=
+# 7. plays — partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
 WNBA_PLAYS_SCHEMA = pa.schema([
@@ -451,8 +402,6 @@ WNBA_SCHEMAS: dict[str, pa.Schema] = {
     "player_stats":  WNBA_PLAYER_STATS_SCHEMA,
     "team_stats":    WNBA_TEAM_STATS_SCHEMA,
     "standings":     WNBA_STANDINGS_SCHEMA,
-    "odds":          WNBA_ODDS_SCHEMA,
-    "player_props":  WNBA_PLAYER_PROPS_SCHEMA,
     "plays":         WNBA_PLAYS_SCHEMA,
     "injuries":      WNBA_INJURIES_SCHEMA,
     "leaders":       WNBA_LEADERS_SCHEMA,
@@ -473,8 +422,6 @@ WNBA_ENTITY_PARTITIONS: dict[str, list[str]] = {
     "player_stats":  ["season"],
     "team_stats":    ["season"],
     "standings":     ["season"],
-    "odds":          ["season"],
-    "player_props":  ["season"],
     "plays":         ["season"],
     "injuries":      ["season"],
     "leaders":       ["season"],
@@ -499,9 +446,9 @@ WNBA_TYPE_TO_ENTITY: dict[str, str | None] = {
     "player_stats":         "player_stats",
     "team_stats":           "team_stats",
     "standings":            "standings",
-    "odds":                 "odds",
-    "odds_history":         "odds",
-    "player_props":         "player_props",
+    "odds":                 None,
+    "odds_history":         None,
+    "player_props":         None,
     "injuries":             "injuries",
     "play_by_play":         "plays",
     # Aliases / absorbed types
@@ -536,8 +483,6 @@ WNBA_ENTITY_ALLOWLIST: set[str] = {
     "player_stats",
     "team_stats",
     "standings",
-    "odds",
-    "player_props",
     "plays",
     "injuries",
     "leaders",

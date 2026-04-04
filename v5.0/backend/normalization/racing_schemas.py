@@ -2,8 +2,8 @@
 # V5.0 Backend — Racing Normalized-Curated PyArrow Schemas (Consolidated)
 # ──────────────────────────────────────────────────────────────────────
 #
-# 16-entity consolidated design.  Raw data from BDL F1 API + OpenF1 /
-# Ergast / ESPN providers are merged into 16 wide schemas.
+# 14-entity consolidated design.  Raw data from BDL F1 API + OpenF1 /
+# Ergast / ESPN providers are merged into 14 wide schemas.
 #
 # Entity overview
 # ───────────────
@@ -17,12 +17,10 @@
 #  8. lap_times          — partition: season=
 #  9. pit_stops          — partition: season=
 # 10. position_history   — partition: season=
-# 11. timing_stats       — partition: season=
-# 12. weather            — partition: season=
-# 13. race_control       — partition: season=
-# 14. tire_stints        — partition: season=
-# 15. driver_standings   — partition: season=
-# 16. team_standings     — partition: season=
+# 11. weather            — partition: season=
+# 12. race_control       — partition: season=
+# 13. driver_standings   — partition: season=
+# 14. team_standings     — partition: season=
 #
 # Every schema carries a mandatory ``source`` field for vendor provenance.
 # ──────────────────────────────────────────────────────────────────────
@@ -237,33 +235,7 @@ RACING_POSITION_HISTORY_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 11. timing_stats — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-RACING_TIMING_STATS_SCHEMA = pa.schema([
-    _f("id",               pa.string(),  "Unique timing stat record identifier",   nullable=False),
-    _f("session_id",       pa.string(),  "Parent session identifier"),
-    _f("driver_id",        pa.string(),  "Driver identifier"),
-    _f("driver_name",      pa.string(),  "Driver display name"),
-    _f("team_id",          pa.string(),  "Team identifier"),
-    _f("team_name",        pa.string(),  "Team name"),
-    _f("best_lap_time",    pa.string(),  "Best lap time string (M:SS.mmm)"),
-    _f("best_lap_time_ms", pa.int32(),   "Best lap time in milliseconds"),
-    _f("best_lap_number",  pa.int32(),   "Lap number of best lap"),
-    _f("best_sector_1",    pa.float64(), "Best sector 1 time in seconds"),
-    _f("best_sector_2",    pa.float64(), "Best sector 2 time in seconds"),
-    _f("best_sector_3",    pa.float64(), "Best sector 3 time in seconds"),
-    _f("speed_i1",         pa.int32(),   "Speed at intermediate 1 (km/h)"),
-    _f("speed_i2",         pa.int32(),   "Speed at intermediate 2 (km/h)"),
-    _f("speed_fl",         pa.int32(),   "Speed at finish line (km/h)"),
-    _f("speed_trap",       pa.int32(),   "Speed trap measurement (km/h)"),
-    # Provenance
-    _f("source",           pa.string(),  "Data vendor provenance",                 nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 12. weather — partition: season=
+# 11. weather — partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
 RACING_WEATHER_SCHEMA = pa.schema([
@@ -302,28 +274,7 @@ RACING_RACE_CONTROL_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 14. tire_stints — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-RACING_TIRE_STINTS_SCHEMA = pa.schema([
-    _f("id",              pa.string(), "Unique stint record identifier",           nullable=False),
-    _f("session_id",      pa.string(), "Parent session identifier"),
-    _f("driver_id",       pa.string(), "Driver identifier"),
-    _f("driver_name",     pa.string(), "Driver display name"),
-    _f("team_id",         pa.string(), "Team identifier"),
-    _f("team_name",       pa.string(), "Team name"),
-    _f("stint_number",    pa.int32(),  "Stint number within the session"),
-    _f("compound",        pa.string(), "Tire compound (SOFT, MEDIUM, HARD, INTERMEDIATE, WET)"),
-    _f("is_new",          pa.bool_(),  "Whether the tire set was new"),
-    _f("start_lap",       pa.int32(),  "Lap number stint started"),
-    _f("total_laps",      pa.int32(),  "Total laps on this stint"),
-    # Provenance
-    _f("source",          pa.string(), "Data vendor provenance",                   nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 15. driver_standings — partition: season=
+# 13. driver_standings — partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
 RACING_DRIVER_STANDINGS_SCHEMA = pa.schema([
@@ -341,7 +292,7 @@ RACING_DRIVER_STANDINGS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 16. team_standings — partition: season=
+# 14. team_standings — partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
 RACING_TEAM_STANDINGS_SCHEMA = pa.schema([
@@ -371,10 +322,8 @@ RACING_SCHEMAS: dict[str, pa.Schema] = {
     "lap_times":         RACING_LAP_TIMES_SCHEMA,
     "pit_stops":         RACING_PIT_STOPS_SCHEMA,
     "position_history":  RACING_POSITION_HISTORY_SCHEMA,
-    "timing_stats":      RACING_TIMING_STATS_SCHEMA,
     "weather":           RACING_WEATHER_SCHEMA,
     "race_control":      RACING_RACE_CONTROL_SCHEMA,
-    "tire_stints":       RACING_TIRE_STINTS_SCHEMA,
     "driver_standings":  RACING_DRIVER_STANDINGS_SCHEMA,
     "team_standings":    RACING_TEAM_STANDINGS_SCHEMA,
 }
@@ -392,10 +341,8 @@ RACING_PARTITION_KEYS: dict[str, list[str]] = {
     "lap_times":         ["season"],
     "pit_stops":         ["season"],
     "position_history":  ["season"],
-    "timing_stats":      ["season"],
     "weather":           ["season"],
     "race_control":      ["season"],
-    "tire_stints":       ["season"],
     "driver_standings":  ["season"],
     "team_standings":    ["season"],
 }
@@ -411,10 +358,8 @@ RACING_ENTITY_PATHS: dict[str, str] = {
     "lap_times":         "lap_times",
     "pit_stops":         "pit_stops",
     "position_history":  "position_history",
-    "timing_stats":      "timing_stats",
     "weather":           "weather",
     "race_control":      "race_control",
-    "tire_stints":       "tire_stints",
     "driver_standings":  "driver_standings",
     "team_standings":    "team_standings",
 }
@@ -436,16 +381,17 @@ RACING_TYPE_TO_ENTITY: dict[str, str | None] = {
     "lap_times":         "lap_times",
     "pit_stops":         "pit_stops",
     "position_history":  "position_history",
-    "timing_stats":      "timing_stats",
     "weather":           "weather",
     "race_control":      "race_control",
-    "tire_stints":       "tire_stints",
     "driver_standings":  "driver_standings",
     "team_standings":    "team_standings",
     "standings":         "driver_standings",
     "rankings":          "driver_standings",
     "schedule":          "events",
     "scores":            "session_results",
+    # Removed entities — no raw data available
+    "timing_stats":      None,
+    "tire_stints":       None,
     # Non-entity normalizer artefacts — skip
     "odds":              None,
     "player_props":      None,
@@ -472,10 +418,8 @@ RACING_ENTITY_ALLOWLIST: set[str] = {
     "lap_times",
     "pit_stops",
     "position_history",
-    "timing_stats",
     "weather",
     "race_control",
-    "tire_stints",
     "driver_standings",
     "team_standings",
 }

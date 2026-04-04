@@ -2,8 +2,8 @@
 # V5.0 Backend — Dota 2 Normalized-Curated PyArrow Schemas (Consolidated)
 # ──────────────────────────────────────────────────────────────────────
 #
-# 14-entity consolidated design.  Raw data from BDL Dota 2 API,
-# PandaScore, and OpenDota providers are merged into 14 wide schemas.
+# 12-entity consolidated design.  Raw data from BDL Dota 2 API,
+# PandaScore, and OpenDota providers are merged into 12 wide schemas.
 #
 # Entity overview
 # ───────────────
@@ -14,13 +14,11 @@
 #  5. regions            — static reference, no partitioning
 #  6. matches            — partition: season=
 #  7. match_maps         — partition: season=
-#  8. player_match_stats — partition: season=
-#  9. player_stats       — partition: season=
-# 10. hero_stats         — partition: season=
-# 11. team_match_stats   — partition: season=
-# 12. tournaments        — partition: season=
-# 13. tournament_teams   — partition: season=
-# 14. tournament_rosters — partition: season=
+#  8. player_stats       — partition: season=
+#  9. hero_stats         — partition: season=
+# 10. tournaments        — partition: season=
+# 11. tournament_teams   — partition: season=
+# 12. tournament_rosters — partition: season=
 #
 # Every schema carries a mandatory ``source`` field for vendor provenance.
 # ──────────────────────────────────────────────────────────────────────
@@ -180,45 +178,7 @@ DOTA_MATCH_MAPS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 8. player_match_stats — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-DOTA_PLAYER_MATCH_STATS_SCHEMA = pa.schema([
-    _f("id",             pa.int32(),   "Unique stat record identifier",            nullable=False),
-    _f("match_map_id",   pa.int32(),   "Parent match-map identifier",              nullable=False),
-    # Player (flattened nested)
-    _f("player_id",      pa.int32(),   "Player identifier"),
-    _f("player_name",    pa.string(),  "Player name"),
-    # Team (flattened nested)
-    _f("team_id",        pa.int32(),   "Team identifier"),
-    _f("team_name",      pa.string(),  "Team name"),
-    # Hero (flattened nested)
-    _f("hero_id",        pa.int32(),   "Hero played"),
-    _f("hero_name",      pa.string(),  "Hero name"),
-    # Core stats
-    _f("role",           pa.string(),  "Player role (carry, mid, offlane, support)"),
-    _f("side",           pa.string(),  "Map side (radiant/dire)"),
-    _f("kills",          pa.int32(),   "Total kills"),
-    _f("deaths",         pa.int32(),   "Total deaths"),
-    _f("assists",        pa.int32(),   "Total assists"),
-    _f("hero_level",     pa.int32(),   "Hero level at end of game"),
-    _f("net_worth",      pa.int32(),   "Net worth at end of game"),
-    _f("gold_per_min",   pa.float64(), "Gold earned per minute"),
-    _f("xp_per_min",     pa.float64(), "Experience earned per minute"),
-    _f("hero_damage",    pa.int32(),   "Total hero damage dealt"),
-    _f("tower_damage",   pa.int32(),   "Total tower damage dealt"),
-    _f("last_hits",      pa.int32(),   "Total last hits"),
-    _f("denies",         pa.int32(),   "Total denies"),
-    _f("heal",           pa.int32(),   "Total healing done"),
-    # Partition key
-    _f("season",         pa.string(),  "Season identifier for partitioning"),
-    # Provenance
-    _f("source",         pa.string(),  "Data vendor provenance",                   nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 9. player_stats (aggregated) — partition: season=
+# 8. player_stats (aggregated) — partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
 DOTA_PLAYER_STATS_SCHEMA = pa.schema([
@@ -294,35 +254,7 @@ DOTA_HERO_STATS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 11. team_match_stats — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-DOTA_TEAM_MATCH_STATS_SCHEMA = pa.schema([
-    _f("id",             pa.int32(),   "Unique stat record identifier",            nullable=False),
-    _f("match_map_id",   pa.int32(),   "Parent match-map identifier",              nullable=False),
-    # Team (flattened nested)
-    _f("team_id",        pa.int32(),   "Team identifier"),
-    _f("team_name",      pa.string(),  "Team name"),
-    # Enemy team (flattened nested)
-    _f("enemy_team_id",  pa.int32(),   "Enemy team identifier"),
-    _f("enemy_team_name", pa.string(), "Enemy team name"),
-    # Side / result
-    _f("side",           pa.string(),  "Map side (radiant/dire)"),
-    _f("score",          pa.int32(),   "Total team kills"),
-    # Objectives
-    _f("first_blood",    pa.string(),  "Achieved first blood (true/false)"),
-    _f("first_tower",    pa.string(),  "Destroyed first tower (true/false)"),
-    _f("first_roshan",   pa.string(),  "Killed first Roshan (true/false)"),
-    _f("roshan_kills",   pa.int32(),   "Total Roshan kills"),
-    # Partition key
-    _f("season",         pa.string(),  "Season identifier for partitioning"),
-    # Provenance
-    _f("source",         pa.string(),  "Data vendor provenance",                   nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 12. tournaments — partition: season=
+# 10. tournaments — partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
 DOTA_TOURNAMENTS_SCHEMA = pa.schema([
@@ -343,7 +275,7 @@ DOTA_TOURNAMENTS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 13. tournament_teams — partition: season=
+# 11. tournament_teams — partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
 DOTA_TOURNAMENT_TEAMS_SCHEMA = pa.schema([
@@ -358,7 +290,7 @@ DOTA_TOURNAMENT_TEAMS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 14. tournament_rosters — partition: season=
+# 12. tournament_rosters — partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
 DOTA_TOURNAMENT_ROSTERS_SCHEMA = pa.schema([
@@ -385,10 +317,8 @@ DOTA_SCHEMAS: dict[str, pa.Schema] = {
     "regions":            DOTA_REGIONS_SCHEMA,
     "matches":            DOTA_MATCHES_SCHEMA,
     "match_maps":         DOTA_MATCH_MAPS_SCHEMA,
-    "player_match_stats": DOTA_PLAYER_MATCH_STATS_SCHEMA,
     "player_stats":       DOTA_PLAYER_STATS_SCHEMA,
     "hero_stats":         DOTA_HERO_STATS_SCHEMA,
-    "team_match_stats":   DOTA_TEAM_MATCH_STATS_SCHEMA,
     "tournaments":        DOTA_TOURNAMENTS_SCHEMA,
     "tournament_teams":   DOTA_TOURNAMENT_TEAMS_SCHEMA,
     "tournament_rosters": DOTA_TOURNAMENT_ROSTERS_SCHEMA,
@@ -404,10 +334,8 @@ DOTA_PARTITION_KEYS: dict[str, list[str]] = {
     # Season-partitioned
     "matches":            ["season"],
     "match_maps":         ["season"],
-    "player_match_stats": ["season"],
     "player_stats":       ["season"],
     "hero_stats":         ["season"],
-    "team_match_stats":   ["season"],
     "tournaments":        ["season"],
     "tournament_teams":   ["season"],
     "tournament_rosters": ["season"],
@@ -421,10 +349,8 @@ DOTA_ENTITY_PATHS: dict[str, str] = {
     "regions":            "regions",
     "matches":            "matches",
     "match_maps":         "match_maps",
-    "player_match_stats": "player_match_stats",
     "player_stats":       "player_stats",
     "hero_stats":         "hero_stats",
-    "team_match_stats":   "team_match_stats",
     "tournaments":        "tournaments",
     "tournament_teams":   "tournament_teams",
     "tournament_rosters": "tournament_rosters",
@@ -443,13 +369,14 @@ DOTA_TYPE_TO_ENTITY: dict[str, str | None] = {
     "regions":            "regions",
     "matches":            "matches",
     "match_maps":         "match_maps",
-    "player_match_stats": "player_match_stats",
     "player_stats":       "player_stats",
     "hero_stats":         "hero_stats",
-    "team_match_stats":   "team_match_stats",
     "tournaments":        "tournaments",
     "tournament_teams":   "tournament_teams",
     "tournament_rosters": "tournament_rosters",
+    # Removed entities — no raw data available (would need 4.8GB deep parsing)
+    "player_match_stats": None,
+    "team_match_stats":   None,
 }
 
 
@@ -462,10 +389,8 @@ DOTA_ENTITY_ALLOWLIST: set[str] = {
     "regions",
     "matches",
     "match_maps",
-    "player_match_stats",
     "player_stats",
     "hero_stats",
-    "team_match_stats",
     "tournaments",
     "tournament_teams",
     "tournament_rosters",

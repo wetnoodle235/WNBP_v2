@@ -2,8 +2,8 @@
 # V5.0 Backend — Tennis Normalized-Curated PyArrow Schemas (Consolidated)
 # ──────────────────────────────────────────────────────────────────────
 #
-# 10-entity consolidated design.  Raw data from BDL ATP API + ESPN /
-# TennisAbstract providers are merged into 10 wide schemas.
+# 6-entity consolidated design.  Raw data from BDL ATP API + ESPN /
+# TennisAbstract providers are merged into 6 wide schemas.
 #
 # Entity overview
 # ───────────────
@@ -12,11 +12,7 @@
 #  3. matches        — partition: season=
 #  4. match_stats    — partition: season=
 #  5. rankings       — partition: season=
-#  6. race           — partition: season=
-#  7. head_to_head   — static reference, no partitioning
-#  8. career_stats   — static reference, no partitioning
-#  9. odds           — partition: season=
-# 10. injuries       — partition: season=
+#  6. odds           — partition: season=
 #
 # Every schema carries a mandatory ``source`` field for vendor provenance.
 # ──────────────────────────────────────────────────────────────────────
@@ -154,61 +150,7 @@ TENNIS_RANKINGS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 6. race — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-TENNIS_RACE_SCHEMA = pa.schema([
-    _f("id",             pa.string(), "Unique race ranking record identifier",     nullable=False),
-    _f("player_id",      pa.string(), "Player identifier"),
-    _f("player_name",    pa.string(), "Player display name"),
-    _f("rank",           pa.int32(),  "Race rank position"),
-    _f("points",         pa.int32(),  "Race ranking points"),
-    _f("movement",       pa.int32(),  "Rank movement since previous week (+/-)"),
-    _f("ranking_date",   pa.string(), "Ranking snapshot date (YYYY-MM-DD)"),
-    _f("is_qualified",   pa.bool_(),  "Whether the player has qualified for finals"),
-    # Provenance
-    _f("source",         pa.string(), "Data vendor provenance",                    nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 7. head_to_head — static reference (no partitioning)
-# ═══════════════════════════════════════════════════════════════════════
-
-TENNIS_HEAD_TO_HEAD_SCHEMA = pa.schema([
-    _f("id",             pa.string(), "Unique head-to-head record identifier",     nullable=False),
-    _f("player1_id",     pa.string(), "Player 1 identifier"),
-    _f("player1_name",   pa.string(), "Player 1 display name"),
-    _f("player2_id",     pa.string(), "Player 2 identifier"),
-    _f("player2_name",   pa.string(), "Player 2 display name"),
-    _f("player1_wins",   pa.int32(),  "Player 1 head-to-head wins"),
-    _f("player2_wins",   pa.int32(),  "Player 2 head-to-head wins"),
-    # Provenance
-    _f("source",         pa.string(), "Data vendor provenance",                    nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 8. career_stats — static reference (no partitioning)
-# ═══════════════════════════════════════════════════════════════════════
-
-TENNIS_CAREER_STATS_SCHEMA = pa.schema([
-    _f("player_id",          pa.string(),  "Player identifier",                    nullable=False),
-    _f("player_name",        pa.string(),  "Player display name"),
-    _f("career_titles",      pa.int32(),   "Career titles won"),
-    _f("career_prize_money", pa.float64(), "Career prize money earned"),
-    _f("singles_wins",       pa.int32(),   "Career singles wins"),
-    _f("singles_losses",     pa.int32(),   "Career singles losses"),
-    _f("ytd_wins",           pa.int32(),   "Year-to-date wins"),
-    _f("ytd_losses",         pa.int32(),   "Year-to-date losses"),
-    _f("ytd_titles",         pa.int32(),   "Year-to-date titles"),
-    # Provenance
-    _f("source",             pa.string(),  "Data vendor provenance",               nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 9. odds — partition: season=
+# 6. odds — partition: season=
 # ═══════════════════════════════════════════════════════════════════════
 
 TENNIS_ODDS_SCHEMA = pa.schema([
@@ -228,23 +170,6 @@ TENNIS_ODDS_SCHEMA = pa.schema([
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 10. injuries — partition: season=
-# ═══════════════════════════════════════════════════════════════════════
-
-TENNIS_INJURIES_SCHEMA = pa.schema([
-    _f("id",             pa.string(), "Unique injury record identifier",           nullable=False),
-    _f("player_id",      pa.string(), "Player identifier"),
-    _f("player_name",    pa.string(), "Player display name"),
-    _f("status",         pa.string(), "Injury status (out, doubtful, questionable)"),
-    _f("description",    pa.string(), "Injury description"),
-    _f("date",           pa.string(), "Injury report date (YYYY-MM-DD)"),
-    _f("type",           pa.string(), "Injury type / body part"),
-    # Provenance
-    _f("source",         pa.string(), "Data vendor provenance",                    nullable=False),
-])
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # Consolidated lookups
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -254,26 +179,18 @@ TENNIS_SCHEMAS: dict[str, pa.Schema] = {
     "matches":        TENNIS_MATCHES_SCHEMA,
     "match_stats":    TENNIS_MATCH_STATS_SCHEMA,
     "rankings":       TENNIS_RANKINGS_SCHEMA,
-    "race":           TENNIS_RACE_SCHEMA,
-    "head_to_head":   TENNIS_HEAD_TO_HEAD_SCHEMA,
-    "career_stats":   TENNIS_CAREER_STATS_SCHEMA,
     "odds":           TENNIS_ODDS_SCHEMA,
-    "injuries":       TENNIS_INJURIES_SCHEMA,
 }
 
 TENNIS_PARTITION_KEYS: dict[str, list[str]] = {
     # Static reference — no partitioning
     "players":        [],
-    "head_to_head":   [],
-    "career_stats":   [],
     # Season-partitioned
     "tournaments":    ["season"],
     "matches":        ["season"],
     "match_stats":    ["season"],
     "rankings":       ["season"],
-    "race":           ["season"],
     "odds":           ["season"],
-    "injuries":       ["season"],
 }
 
 TENNIS_ENTITY_PATHS: dict[str, str] = {
@@ -282,11 +199,7 @@ TENNIS_ENTITY_PATHS: dict[str, str] = {
     "matches":        "matches",
     "match_stats":    "match_stats",
     "rankings":       "rankings",
-    "race":           "race",
-    "head_to_head":   "head_to_head",
-    "career_stats":   "career_stats",
     "odds":           "odds",
-    "injuries":       "injuries",
 }
 
 
@@ -304,12 +217,12 @@ TENNIS_TYPE_TO_ENTITY: dict[str, str | None] = {
     "match_stats":    "match_stats",
     "rankings":       "rankings",
     "standings":      "rankings",
-    "race":           "race",
-    "head_to_head":   "head_to_head",
-    "career_stats":   "career_stats",
     "odds":           "odds",
-    "injuries":       "injuries",
     # Non-entity normalizer artefacts — skip
+    "race":           None,
+    "head_to_head":   None,
+    "career_stats":   None,
+    "injuries":       None,
     "player_props":   None,
     "lineups":        None,
     "plays":          None,
@@ -329,11 +242,7 @@ TENNIS_ENTITY_ALLOWLIST: set[str] = {
     "matches",
     "match_stats",
     "rankings",
-    "race",
-    "head_to_head",
-    "career_stats",
     "odds",
-    "injuries",
 }
 
-TENNIS_STATIC_ENTITIES: set[str] = {"players", "head_to_head", "career_stats"}
+TENNIS_STATIC_ENTITIES: set[str] = {"players"}
