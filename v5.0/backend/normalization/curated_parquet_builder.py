@@ -65,6 +65,35 @@ def _load_sport_entity_allowlist() -> dict[str, set[str]]:
         allowlist["ncaab"] = NCAAB_ENTITY_ALLOWLIST
     except Exception:
         pass
+    try:
+        from normalization.soccer_schemas import SOCCER_ENTITY_ALLOWLIST
+        for _league in ("epl", "laliga", "bundesliga", "seriea", "ligue1",
+                        "mls", "ucl", "europa", "ligamx", "nwsl",
+                        "eredivisie", "primeiraliga", "championship",
+                        "bundesliga2", "serieb", "ligue2", "worldcup", "euros"):
+            allowlist[_league] = SOCCER_ENTITY_ALLOWLIST
+    except Exception:
+        pass
+    try:
+        from normalization.ncaaw_schemas import NCAAW_ENTITY_ALLOWLIST
+        allowlist["ncaaw"] = NCAAW_ENTITY_ALLOWLIST
+    except Exception:
+        pass
+    try:
+        from normalization.mma_schemas import MMA_ENTITY_ALLOWLIST
+        allowlist["ufc"] = MMA_ENTITY_ALLOWLIST
+    except Exception:
+        pass
+    try:
+        from normalization.cs_schemas import CS_ENTITY_ALLOWLIST
+        allowlist["csgo"] = CS_ENTITY_ALLOWLIST
+    except Exception:
+        pass
+    try:
+        from normalization.lol_schemas import LOL_ENTITY_ALLOWLIST
+        allowlist["lol"] = LOL_ENTITY_ALLOWLIST
+    except Exception:
+        pass
     return allowlist
 
 
@@ -106,6 +135,35 @@ def _load_type_to_entity_maps() -> dict[str, dict[str, str | None]]:
         maps["ncaab"] = NCAAB_TYPE_TO_ENTITY
     except Exception:
         pass
+    try:
+        from normalization.soccer_schemas import SOCCER_TYPE_TO_ENTITY
+        for _league in ("epl", "laliga", "bundesliga", "seriea", "ligue1",
+                        "mls", "ucl", "europa", "ligamx", "nwsl",
+                        "eredivisie", "primeiraliga", "championship",
+                        "bundesliga2", "serieb", "ligue2", "worldcup", "euros"):
+            maps[_league] = SOCCER_TYPE_TO_ENTITY
+    except Exception:
+        pass
+    try:
+        from normalization.ncaaw_schemas import NCAAW_TYPE_TO_ENTITY
+        maps["ncaaw"] = NCAAW_TYPE_TO_ENTITY
+    except Exception:
+        pass
+    try:
+        from normalization.mma_schemas import MMA_TYPE_TO_ENTITY
+        maps["ufc"] = MMA_TYPE_TO_ENTITY
+    except Exception:
+        pass
+    try:
+        from normalization.cs_schemas import CS_TYPE_TO_ENTITY
+        maps["csgo"] = CS_TYPE_TO_ENTITY
+    except Exception:
+        pass
+    try:
+        from normalization.lol_schemas import LOL_TYPE_TO_ENTITY
+        maps["lol"] = LOL_TYPE_TO_ENTITY
+    except Exception:
+        pass
     return maps
 
 # Core categories requested for the new normalized design.
@@ -141,6 +199,14 @@ SPORT_CATEGORY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "bundesliga": ("team_stats", "player_stats", "standings", "odds", "injuries", "news"),
     "seriea": ("team_stats", "player_stats", "standings", "odds", "injuries", "news"),
     "ligue1": ("team_stats", "player_stats", "standings", "odds", "injuries", "news"),
+    "mls": ("team_stats", "player_stats", "standings", "odds", "injuries", "news"),
+    "ucl": ("team_stats", "player_stats", "standings", "odds", "news"),
+    "europa": ("team_stats", "player_stats", "standings", "odds", "news"),
+    "ligamx": ("team_stats", "player_stats", "standings", "odds", "news"),
+    "nwsl": ("team_stats", "player_stats", "standings", "odds", "news"),
+    "ufc": ("fighter_stats", "standings", "odds", "news"),
+    "csgo": ("player_stats", "team_stats", "standings", "rankings"),
+    "lol": ("player_stats", "team_stats", "standings", "rankings"),
 }
 
 # Candidate source kinds from v1 normalized files.
